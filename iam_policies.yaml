@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM policy that denies access to AgentCore memory records'
+
+Resources:
+  DenyAgentCoreMemoryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: deny-agentcore-memory-read
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: VisualEditor0
+            Effect: Deny
+            Action:
+              - bedrock-agentcore:GetMemoryRecord
+              - bedrock-agentcore:GetMemory
+              - bedrock-agentcore:RetrieveMemoryRecords
+              - bedrock-agentcore:ListMemoryRecords
+            Resource: '*'
+
+  AllowAgentCoreMemoryWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: wildrydes-allow-agentcore-memory-write
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AgentCoreMemoryWrite
+            Effect: Allow
+            Action:
+              - bedrock-agentcore:*Memory*
+              - bedrock-agentcore:CreateEvent
+              - bedrock-agentcore:GetEvent
+              - bedrock-agentcore:ListEvents
+            Resource: '*'
+
+  AllowWildRydesSecretsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: wildrydes-allow-wildrydes-secrets-read
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: WildRydesSecretsRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource:
+              - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wildrydes-secrets*'
+
+  AgentCoreBasicPermissionsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: wildrydes-agentcore-basic-permissions
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ECRImageAccess
+            Effect: Allow
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+            Resource:
+              - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
+          - Effect: Allow
+            Action:
+              - logs:DescribeLogStreams
+              - logs:CreateLogGroup
+            Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*'
+          - Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+            Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*'
+          - Sid: ECRTokenAccess
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: '*'
+          - Effect: Allow
+            Resource: '*'
+            Action: cloudwatch:PutMetricData
+            Condition:
+              StringEquals:
+                'cloudwatch:namespace': bedrock-agentcore
+          - Sid: GetAgentAccessToken
+            Effect: Allow
+            Action:
+              - bedrock-agentcore:GetWorkloadAccessToken
+              - bedrock-agentcore:GetWorkloadAccessTokenForJWT
+              - bedrock-agentcore:GetWorkloadAccessTokenForUserId
+            Resource:
+              - "*"
+          - Sid: BedrockModelInvocation
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:ApplyGuardrail
+            Resource:
+              - "*"
+
+Outputs:
+  PolicyArn:
+    Description: ARN of the policy that denies AgentCore memory access
+    Value: !Ref DenyAgentCoreMemoryPolicy
+  
+  AllowAgentCoreMemoryWritePolicyArn:
+    Description: ARN of the policy that allows AgentCore memory write operations
+    Value: !Ref AllowAgentCoreMemoryWritePolicy
+  
+  AllowWildRydesSecretsPolicyArn:
+    Description: ARN of the policy that allows reading wildrydes-secrets
+    Value: !Ref AllowWildRydesSecretsPolicy
+  
+  AgentCoreBasicPermissionsPolicyArn:
+    Description: ARN of the policy with basic AgentCore permissions
+    Value: !Ref AgentCoreBasicPermissionsPolicy

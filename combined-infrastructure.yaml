@@ -1,0 +1,690 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'WildRydes Complete Infrastructure - Backend (DynamoDB) + Frontend (Authentication + Static Hosting). Should be called combined-infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'workshop'
+    Description: 'Environment name for the workshop'
+    AllowedPattern: '^[a-z0-9-]+$'
+    ConstraintDescription: 'Environment must contain only lowercase letters, numbers, and hyphens'
+  
+  ProjectName:
+    Type: String
+    Default: 'wildrydes'
+    Description: 'Project name for resource naming'
+    AllowedPattern: '^[a-z0-9-]+$'
+    ConstraintDescription: 'Project name must contain only lowercase letters, numbers, and hyphens'
+
+Resources:
+  # ===== BACKEND RESOURCES =====
+  
+  # DynamoDB table for storing trip information
+  TripsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-trips-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: tripId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: tripId
+          KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Workshop
+          Value: 'WildRydes-AgentCore-Security'
+
+  # ===== AUTHENTICATION RESOURCES =====
+  
+  # Cognito User Pool for Authentication
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${ProjectName}-users-${Environment}'
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 7
+        SignInPolicy:
+          AllowedFirstAuthFactors:
+            - PASSWORD
+      MfaConfiguration: "OFF"
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Priority: 1
+            Name: verified_email
+          - Priority: 2
+            Name: verified_phone_number
+      UserPoolTags:
+        Application: TripPlanner
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
+        Workshop: 'TripPlanner-AI-Security'
+
+  # Cognito User Pool Client (Frontend - No Secret)
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${ProjectName}-client-${Environment}'
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - http://localhost:3000
+        - https://localhost:3000
+      LogoutURLs:
+        - http://localhost:3000
+        - https://localhost:3000
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 180
+      IdTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  # ===== STATIC HOSTING RESOURCES =====
+  
+  # S3 Bucket for Frontend Static Files
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-frontend-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # CloudFront Origin Access Control
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ProjectName}-${Environment}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+        Enabled: true
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          MinTTL: 0
+          DefaultTTL: 86400
+          MaxTTL: 31536000
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # S3 Bucket Policy for CloudFront OAC
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ===== USER SETUP =====
+  
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CognitoAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:GetUser
+                  - cognito-idp:ListUsers
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminSetUserPassword
+                Resource: !GetAtt CognitoUserPool.Arn
+
+  # Pre-loaded user for debugging
+  PreLoadedUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Username: webuser@example.com
+      MessageAction: SUPPRESS
+      UserAttributes:
+        - Name: email
+          Value: webuser@example.com
+        - Name: email_verified
+          Value: 'true'
+
+  # Second pre-loaded user for debugging
+  PreLoadedUser2:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Username: testuser@example.com
+      MessageAction: SUPPRESS
+      UserAttributes:
+        - Name: email
+          Value: testuser@example.com
+        - Name: email_verified
+          Value: 'true'
+
+  # Lambda function to set permanent password
+  SetUserPasswordFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-set-password-${Environment}'
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          const { CognitoIdentityProviderClient, AdminSetUserPasswordCommand, AdminGetUserCommand } = require('@aws-sdk/client-cognito-identity-provider');
+          
+          const client = new CognitoIdentityProviderClient({});
+          
+          exports.handler = async (event, context) => {
+            console.log('Event:', JSON.stringify(event, null, 2));
+            
+            const response = {
+              Status: 'SUCCESS',
+              PhysicalResourceId: 'set-password-' + Date.now(),
+              StackId: event.StackId,
+              RequestId: event.RequestId,
+              LogicalResourceId: event.LogicalResourceId
+            };
+            
+            try {
+              if (event.RequestType === 'Create' || event.RequestType === 'Update') {
+                const username = event.ResourceProperties.Username;
+                const password = event.ResourceProperties.Password;
+                const userPoolId = event.ResourceProperties.UserPoolId;
+                
+                try {
+                  const getUserResult = await client.send(new AdminGetUserCommand({
+                    UserPoolId: userPoolId,
+                    Username: username
+                  }));
+                  
+                  console.log('User status:', getUserResult.UserStatus);
+                  
+                  if (getUserResult.UserStatus === 'FORCE_CHANGE_PASSWORD') {
+                    await client.send(new AdminSetUserPasswordCommand({
+                      UserPoolId: userPoolId,
+                      Username: username,
+                      Password: password,
+                      Permanent: true
+                    }));
+                    console.log('Password set successfully for', username);
+                    response.Data = { Message: `Password set successfully for ${username}` };
+                  } else {
+                    console.log('User already has permanent password, skipping');
+                    response.Data = { Message: 'User already has permanent password' };
+                  }
+                  
+                } catch (getUserError) {
+                  if (getUserError.name === 'UserNotFoundException') {
+                    console.log('User not found, will be created by CloudFormation resource');
+                    response.Data = { Message: 'User will be created by CloudFormation' };
+                  } else {
+                    throw getUserError;
+                  }
+                }
+              } else {
+                response.Data = { Message: 'Delete operation - no action needed' };
+              }
+            } catch (error) {
+              console.error('Error:', error);
+              response.Status = 'FAILED';
+              response.Reason = error.message;
+            }
+            
+            const https = require('https');
+            const url = require('url');
+            const responseBody = JSON.stringify(response);
+            const parsedUrl = url.parse(event.ResponseURL);
+            
+            const options = {
+              hostname: parsedUrl.hostname,
+              port: 443,
+              path: parsedUrl.path,
+              method: 'PUT',
+              headers: {
+                'content-type': '',
+                'content-length': responseBody.length
+              }
+            };
+            
+            return new Promise((resolve) => {
+              const request = https.request(options, () => resolve());
+              request.on('error', () => resolve());
+              request.write(responseBody);
+              request.end();
+            });
+          };
+
+  # Custom resource to set the password for first user
+  SetUserPassword:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: PreLoadedUser
+    Properties:
+      ServiceToken: !GetAtt SetUserPasswordFunction.Arn
+      UserPoolId: !Ref CognitoUserPool
+      Username: webuser@example.com
+      Password: WebPassword123!
+
+  # Custom resource to set the password for second user
+  SetUserPassword2:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: PreLoadedUser2
+    Properties:
+      ServiceToken: !GetAtt SetUserPasswordFunction.Arn
+      UserPoolId: !Ref CognitoUserPool
+      Username: testuser@example.com
+      Password: TestPassword123!
+
+#############################################
+  # Bedrock Pre-warm Lambda Function
+  #############################################
+  BedrockPrewarmLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-bedrock-prewarm-role'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BedrockPrewarmPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Bedrock - model invocation
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ApplyGuardrail
+                Resource: "*"
+              # AWS Marketplace - for model subscription
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  BedrockPrewarmLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-bedrock-prewarm'
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt BedrockPrewarmLambdaRole.Arn
+      Timeout: 120
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import logging
+          import urllib3
+          from botocore.exceptions import ClientError
+
+          # Configure logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def send_response(event, context, response_status, response_data=None):
+              """Send response to CloudFormation custom resource"""
+              if response_data is None:
+                  response_data = {}
+              
+              response_body = {
+                  'Status': response_status,
+                  'Reason': f'See CloudWatch Log Stream: {context.log_stream_name}',
+                  'PhysicalResourceId': context.log_stream_name,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': response_data
+              }
+              
+              json_response_body = json.dumps(response_body)
+              logger.info(f"Response body: {json_response_body}")
+              
+              headers = {
+                  'content-type': '',
+                  'content-length': str(len(json_response_body))
+              }
+              
+              try:
+                  http = urllib3.PoolManager()
+                  response = http.request('PUT', event['ResponseURL'], body=json_response_body, headers=headers)
+                  logger.info(f"CloudFormation response status: {response.status}")
+              except Exception as e:
+                  logger.error(f"Failed to send response to CloudFormation: {e}")
+
+          def lambda_handler(event, context):
+              """
+              Lambda function to pre-warm Bedrock models.
+              This function makes calls to both Haiku 4.5 and Sonnet 4.5 to ensure the models are ready
+              and marketplace registration is active before the workshop starts.
+              Expected to receive AccessDeniedException for marketplace permissions.
+              
+              Also handles CloudFormation custom resource events.
+              """
+              
+              logger.info(f"Received event: {json.dumps(event)}")
+              
+              # Check if this is a CloudFormation custom resource event
+              if 'RequestType' in event:
+                  request_type = event['RequestType']
+                  logger.info(f"CloudFormation custom resource event: {request_type}")
+                  
+                  if request_type in ['Create', 'Update']:
+                      # Run the pre-warm logic for Create and Update events
+                      try:
+                          result = prewarm_models()
+                          send_response(event, context, 'SUCCESS', result)
+                      except Exception as e:
+                          logger.error(f"Pre-warm failed: {e}")
+                          send_response(event, context, 'FAILED', {'Error': str(e)})
+                  else:
+                      # For Delete events, just respond with success
+                      send_response(event, context, 'SUCCESS', {'Message': 'Delete completed'})
+                  
+                  return
+              
+              # Direct invocation (not from CloudFormation)
+              try:
+                  result = prewarm_models()
+                  return {
+                      'statusCode': 200 if result['success'] else 500,
+                      'body': json.dumps(result)
+                  }
+              except Exception as e:
+                  logger.error(f"Pre-warm failed: {e}")
+                  return {
+                      'statusCode': 500,
+                      'body': json.dumps({'error': str(e)})
+                  }
+
+          def prewarm_models():
+              """Pre-warm the Bedrock models"""
+              # Initialize Bedrock client
+              bedrock_client = boto3.client('bedrock-runtime')
+              
+              # Model IDs to pre-warm
+              models = [
+                  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                  "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+              ]
+              
+              results = []
+              
+              for model_id in models:
+                  try:
+                      # Simple prompt to warm up the model
+                      prompt = f"Hello, this is a pre-warming call for {model_id}. Please respond with 'Ready'."
+                      
+                      # Prepare the request body
+                      request_body = {
+                          "anthropic_version": "bedrock-2023-05-31",
+                          "max_tokens": 10,
+                          "messages": [
+                              {
+                                  "role": "user",
+                                  "content": prompt
+                              }
+                          ]
+                      }
+                      
+                      logger.info(f"Making pre-warm call to Bedrock model: {model_id}")
+                      
+                      # Invoke the model
+                      response = bedrock_client.invoke_model(
+                          modelId=model_id,
+                          body=json.dumps(request_body),
+                          contentType='application/json'
+                      )
+                      
+                      # Parse the response
+                      response_body = json.loads(response['body'].read())
+                      
+                      logger.info(f"Bedrock pre-warm call successful for {model_id}")
+                      logger.info(f"Model response: {response_body}")
+                      
+                      results.append({
+                          'model_id': model_id,
+                          'status': 'success',
+                          'response': response_body
+                      })
+                      
+                  except ClientError as e:
+                      error_code = e.response['Error']['Code']
+                      error_message = e.response['Error']['Message']
+                      
+                      logger.info(f"AWS Client Error for {model_id}: {error_code} - {error_message}")
+                      
+                      # Check if this is the expected marketplace access error
+                      if error_code == 'AccessDeniedException' and 'aws-marketplace' in error_message:
+                          logger.info(f"✅ Received expected marketplace access error for {model_id} - this means the pre-warm attempt worked!")
+                          results.append({
+                              'model_id': model_id,
+                              'status': 'expected_error',
+                              'error_code': error_code,
+                              'note': 'This error is expected and indicates the model is ready for workshop'
+                          })
+                      else:
+                          # Unexpected error
+                          logger.error(f"Unexpected AWS Client Error for {model_id}: {error_code} - {error_message}")
+                          results.append({
+                              'model_id': model_id,
+                              'status': 'error',
+                              'error_code': error_code,
+                              'error_message': error_message
+                          })
+                      
+                  except Exception as e:
+                      logger.error(f"Unexpected error for {model_id}: {str(e)}")
+                      results.append({
+                          'model_id': model_id,
+                          'status': 'error',
+                          'error_message': str(e)
+                      })
+              
+              # Determine overall status
+              success_count = sum(1 for r in results if r['status'] in ['success', 'expected_error'])
+              
+              return {
+                  'success': success_count == len(models),
+                  'message': f'Pre-warm completed for {success_count}/{len(models)} models',
+                  'results': results
+              }
+      Description: "Pre-warm Bedrock Haiku 4.5 and Sonnet 4.5 models for workshop readiness"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Custom Resource to trigger the pre-warm Lambda during stack deployment
+  BedrockPrewarmTrigger:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: BedrockPrewarmLambda
+    Properties:
+      ServiceToken: !GetAtt BedrockPrewarmLambda.Arn
+      # Add a timestamp to ensure the custom resource runs on every update
+      Timestamp: !Sub '${AWS::StackName}-${AWS::Region}-${AWS::AccountId}'
+
+Outputs:
+  # ===== BACKEND OUTPUTS =====
+  
+  TripsTableName:
+    Description: 'DynamoDB table name for trips'
+    Value: !Ref TripsTable
+    Export:
+      Name: !Sub '${AWS::StackName}-TripsTableName'
+  
+  TripsTableArn:
+    Description: 'DynamoDB table ARN for trips'
+    Value: !GetAtt TripsTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TripsTableArn'
+
+  # ===== AUTHENTICATION OUTPUTS =====
+  
+  CognitoUserPoolId:
+    Description: 'Cognito User Pool ID for authentication'
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub '${AWS::StackName}-CognitoUserPoolId'
+  
+  CognitoUserPoolClientId:
+    Description: 'Cognito User Pool Client ID for authentication'
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub '${AWS::StackName}-CognitoUserPoolClientId'
+  
+  PreLoadedUserCredentials:
+    Description: 'Pre-loaded user login credentials for debugging'
+    Value: !Sub |
+      User 1 - Username: webuser@example.com, Password: WebPassword123!
+      User 2 - Username: testuser@example.com, Password: TestPassword123!
+    Export:
+      Name: !Sub '${AWS::StackName}-PreLoadedUserCredentials'
+
+  # ===== FRONTEND HOSTING OUTPUTS =====
+  
+  CloudFrontURL:
+    Description: 'CloudFront Distribution URL - Your application will be available here'
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontURL'
+  
+  FrontendBucketName:
+    Description: 'S3 bucket name for uploading frontend files'
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendBucket'
+  
+  CloudFrontDistributionId:
+    Description: 'CloudFront Distribution ID for cache invalidation'
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'

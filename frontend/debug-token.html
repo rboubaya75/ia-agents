@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JWT Token Decoder</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            margin: 10px 0;
+            padding: 10px;
+            font-family: monospace;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>JWT Token Decoder</h1>
+    <p>Paste your JWT token below to see its claims:</p>
+    
+    <textarea id="tokenInput" placeholder="Paste your JWT token here..."></textarea>
+    <button onclick="decodeToken()">Decode Token</button>
+    
+    <h2>Decoded Token:</h2>
+    <div id="output"></div>
+
+    <script>
+        function decodeToken() {
+            const token = document.getElementById('tokenInput').value.trim();
+            const output = document.getElementById('output');
+            
+            if (!token) {
+                output.innerHTML = '<p class="error">Please paste a token</p>';
+                return;
+            }
+            
+            try {
+                // Split the token
+                const parts = token.split('.');
+                if (parts.length !== 3) {
+                    throw new Error('Invalid JWT format');
+                }
+                
+                // Decode header and payload
+                const header = JSON.parse(atob(parts[0]));
+                const payload = JSON.parse(atob(parts[1]));
+                
+                // Format output
+                output.innerHTML = `
+                    <h3>Header:</h3>
+                    <pre>${JSON.stringify(header, null, 2)}</pre>
+                    
+                    <h3>Payload (Claims):</h3>
+                    <pre>${JSON.stringify(payload, null, 2)}</pre>
+                    
+                    <h3>Key Claims:</h3>
+                    <ul>
+                        <li><strong>client_id:</strong> ${payload.client_id || 'NOT FOUND'}</li>
+                        <li><strong>aud:</strong> ${payload.aud || 'NOT FOUND'}</li>
+                        <li><strong>iss:</strong> ${payload.iss || 'NOT FOUND'}</li>
+                        <li><strong>sub:</strong> ${payload.sub || 'NOT FOUND'}</li>
+                        <li><strong>token_use:</strong> ${payload.token_use || 'NOT FOUND'}</li>
+                    </ul>
+                `;
+            } catch (e) {
+                output.innerHTML = `<p class="error">Error decoding token: ${e.message}</p>`;
+            }
+        }
+        
+        // Auto-decode on paste
+        document.getElementById('tokenInput').addEventListener('paste', function() {
+            setTimeout(decodeToken, 100);
+        });
+    </script>
+</body>
+</html>

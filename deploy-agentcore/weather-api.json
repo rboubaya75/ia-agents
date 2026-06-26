@@ -1,0 +1,309 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "WeatherAPI",
+    "version": "1.0.0",
+    "description": "Weather API for current weather, forecasts, and more"
+  },
+  "servers": [
+    {
+      "url": "https://api.weatherapi.com/v1"
+    }
+  ],
+  "paths": {
+    "/current.json": {
+      "get": {
+        "operationId": "getCurrentWeather",
+        "summary": "Current weather",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Query parameter (city, coordinates, zip, etc.)"
+          },
+          {
+            "name": "aqi",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "yes",
+                "no"
+              ]
+            },
+            "description": "Air quality data"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current weather data"
+          }
+        }
+      }
+    },
+    "/forecast.json": {
+      "get": {
+        "operationId": "getWeatherForecast",
+        "summary": "Weather forecast",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 14
+            },
+            "description": "Number of days of forecast required"
+          },
+          {
+            "name": "dt",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Restrict date output (yyyy-MM-dd)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Forecast data"
+          }
+        }
+      }
+    },
+    "/search.json": {
+      "get": {
+        "operationId": "searchLocations",
+        "summary": "Search or Autocomplete",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results"
+          }
+        }
+      }
+    },
+    "/history.json": {
+      "get": {
+        "operationId": "getHistoricalWeather",
+        "summary": "Historical weather",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dt",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Date on or after 2010-01-01 (yyyy-MM-dd)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical weather data"
+          }
+        }
+      }
+    },
+    "/alerts.json": {
+      "get": {
+        "operationId": "getWeatherAlerts",
+        "summary": "Weather alerts",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weather alerts"
+          }
+        }
+      }
+    },
+    "/marine.json": {
+      "get": {
+        "operationId": "getMarineWeather",
+        "summary": "Marine weather",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Marine weather data"
+          }
+        }
+      }
+    },
+    "/future.json": {
+      "get": {
+        "operationId": "getFutureWeather",
+        "summary": "Future weather",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dt",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Date between 14-300 days from today (yyyy-MM-dd)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Future weather data"
+          }
+        }
+      }
+    },
+    "/timezone.json": {
+      "get": {
+        "operationId": "getTimeZone",
+        "summary": "Time Zone",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Time zone data"
+          }
+        }
+      }
+    },
+    "/sports.json": {
+      "get": {
+        "operationId": "getSportsData",
+        "summary": "Sports data",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sports data"
+          }
+        }
+      }
+    },
+    "/astronomy.json": {
+      "get": {
+        "operationId": "getAstronomyData",
+        "summary": "Astronomy data",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dt",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Date (yyyy-MM-dd)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Astronomy data"
+          }
+        }
+      }
+    },
+    "/ip.json": {
+      "get": {
+        "operationId": "lookupIP",
+        "summary": "IP Lookup",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "IP address (IPv4 or IPv6)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "IP location data"
+          }
+        }
+      }
+    }
+  }
+}
