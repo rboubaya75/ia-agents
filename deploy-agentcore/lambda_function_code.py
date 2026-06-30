@@ -1,85 +1,162 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""Trip tools Lambda for AgentCore Gateway.
+
+This implementation avoids hardcoded table names and avoids logging raw events.
+The caller must inject the authenticated userId before invoking the tool.
+"""
+
+from __future__ import annotations
 
 import json
-import boto3
+import logging
+import os
 import uuid
 from datetime import datetime, timezone
+from typing import Any, Dict, Iterable
 
-dynamodb = boto3.resource('dynamodb')
-table = dynamodb.Table('wildrydes-trips-workshop')
+import boto3
+from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
-def lambda_handler(event, context):
-    toolName = context.client_context.custom['bedrockAgentCoreToolName']
-    print(context.client_context)
-    print(event)
-    print(f"Original toolName: , {toolName}")
+
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+
+DYNAMODB_TABLE_NAME = os.getenv("TRIPS_TABLE_NAME")
+dynamodb = boto3.resource("dynamodb")
+
+
+class ValidationError(ValueError):
+    pass
+
+
+def _response(status_code: int, body: Any) -> Dict[str, Any]:
+    return {
+        "statusCode": status_code,
+        "body": json.dumps(body, default=str) if not isinstance(body, str) else body,
+    }
+
+
+def _get_table():
+    if not DYNAMODB_TABLE_NAME:
+        raise RuntimeError("TRIPS_TABLE_NAME environment variable is required.")
+    return dynamodb.Table(DYNAMODB_TABLE_NAME)
+
+
+def _extract_tool_name(context: Any) -> str:
+    custom = getattr(getattr(context, "client_context", None), "custom", {}) or {}
+    tool_name = custom.get("bedrockAgentCoreToolName", "")
     delimiter = "___"
-    if delimiter in toolName:
-        toolName = toolName[toolName.index(delimiter) + len(delimiter):]
-    print(f"Converted toolName: , {toolName}")
-    
-    if toolName == 'create_trip':
-        trip_id = str(uuid.uuid4())
-        
-        item = {
-            'userId': event['userId'],
-            'tripId': trip_id,
-            'tripName': event['tripName'],
-            'startDate': event['startDate'],
-            'endDate': event['endDate'],
-            'createdAt': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')
-        }
-        
-        if 'destination' in event:
-            item['destination'] = event['destination']
-        if 'description' in event:
-            item['description'] = event['description']
-        
-        table.put_item(Item=item)
-        
-        return {'statusCode': 200, 'body': f"Trip {trip_id} created successfully for user {event['userId']}"}
-    
-    elif toolName == 'get_trips':
-        response = table.query(
-            KeyConditionExpression='userId = :userId',
-            ExpressionAttributeValues={':userId': event['userId']}
-        )
-        return {'statusCode': 200, 'body': json.dumps(response['Items'])}
-    
-    elif toolName == 'get_trip':
-        response = table.get_item(
-            Key={'userId': event['userId'], 'tripId': event['tripId']}
-        )
-        if 'Item' in response:
-            return {'statusCode': 200, 'body': json.dumps(response['Item'])}
-        else:
-            return {'statusCode': 404, 'body': 'Trip not found'}
-    
-    elif toolName == 'update_trip':
-        update_expression = "SET updatedAt = :updatedAt"
-        expression_values = {':updatedAt': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}
-        
-        if 'tripName' in event:
-            update_expression += ", tripName = :tripName"
-            expression_values[':tripName'] = event['tripName']
-        if 'startDate' in event:
-            update_expression += ", startDate = :startDate"
-            expression_values[':startDate'] = event['startDate']
-        if 'endDate' in event:
-            update_expression += ", endDate = :endDate"
-            expression_values[':endDate'] = event['endDate']
-        if 'description' in event:
-            update_expression += ", description = :description"
-            expression_values[':description'] = event['description']
-        
+    if delimiter in tool_name:
+        tool_name = tool_name[tool_name.index(delimiter) + len(delimiter):]
+    return tool_name
+
+
+def _require(event: Dict[str, Any], fields: Iterable[str]) -> None:
+    missing = [field for field in fields if not event.get(field)]
+    if missing:
+        raise ValidationError(f"Missing required field(s): {', '.join(missing)}")
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def create_trip(event: Dict[str, Any]) -> Dict[str, Any]:
+    _require(event, ["userId", "tripName", "startDate", "endDate"])
+    table = _get_table()
+    trip_id = str(uuid.uuid4())
+
+    item = {
+        "userId": event["userId"],
+        "tripId": trip_id,
+        "tripName": event["tripName"],
+        "startDate": event["startDate"],
+        "endDate": event["endDate"],
+        "createdAt": _utc_now(),
+        "updatedAt": _utc_now(),
+    }
+
+    for optional_field in ("destination", "description", "status"):
+        if optional_field in event and event[optional_field] is not None:
+            item[optional_field] = event[optional_field]
+
+    table.put_item(
+        Item=item,
+        ConditionExpression="attribute_not_exists(userId) AND attribute_not_exists(tripId)",
+    )
+    return _response(200, {"message": "Trip created successfully.", "tripId": trip_id})
+
+
+def get_trips(event: Dict[str, Any]) -> Dict[str, Any]:
+    _require(event, ["userId"])
+    table = _get_table()
+    result = table.query(KeyConditionExpression=Key("userId").eq(event["userId"]))
+    return _response(200, result.get("Items", []))
+
+
+def get_trip(event: Dict[str, Any]) -> Dict[str, Any]:
+    _require(event, ["userId", "tripId"])
+    table = _get_table()
+    result = table.get_item(Key={"userId": event["userId"], "tripId": event["tripId"]})
+    item = result.get("Item")
+    if not item:
+        return _response(404, {"message": "Trip not found."})
+    return _response(200, item)
+
+
+def update_trip(event: Dict[str, Any]) -> Dict[str, Any]:
+    _require(event, ["userId", "tripId"])
+    table = _get_table()
+
+    allowed_fields = ("tripName", "startDate", "endDate", "destination", "description", "status")
+    update_names = {"#updatedAt": "updatedAt"}
+    update_values = {":updatedAt": _utc_now()}
+    update_parts = ["#updatedAt = :updatedAt"]
+
+    for field in allowed_fields:
+        if field in event and event[field] is not None:
+            name_key = f"#{field}"
+            value_key = f":{field}"
+            update_names[name_key] = field
+            update_values[value_key] = event[field]
+            update_parts.append(f"{name_key} = {value_key}")
+
+    if len(update_parts) == 1:
+        raise ValidationError("At least one updatable trip field is required.")
+
+    try:
         table.update_item(
-            Key={'userId': event['userId'], 'tripId': event['tripId']},
-            UpdateExpression=update_expression,
-            ExpressionAttributeValues=expression_values
+            Key={"userId": event["userId"], "tripId": event["tripId"]},
+            UpdateExpression="SET " + ", ".join(update_parts),
+            ExpressionAttributeNames=update_names,
+            ExpressionAttributeValues=update_values,
+            ConditionExpression="attribute_exists(userId) AND attribute_exists(tripId)",
         )
-        
-        return {'statusCode': 200, 'body': f"Trip {event['tripId']} updated successfully"}
-    
-    else:
-        return {'statusCode': 400, 'body': "Unsupported operation"}
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return _response(404, {"message": "Trip not found."})
+        raise
+
+    return _response(200, {"message": "Trip updated successfully.", "tripId": event["tripId"]})
+
+
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    tool_name = _extract_tool_name(context)
+    logger.info("trip_tool_invocation tool=%s", tool_name or "unknown")
+
+    try:
+        handlers = {
+            "create_trip": create_trip,
+            "get_trips": get_trips,
+            "get_trip": get_trip,
+            "update_trip": update_trip,
+        }
+        handler = handlers.get(tool_name)
+        if not handler:
+            return _response(400, {"message": "Unsupported operation."})
+        return handler(event)
+    except ValidationError as exc:
+        return _response(400, {"message": str(exc)})
+    except Exception:
+        logger.exception("trip_tool_error tool=%s", tool_name or "unknown")
+        return _response(500, {"message": "Internal tool error."})
