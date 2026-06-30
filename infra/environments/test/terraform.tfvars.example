@@ -1,0 +1,4 @@
+project_name = "wildrydes"
+environment  = "test"
+region       = "eu-west-3"
+enable_rag   = false
