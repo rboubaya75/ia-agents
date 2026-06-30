@@ -1,0 +1,3 @@
+# Known historical lab-generated finding already neutralized in the current tree.
+# Keep this entry exact. Do not add broad paths or broad rules.
+74b384098139f9f01b88377c18ee8ac8f6aadec0:deploy-agentcore/variables.txt:generic-api-key:9
