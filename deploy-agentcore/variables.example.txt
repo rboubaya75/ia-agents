@@ -1,0 +1,20 @@
+# Example only — do not store real generated values or secrets here.
+#
+# Runtime, Gateway, Cognito and Memory values must be provisioned by Terraform
+# and stored in AWS Secrets Manager or GitHub Secrets where appropriate.
+
+MEMORY_ID=""
+GATEWAY_ID=""
+GATEWAY_URL=""
+CLIENT_ID=""
+CLIENT_SECRET=""
+COGNITO_DISCOVERY_URL=""
+SCOPE_STRING=""
+USER_POOL_ID=""
+TOKEN_URL=""
+RANDOM_INDICATOR=""
+REGION=""
+GUARDRAILS_ID=""
+GUARDRAILS_VERSION=""
+RUNTIME_ARN=""
+RUNTIME_ID=""
