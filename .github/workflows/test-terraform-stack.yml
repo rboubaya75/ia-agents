@@ -102,6 +102,8 @@ jobs:
     name: Terraform Plan
     runs-on: ubuntu-latest
     needs: terraform-validate
+    environment:
+          name: test
     if: |
       github.event_name == 'push' ||
       github.event_name == 'pull_request' ||
@@ -144,7 +146,6 @@ jobs:
       - name: Fail on plan error
         if: steps.plan.outputs.exitcode == '1'
         run: exit 1
-
       - name: Upload plan
         if: steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
