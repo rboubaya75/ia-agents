@@ -1,6 +1,6 @@
 # LLD — WildRydes Agentic AI Application Landing Zone
 
-**Version :** 1.0 complète  
+**Version :** 1.1 complète  
 **Langue :** Français  
 **Branche test par défaut :** `migration/secure-agentcore-v1`  
 **Branche future prod :** `main`  
@@ -19,6 +19,7 @@ Il complète le HLD avec :
 
 - la structure repository ;
 - le découpage Terraform ;
+- le delivery frontend via CloudFront et S3 privé ;
 - les contrats API ;
 - les responsabilités Lambda ;
 - le modèle IAM ;
@@ -115,7 +116,56 @@ docs/specifications/module-specifications-fr.md
 
 ---
 
-## 5. Contrat Frontend -> API Gateway
+## 5. Delivery frontend CloudFront -> S3
+
+### Objectif
+
+Servir l’application React / TypeScript / Vite depuis un bucket S3 privé via Amazon CloudFront.
+
+### Flux cible
+
+```text
+User Browser
+  -> Amazon CloudFront Distribution
+  -> Origin Access Control
+  -> Amazon S3 private frontend bucket
+  -> Static assets
+```
+
+### Composants
+
+| Composant | Rôle |
+|---|---|
+| S3 frontend bucket | stockage privé des assets buildés |
+| CloudFront distribution | point d’accès public HTTPS |
+| Origin Access Control | restriction d’accès S3 à CloudFront |
+| Cache policy | cache des assets statiques |
+| Error responses | fallback SPA vers `index.html` |
+| Build config | injection `VITE_API_BASE_URL` |
+
+### Règles de sécurité
+
+- le bucket S3 ne doit pas être public ;
+- `Block Public Access` activé ;
+- accès S3 autorisé uniquement depuis CloudFront ;
+- HTTPS obligatoire côté utilisateur ;
+- pas de secret dans les fichiers buildés ;
+- pas de `VITE_AGENT_ARN` côté frontend ;
+- seul `VITE_API_BASE_URL` doit pointer vers API Gateway.
+
+### Critères d’acceptation
+
+- CloudFront sert l’application web ;
+- S3 direct public access est impossible ;
+- la distribution pointe vers le bucket frontend privé ;
+- le fallback SPA fonctionne ;
+- `index.html` a une politique de cache adaptée ;
+- les assets versionnés ont une politique de cache longue ;
+- la configuration frontend contient l’URL API Gateway et pas l’ARN Runtime.
+
+---
+
+## 6. Contrat Frontend -> API Gateway
 
 ### Endpoint cible
 
@@ -149,7 +199,7 @@ La présence d’un champ d’identité client-side doit retourner une erreur 40
 
 ---
 
-## 6. API Gateway
+## 7. API Gateway
 
 ### Type
 
@@ -166,7 +216,7 @@ Amazon API Gateway HTTP API.
 
 - valider le JWT ;
 - transmettre les claims validés ;
-- appliquer CORS ;
+- appliquer CORS limité au domaine CloudFront test ;
 - limiter taille payload ;
 - limiter taux d’appel ;
 - journaliser sans données sensibles.
@@ -176,12 +226,12 @@ Amazon API Gateway HTTP API.
 - JWT invalide rejeté ;
 - requête sans token rejetée ;
 - route `/agent/invoke` protégée ;
-- CORS limité au frontend connu ;
+- CORS limité au frontend CloudFront connu ;
 - aucun Runtime ARN exposé.
 
 ---
 
-## 7. Lambda Agent Invocation Facade
+## 8. Lambda Agent Invocation Facade
 
 ### Responsabilités
 
@@ -232,7 +282,7 @@ Amazon API Gateway HTTP API.
 
 ---
 
-## 8. AgentCore Runtime
+## 9. AgentCore Runtime
 
 ### Cible
 
@@ -274,7 +324,7 @@ phase_4.py
 
 ---
 
-## 9. AgentCore Memory
+## 10. AgentCore Memory
 
 ### Namespace V1
 
@@ -306,7 +356,7 @@ Memory ne doit pas stocker :
 
 ---
 
-## 10. AgentCore Gateway et tools MCP
+## 11. AgentCore Gateway et tools MCP
 
 ### Tools V1
 
@@ -333,7 +383,7 @@ Memory ne doit pas stocker :
 
 ---
 
-## 11. DynamoDB Trips
+## 12. DynamoDB Trips
 
 ### Modèle V1 simple
 
@@ -366,7 +416,7 @@ Memory ne doit pas stocker :
 
 ---
 
-## 12. Secrets Manager
+## 13. Secrets Manager
 
 ### Secrets attendus
 
@@ -383,7 +433,7 @@ Memory ne doit pas stocker :
 
 ---
 
-## 13. IAM
+## 14. IAM
 
 ### Rôles cibles
 
@@ -406,10 +456,12 @@ Memory ne doit pas stocker :
 
 ---
 
-## 14. Observabilité
+## 15. Observabilité
 
 ### Logs
 
+- CloudFront logs ou métriques selon besoin test ;
+- S3 access posture validation ;
 - API Gateway access logs ;
 - Lambda Facade logs ;
 - Runtime logs ;
@@ -428,6 +480,7 @@ Ne jamais logger :
 
 ### Métriques cibles
 
+- CloudFront requests/errors/cache behavior ;
 - invocations ;
 - erreurs ;
 - latence ;
@@ -438,7 +491,7 @@ Ne jamais logger :
 
 ---
 
-## 15. CI/CD test
+## 16. CI/CD test
 
 Workflow :
 
@@ -466,10 +519,12 @@ Modes :
 
 ---
 
-## 16. Tests
+## 17. Tests
 
 ### Smoke tests
 
+- frontend accessible via CloudFront ;
+- S3 direct public access refusé ;
 - login contrôlé ;
 - appel `/agent/invoke` ;
 - réponse agent minimale ;
@@ -477,6 +532,8 @@ Modes :
 
 ### Integration tests
 
+- CloudFront -> S3 privé ;
+- Browser app -> API Gateway ;
 - API Gateway -> Lambda Facade ;
 - Lambda Facade -> Runtime ;
 - Runtime -> Memory ;
@@ -486,6 +543,7 @@ Modes :
 
 ### Security tests
 
+- S3 frontend non public ;
 - token absent ;
 - token invalide ;
 - `actorId` injecté par client ;
@@ -495,6 +553,7 @@ Modes :
 
 ### Latency tests
 
+- CloudFront response time ;
 - p50 ;
 - p95 ;
 - p99 ;
@@ -503,7 +562,7 @@ Modes :
 
 ---
 
-## 17. RAG future capability
+## 18. RAG future capability
 
 Module futur :
 
@@ -532,7 +591,7 @@ Activation future conditionnée à :
 
 ---
 
-## 18. Dépendances de déploiement
+## 19. Dépendances de déploiement
 
 Ordre cible :
 
@@ -547,18 +606,21 @@ Ordre cible :
 8. AgentCore Runtime
 9. Lambda Facade
 10. API Gateway
-11. Frontend
-12. Observability
-13. Tests
+11. Frontend S3 private bucket
+12. CloudFront distribution and OAC
+13. Observability
+14. Tests
 ```
 
 ---
 
-## 19. Critères d’acceptation LLD
+## 20. Critères d’acceptation LLD
 
 Le LLD est accepté si :
 
 - chaque composant a une responsabilité claire ;
+- le flux CloudFront -> S3 privé est documenté ;
+- le flux API Gateway -> Lambda Facade -> Runtime est documenté ;
 - les contrats API sont définis ;
 - les champs interdits sont explicités ;
 - les erreurs sont mappées ;
