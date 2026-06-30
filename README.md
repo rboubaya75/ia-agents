@@ -18,7 +18,8 @@ L’objectif est d’industrialiser l’ancien workshop WildRydes AgentCore vers
 
 La cible V1 met en place :
 
-- un point d’entrée applicatif via Amazon API Gateway ;
+- un frontend statique servi par **Amazon CloudFront** depuis un bucket **Amazon S3 privé** ;
+- un point d’entrée applicatif via **Amazon API Gateway** ;
 - une authentification web via Amazon Cognito ;
 - une Lambda Facade entre le frontend et AgentCore Runtime ;
 - un Runtime AgentCore exécutant `phase_4.py` ;
@@ -34,8 +35,26 @@ La cible V1 met en place :
 
 ## 2. Architecture cible V1
 
+La V1 distingue deux flux :
+
+1. **Delivery du frontend statique** ;
+2. **Flux applicatif agentique sécurisé**.
+
+### 2.1 Delivery du frontend
+
 ```text
-Browser
+User Browser
+  -> Amazon CloudFront
+  -> Amazon S3 private bucket
+  -> React / TypeScript / Vite static assets
+```
+
+CloudFront est l’intermédiaire entre l’utilisateur et le bucket S3 privé. Le bucket S3 ne doit pas être public. L’accès au bucket doit passer par CloudFront, idéalement via Origin Access Control ou mécanisme équivalent.
+
+### 2.2 Flux applicatif agentique
+
+```text
+React App loaded in Browser
   -> Amazon API Gateway HTTP API
   -> Cognito JWT Authorizer
   -> Lambda Agent Invocation Facade
@@ -186,7 +205,7 @@ Vue synthétique :
 | Domaine | Modules / sous-modules |
 |---|---|
 | Identity | `cognito_web_auth`, app client, groups, invited users |
-| Frontend | `frontend_static_site`, S3, CloudFront, OAC |
+| Frontend | `frontend_static_site`, S3 privé, CloudFront, OAC, cache policy, SPA fallback |
 | Ingress | `api_gateway_agent_ingress`, JWT authorizer, routes |
 | Facade | `lambda_agent_facade`, request validation, runtime invocation |
 | Agent | `ecr_agent`, image build, runtime package |
@@ -207,6 +226,8 @@ Vue synthétique :
 - Pas de `AdministratorAccess` dans la cible.
 - Pas de Runtime ARN exposé au frontend.
 - Pas de `actorId` transmis par le navigateur.
+- Bucket S3 frontend privé, non exposé directement à Internet.
+- Accès au frontend via CloudFront.
 - Pas de prompt brut, JWT ou secret dans les logs.
 - OIDC GitHub limité à l’environnement `test`.
 - Production hors périmètre de la branche de migration.
@@ -220,6 +241,8 @@ La V1 test est acceptable si :
 - Terraform `fmt`, `init -backend=false` et `validate` passent ;
 - la pipeline CI/CD test s’exécute sur la branche de migration ;
 - `apply` et `destroy` restent manuels et protégés par l’environnement `test` ;
+- CloudFront sert le frontend depuis un bucket S3 privé ;
+- le bucket S3 frontend n’est pas public ;
 - API Gateway valide le JWT Cognito ;
 - Lambda Facade dérive `actorId` côté serveur ;
 - AgentCore Runtime exécute `phase_4.py` ;
