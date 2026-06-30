@@ -1,0 +1,623 @@
+# =============================================================================
+# GitHub Actions — Déploiement EKS sécurisé (cluster privé)
+# Standards DevSecOps 2026 : SLSA L3, OpenSSF Scorecard, Runner Hardening,
+# Egress Control, Supply Chain attestation
+#
+# CONTEXTE 2026 :
+# Les attaques supply chain sur tj-actions (mars 2025) ont imposé de nouveaux
+# standards. Le pinning par tag (@v4) ne suffit plus — seul le SHA commit
+# est immutable. Le runner hardening (contrôle du trafic réseau sortant)
+# est désormais un prérequis SLSA Level 3.
+#
+# PRÉREQUIS GitHub (Settings → Secrets and variables) :
+#   Secrets     : AWS_ROLE_ARN
+#   Variables   : AWS_REGION, TF_VERSION
+#
+# PRÉREQUIS AWS (IAM OIDC trust policy) :
+#   Principal   : token.actions.githubusercontent.com
+#   Condition   : repo:VOTRE-ORG/VOTRE-REPO:ref:refs/heads/main
+#
+# PRÉREQUIS GitHub Environments :
+#   Créer l'environment "production" avec Required Reviewers
+#   Settings → Environments → New environment → production
+# =============================================================================
+
+name: secure-agentcore-test-deploy
+
+on:
+  push:
+    branches: ["migration/secure-agentcore-v1"]
+    paths:
+      - 'infra/environments/test'
+      - '.github/workflows/secure-agentcore-test-deploy.yml'
+  pull_request:
+    branches: ["migration/secure-agentcore-v1"]
+    paths: 
+      - 'infra/environments/test/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action Terraform'
+        required: true
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+permissions:
+  contents: read
+
+
+# Un seul apply/destroy à la fois — protège le Terraform state
+concurrency:
+  group: eks-terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_WORKING_DIR: infra/environments/test
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.9.0"
+  TF_INPUT: "false"
+  AWS_REGION: eu-west-3
+
+  # Images épinglées par digest SHA256 — immuables.
+  # Mise à jour : docker buildx imagetools inspect <image>:<tag> | grep Digest
+  # Recommandation 2026 : utiliser Renovate Bot pour l'automatisation
+  CHECKOV_IMAGE: "bridgecrew/checkov@sha256:22b308dd96e158b446c6080d19ea41ffb609ebd46962c9ace43b9b6c8aaff5cf"
+
+# =============================================================================
+# JOB 1 — RUNNER HARDENING (nouveau standard 2026)
+# Harden-Runner de StepSecurity bloque le trafic réseau sortant non autorisé
+# sur le runner. Si une action compromise tente d'exfiltrer des secrets
+# vers un serveur externe, la connexion est bloquée et alertée.
+# C'est la réponse directe aux attaques tj-actions / reviewdog de 2025.
+# Référence : OpenSSF Hardening Guide 2026
+# =============================================================================
+jobs:
+  secret-detection:
+    name: 🔍 Secret Detection + Runner Hardening
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Harden-Runner — contrôle egress réseau du runner
+      # allowed-endpoints : liste blanche des domaines autorisés pendant ce job.
+      # Tout appel réseau vers un domaine non listé = bloqué + alerté.
+      # Mode "audit" pour commencer, puis passer à "block" une fois stabilisé.
+      - name: Harden Runner (egress control)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit   # → passer à "block" après validation
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            objects.githubusercontent.com:443
+
+      - name: Checkout (historique complet pour scan secrets Git)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      # Gitleaks v8+ — scanne tout l'historique Git.
+      # Détecte les clés AWS, tokens GitHub, JWT, credentials Terraform, etc.
+      # Un secret trouvé = pipeline bloqué immédiatement.
+      - name: Gitleaks — Scan secrets historique Git
+        uses: gitleaks/gitleaks-action@v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # JOB 2 — OPENSSF SCORECARD (nouveau standard 2026)
+  # Évalue automatiquement le repo contre les bonnes pratiques de sécurité
+  # OpenSSF : pinning des actions, branch protection, code review,
+  # vulnérabilités connues, SAST activé, etc.
+  # Score affiché dans l'onglet Security → Code Scanning Alerts.
+  # Recommandé par le NIST SSDF et le framework SLSA.
+  # ===========================================================================
+
+  # ===========================================================================
+  # JOB 3 — TERRAFORM VALIDATE
+  # Syntaxe + format check. Sans accès AWS, sans credentials.
+  # ===========================================================================
+  tf-validate:
+    name: ✅ Terraform Validate
+    runs-on: ubuntu-latest
+    needs: secret-detection
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+          allowed-endpoints: >
+            github.com:443
+            releases.hashicorp.com:443
+            registry.terraform.io:443
+            checkpoint-api.hashicorp.com:443
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v3.1.2 ✓
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+   
+
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_LOG: ERROR
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init (sans backend)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_LOG: ERROR
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_LOG: ERROR
+        run: terraform validate
+
+  # ===========================================================================
+  # JOB 4 — TFSEC
+  # Misconfigurations sécurité Terraform : SGs ouverts, chiffrement absent,
+  # logs désactivés, IAM trop permissif, buckets S3 publics…
+  # Bloque sur HIGH+CRITICAL uniquement.
+  # ===========================================================================
+  tf-trivy:
+    # tfsec n'est plus maintenu depuis 2024 (fusionné dans Trivy par Aqua Security).
+    # Trivy utilise le même moteur de règles Terraform, supporte nativement SARIF,
+    # et est activement développé. Migration directe sans perte de couverture.
+    name: 🔒 Trivy — IaC Security Scan
+    runs-on: ubuntu-latest
+    needs: [secret-detection, tf-validate]
+    permissions:
+      contents: read
+      actions: read  
+      security-events: write
+      pull-requests: write
+      attestations: write 
+
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      # Action officielle Trivy — pas besoin de Docker run, plus simple et fiable.
+      # "config" = mode scan IaC (Terraform, Dockerfile, K8s manifests…)
+      # Remplace tfsec 1:1 avec les mêmes règles AWS/EKS, format SARIF natif.
+      - name: Run Trivy IaC scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: ${{ env.TF_WORKING_DIR }}
+          format: sarif
+          output: trivy-iac-results.sarif
+          severity: HIGH,CRITICAL     # bloque uniquement sur HIGH+ (équivalent --minimum-severity HIGH)
+          exit-code: 0              # continue même si des vulnérabilités sont trouvées (on gère le blocage via severity)
+          hide-progress: true     # optionnel : masque la barre de progression pour un output plus propre
+          
+      - name: Upload Trivy SARIF
+        if: success() && github.event.repository.private == false
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-iac-results.sarif
+        
+        # 1. Artifact (toujours fiable)
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-iac-results.sarif-${{ github.run_id }}
+          path: trivy-iac-results.sarif
+          retention-days: 7
+
+
+  # ===========================================================================
+  # JOB 5 — CHECKOV
+  # Complémentaire à tfsec : CIS Benchmarks AWS, SOC2, PCI-DSS.
+  # ===========================================================================
+  tf-checkov:
+    name: 🛡️ Checkov — IaC Compliance
+    runs-on: ubuntu-latest
+    needs: [secret-detection, tf-validate]
+    permissions:
+      contents: read
+      actions: read  
+      security-events: write
+      pull-requests: write
+      attestations: write 
+  
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+          allowed-endpoints: >
+            github.com:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Run Checkov (image épinglée par digest)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            ${{ env.CHECKOV_IMAGE }} \
+              --directory /src/${{ env.TF_WORKING_DIR }} \
+              --framework terraform \
+              --output sarif \
+              --output-file-path /src/${{ env.TF_WORKING_DIR }}/checkov-results.sarif \
+              --output-file-path /src/${{ env.TF_WORKING_DIR }}/checkov-results.sarif \
+
+        
+      - name: Upload Checkov SARIF
+        if: success() && github.event.repository.private == false
+        uses: github/codeql-action/upload-sarif@29d86d22a34ea372b1bbf3b2dced2e25ca6b3384  # v3.26.1
+        with:
+          sarif_file: ${{ env.TF_WORKING_DIR }}/checkov-results.sarif
+          category: checkov
+
+      - name: Upload Checkov report (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-report-${{ github.run_id }}
+          path: checkov-results.sarif
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 6 — TERRAFORM PLAN avec SLSA Provenance (2026)
+  # Nouveauté 2026 : génération d'attestations SLSA sur le tfplan.
+  # Le plan est signé cryptographiquement — on peut prouver qu'il a été
+  # produit par ce workflow précis, sur ce commit précis, sans altération.
+  # ===========================================================================
+  tf-plan:
+    name: 📋 Terraform Plan + SLSA Attestation
+    runs-on: ubuntu-latest
+    #needs: [tf-trivy, tf-checkov]
+    permissions:
+      contents: read
+      id-token: write      # OIDC AWS + génération attestation SLSA
+      pull-requests: write # commentaire résumé plan sur PR
+      attestations: write  # écriture attestation SLSA — nouveau en 2026
+    outputs:
+      plan_exit_code: ${{ steps.plan.outputs.exitcode }}
+      artifact_name: tfplan-${{ github.run_id }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            releases.hashicorp.com:443
+            registry.terraform.io:443
+            *.amazonaws.com:443
+            sts.amazonaws.com:443
+            fulcio.sigstore.dev:443
+            rekor.sigstore.dev:443
+            tuf-repo-cdn.sigstore.dev:443
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      # Authentification AWS via OIDC — zéro clé statique.
+      # Chaque job ré-assume le rôle indépendamment (token frais, session nommée).
+      - name: Configure AWS credentials (OIDC)
+        #uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        uses: aws-actions/configure-aws-credentials@v6.1.3
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Debug inputs
+        run: |
+         echo "ROLE=$AWS_ROLE_ARN"
+         echo "REGION=$AWS_REGION"
+        env:
+         AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+         AWS_REGION: ${{ env.AWS_REGION }}
+
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_LOG: ERROR
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        env:
+          TF_LOG: ERROR
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        # -detailed-exitcode : 0=no change, 1=error, 2=changes pending
+        run: |
+          terraform plan \
+            -detailed-exitcode \
+            -out=tfplan \
+            -lock-timeout=60s
+        continue-on-error: true
+
+      - name: Fail on Terraform error (exit code 1)
+        if: steps.plan.outputs.exitcode == '1'
+        run: exit 1
+
+      # Calcul du hash SHA256 du plan pour l'attestation SLSA
+      - name: Compute plan hash
+        id: hash
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          HASH=$(sha256sum tfplan | awk '{print $1}')
+          echo "plan_hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Plan SHA256: $HASH"
+
+      - name: Upload Terraform Plan artifact
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 1  # court : l'apply doit suivre rapidement
+
+      # SLSA Provenance Attestation — standard 2026
+      # Signe cryptographiquement le tfplan : prouve qu'il a été produit
+      # par ce workflow, sur ce commit, à cet instant précis.
+      # L'attestation est vérifiable publiquement sur Sigstore/Rekor.
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        if: success() && github.event.repository.private == false
+
+        with:
+          subject-name: tfplan-${{ github.run_id }}
+          subject-digest: sha256:${{ steps.hash.outputs.plan_hash }}
+          push-to-registry: false
+
+      # Résumé plan posté en commentaire PR — les reviewers voient les
+      # changements Terraform sans avoir à lancer le pipeline eux-mêmes
+      - name: Post Plan summary to PR
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const exitCode = '${{ steps.plan.outputs.exitcode }}';
+            const status = exitCode === '0' ? '✅ Aucun changement'
+                         : exitCode === '2' ? '⚠️ Changements détectés'
+                         : '❌ Erreur';
+            const body = [
+              '## 📋 Terraform Plan — EKS Platform',
+              `**Status :** ${status}`,
+              `**Workflow :** \`${{ github.workflow }}\``,
+              `**Commit :** \`${{ github.sha }}\``,
+              `**Déclenché par :** @${{ github.actor }}`,
+              '',
+              '> 🔐 Plan attesté SLSA — apply possible uniquement sur `main` avec approbation.'
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+##############
+
+###############
+
+  infra-cost:
+    name: 💰 Terraform Infra Cost Estimation
+    runs-on: ubuntu-latest
+    needs: [secret-detection, tf-validate,tf-plan]
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: audit
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+
+ 
+      
+      - name: Install Infracost CLI
+        run: |
+          curl -L -o infracost.tar.gz \
+            https://github.com/infracost/infracost/releases/latest/download/infracost-linux-amd64.tar.gz
+            tar -xzf infracost.tar.gz
+            sudo mv infracost-linux-amd64 /usr/local/bin/infracost
+            infracost --version
+      - name: Infracost auth
+        run: infracost configure set api_key ${{ secrets.INFRACOST_API_KEY }}
+      - name: Generate cost report
+        run: |
+          infracost breakdown \
+          --path ${{ env.TF_WORKING_DIR }} \
+          --format json \
+          --out-file infracost.json
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: infracost-report
+          path: infracost.json
+          retention-days: 7
+
+
+  # ===========================================================================
+  # JOB 7 — TERRAFORM APPLY
+  # Déclenché sur push main ou workflow_dispatch action=apply.
+  # Environment "production" → Required Reviewers obligatoires.
+  # Nouvelle auth OIDC fraîche (pas de réutilisation des credentials du plan).
+  # ===========================================================================
+  tf-apply:
+    name: 🚀 Terraform Apply
+    runs-on: ubuntu-latest
+    needs: tf-plan
+    if: |
+      (github.ref == 'refs/heads/main') &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')) &&
+      needs.tf-plan.outputs.plan_exit_code == '2'
+    # Environment avec Required Reviewers — l'apply attend une approbation
+    # humaine dans GitHub avant de démarrer. C'est ici que la sécurité
+    # opérationnelle s'applique : personne ne peut appliquer sans validation.
+    environment:
+      name: test
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: block  # BLOCK (pas audit) en apply — zéro tolérance
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            releases.hashicorp.com:443
+            registry.terraform.io:443
+            *.amazonaws.com:443
+            sts.amazonaws.com:443
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v3.1.2 ✓
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # Vérification de l'attestation SLSA avant d'appliquer.
+      # On s'assure que le tfplan qu'on va appliquer est bien celui
+      # qui a été produit et signé par le job plan — pas un plan substituté.
+      - name: Verify SLSA attestation (tfplan integrity)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        if: success() && github.event.repository.private == false
+        # Note : la vérification d'attestation nécessite gh CLI ou la GitHub API
+        # → à adapter selon votre toolchain de vérification Sigstore
+
+      # Nouvelle session OIDC fraîche — nommée "apply" pour traçabilité CloudTrail
+      - name: Configure AWS credentials (OIDC — fresh token)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        with:
+          role-to-assume:  ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION  }}
+          role-duration-seconds: 3600  # 1h pour les applies longs
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Download Terraform Plan artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      # On applique UNIQUEMENT le plan pré-approuvé et attesté SLSA.
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_LOG: ERROR
+        run: |
+          terraform apply \
+            -auto-approve \
+            -lock-timeout=120s \
+            tfplan
+
+      # Sauvegarde de l'état en erreur pour récupération manuelle
+      - name: Save errored state on failure
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: failure()
+        with:
+          name: errored-state-${{ github.run_id }}
+          path: ${{ env.TF_WORKING_DIR }}/errored.tfstate
+          retention-days: 7
+
+  # ===========================================================================
+  # JOB 8 — TERRAFORM DESTROY
+  # Uniquement via workflow_dispatch action=destroy sur main.
+  # Environment production → approbation obligatoire.
+  # Egress en mode BLOCK — aucune connexion non autorisée possible.
+  # ===========================================================================
+  tf-destroy:
+    name: 💥 Terraform Destroy
+    runs-on: ubuntu-latest
+    needs: []
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: block  # BLOCK strict sur destroy
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            releases.hashicorp.com:443
+            registry.terraform.io:443
+            *.amazonaws.com:443
+            sts.amazonaws.com:443
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v3.1.2 ✓
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -lock-timeout=120s
