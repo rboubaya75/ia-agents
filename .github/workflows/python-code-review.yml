@@ -1,0 +1,45 @@
+name: Python Code Review
+
+on:
+  push:
+    branches: ["migration/secure-agentcore-v1"]
+    paths:
+      - "deploy-agentcore/**/*.py"
+      - "lambda/**/*.py"
+      - "tests/**/*.py"
+      - "scripts/**/*.py"
+      - ".github/workflows/python-code-review.yml"
+  pull_request:
+    branches: ["migration/secure-agentcore-v1"]
+    paths:
+      - "deploy-agentcore/**/*.py"
+      - "lambda/**/*.py"
+      - "tests/**/*.py"
+      - "scripts/**/*.py"
+      - ".github/workflows/python-code-review.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-static-checks:
+    name: Python Static Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Python version
+        run: python --version
+
+      - name: Syntax compilation
+        run: |
+          python -m compileall deploy-agentcore lambda tests scripts
+
+      - name: Detect obvious sensitive logging patterns
+        run: |
+          if grep -RInE "(print|logging\.(debug|info|warning|error))\(.*(password|token|jwt|client_secret)" deploy-agentcore lambda tests scripts; then
+            echo "Potential sensitive logging pattern found. Please review and redact."
+            exit 1
+          fi
