@@ -1,28 +1,24 @@
-MEMORY_ID=wildrydes_memory_e4b4d841-woF5l19G26
+# Deprecated generated lab variables file.
+#
+# This file used to contain generated AWS lab/runtime values and must not be used
+# as a source of truth for Secure AgentCore V1.
+#
+# Keep this placeholder only to prevent accidental reintroduction of real secrets.
+# Runtime, Gateway, Cognito and Memory values must be provisioned by Terraform
+# and stored in AWS Secrets Manager or GitHub Secrets where appropriate.
 
-GATEWAY_ID=wildrydes-gateway-e4b4d841-ye8uogp9e5
-
-GATEWAY_URL=https://wildrydes-gateway-e4b4d841-ye8uogp9e5.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp
-
-CLIENT_ID=1mltgh0b7l94q1e94v53b0v335
-
-CLIENT_SECRET=15572klr2707ld4j43mqbrtjvl85e1pv2cglgjp23a19r3e86oe2
-
-COGNITO_DISCOVERY_URL=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_lC9I83gxy/.well-known/openid-configuration
-
-SCOPE_STRING=wildrydes_resource_server_id_e4b4d841/gateway:read wildrydes_resource_server_id_e4b4d841/gateway:write
-
-USER_POOL_ID=us-east-1_lC9I83gxy
-
-TOKEN_URL=https://us-east-1lC9I83gxy.auth.us-east-1.amazoncognito.com/oauth2/token
-
-RANDOM_INDICATOR=e4b4d841
-
-REGION=us-east-1
-
-GUARDRAILS_ID=''
-GUARDRAILS_VERSION='1'
-RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:477755646761:runtime/origami_expeditions_1_5-1zeH9T5KVR
-
-RUNTIME_ID=origami_expeditions_1_5-1zeH9T5KVR
-
+MEMORY_ID=""
+GATEWAY_ID=""
+GATEWAY_URL=""
+CLIENT_ID=""
+CLIENT_SECRET=""
+COGNITO_DISCOVERY_URL=""
+SCOPE_STRING=""
+USER_POOL_ID=""
+TOKEN_URL=""
+RANDOM_INDICATOR=""
+REGION=""
+GUARDRAILS_ID=""
+GUARDRAILS_VERSION=""
+RUNTIME_ARN=""
+RUNTIME_ID=""
