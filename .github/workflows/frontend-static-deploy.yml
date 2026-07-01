@@ -126,12 +126,12 @@ jobs:
       - name: Generate frontend production environment
         working-directory: frontend
         run: |
-          cat > .env.production <<EOF
-          VITE_COGNITO_USER_POOL_ID=${{ steps.tfout.outputs.cognito_user_pool_id }}
-          VITE_COGNITO_CLIENT_ID=${{ steps.tfout.outputs.cognito_web_client_id }}
-          VITE_COGNITO_REGION=${{ env.AWS_REGION }}
-          VITE_API_BASE_URL=${{ inputs.api_base_url }}
-          EOF
+          {
+            echo "VITE_COGNITO_USER_POOL_ID=${{ steps.tfout.outputs.cognito_user_pool_id }}"
+            echo "VITE_COGNITO_CLIENT_ID=${{ steps.tfout.outputs.cognito_web_client_id }}"
+            echo "VITE_COGNITO_REGION=${{ env.AWS_REGION }}"
+            echo "VITE_API_BASE_URL=${{ inputs.api_base_url }}"
+          } > .env.production
 
       - name: Install frontend dependencies
         working-directory: frontend
