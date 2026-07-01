@@ -24,7 +24,6 @@ const AppContent = () => {
 
   return (
     <AppLayout>
-      {/* Unauthenticated content - Login or Register */}
       {showRegister ? (
         <Register onSwitchToLogin={() => setShowRegister(false)} />
       ) : (
@@ -36,18 +35,13 @@ const AppContent = () => {
 
 /**
  * App Component
- * Wraps the application with AuthProvider and ChatContext providers
- * 
- * Provider hierarchy:
- * 1. AuthProvider - Manages authentication state and Cognito integration
- * 2. ChatProvider - Manages chat state (requires authentication context)
- * 3. AppContent - Handles routing based on authentication state
- * 
- * Cognito User Pool is configured via environment variables:
+ * Wraps the application with AuthProvider and ChatContext providers.
+ *
+ * Frontend configuration is provided through:
  * - VITE_COGNITO_USER_POOL_ID
  * - VITE_COGNITO_CLIENT_ID
  * - VITE_COGNITO_REGION
- * - VITE_AGENTCORE_ENDPOINT
+ * - VITE_API_BASE_URL
  */
 function App() {
   return (
