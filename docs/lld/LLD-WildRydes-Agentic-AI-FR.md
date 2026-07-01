@@ -1,6 +1,6 @@
 # LLD — WildRydes Agentic AI Application Landing Zone
 
-**Version :** 1.1 complète  
+**Version :** 1.2 — alignée Terraform + frontend pipeline  
 **Langue :** Français  
 **Branche test par défaut :** `migration/secure-agentcore-v1`  
 **Branche future prod :** `main`  
@@ -20,10 +20,12 @@ Il complète le HLD avec :
 - la structure repository ;
 - le découpage Terraform ;
 - le delivery frontend via CloudFront et S3 privé ;
+- la stratégie de déploiement frontend en deux temps ;
 - les contrats API ;
 - les responsabilités Lambda ;
 - le modèle IAM ;
 - les flux d’identité ;
+- la CI/CD test ;
 - les tests ;
 - les critères d’acceptation techniques ;
 - les dépendances entre modules.
@@ -118,32 +120,32 @@ docs/specifications/module-specifications-fr.md
 
 ## 5. Delivery frontend CloudFront -> S3
 
-### Objectif
+### 5.1 Objectif
 
 Servir l’application React / TypeScript / Vite depuis un bucket S3 privé via Amazon CloudFront.
 
-### Flux cible
+### 5.2 Flux cible
 
 ```text
 User Browser
   -> Amazon CloudFront Distribution
   -> Origin Access Control
   -> Amazon S3 private frontend bucket
-  -> Static assets
+  -> React / Vite static assets
 ```
 
-### Composants
+### 5.3 Composants
 
 | Composant | Rôle |
 |---|---|
 | S3 frontend bucket | stockage privé des assets buildés |
 | CloudFront distribution | point d’accès public HTTPS |
 | Origin Access Control | restriction d’accès S3 à CloudFront |
-| Cache policy | cache des assets statiques |
 | Error responses | fallback SPA vers `index.html` |
-| Build config | injection `VITE_API_BASE_URL` |
+| Terraform outputs | bucket, distribution, domaine CloudFront, Cognito IDs |
+| Frontend deploy pipeline | build React, sync S3, invalidation CloudFront |
 
-### Règles de sécurité
+### 5.4 Règles de sécurité
 
 - le bucket S3 ne doit pas être public ;
 - `Block Public Access` activé ;
@@ -151,23 +153,124 @@ User Browser
 - HTTPS obligatoire côté utilisateur ;
 - pas de secret dans les fichiers buildés ;
 - pas de `VITE_AGENT_ARN` côté frontend ;
-- seul `VITE_API_BASE_URL` doit pointer vers API Gateway.
+- seul `VITE_API_BASE_URL` doit pointer vers API Gateway ou vers un placeholder de static preview.
 
-### Critères d’acceptation
+### 5.5 Critères d’acceptation
 
 - CloudFront sert l’application web ;
 - S3 direct public access est impossible ;
 - la distribution pointe vers le bucket frontend privé ;
 - le fallback SPA fonctionne ;
-- `index.html` a une politique de cache adaptée ;
-- les assets versionnés ont une politique de cache longue ;
-- la configuration frontend contient l’URL API Gateway et pas l’ARN Runtime.
+- le build frontend ne contient aucun ARN Runtime ;
+- le déploiement frontend est réalisé par pipeline GitHub Actions dédiée.
 
 ---
 
-## 6. Contrat Frontend -> API Gateway
+## 6. Stratégie de déploiement frontend en deux temps
 
-### Endpoint cible
+Le frontend V1 est déployé en deux temps pour découpler la delivery web du parcours agentique complet.
+
+### 6.1 Phase A — Frontend static preview
+
+Cette phase est possible dès que la base Terraform est appliquée :
+
+```text
+DynamoDB
+Cognito
+S3 frontend privé
+CloudFront distribution
+Origin Access Control
+```
+
+La pipeline frontend build l’application React/Vite, synchronise `dist/` vers S3 et invalide CloudFront.
+
+Objectifs :
+
+- valider CloudFront ;
+- valider que S3 reste privé ;
+- valider le rendu React ;
+- valider le fallback SPA ;
+- valider les paramètres Cognito côté build si l’écran login est prêt.
+
+Limite assumée : le chat agentique ne fonctionne pas encore car API Gateway, Lambda Facade et AgentCore Runtime ne sont pas encore disponibles.
+
+Dans cette phase, `VITE_API_BASE_URL` peut utiliser le placeholder :
+
+```text
+https://api-not-yet-deployed.invalid
+```
+
+### 6.2 Phase B — Frontend full redeploy
+
+Cette phase intervient après création de :
+
+```text
+API Gateway HTTP API
+Lambda Agent Invocation Facade
+AgentCore Runtime
+```
+
+Le frontend est rebuildé avec :
+
+```text
+VITE_API_BASE_URL=https://<api-id>.execute-api.eu-west-3.amazonaws.com
+```
+
+Le parcours complet devient alors :
+
+```text
+Browser
+  -> CloudFront
+  -> React App
+  -> API Gateway HTTP API
+  -> Lambda Facade
+  -> AgentCore Runtime
+  -> phase_4.py
+```
+
+### 6.3 Pipeline officielle frontend
+
+Workflow :
+
+```text
+.github/workflows/frontend-static-deploy.yml
+```
+
+Mode :
+
+```text
+workflow_dispatch only
+```
+
+Inputs :
+
+| Input | Usage |
+|---|---|
+| `stack_path` | stack Terraform à lire, par défaut `infra/environments/test` |
+| `api_base_url` | valeur build-time de `VITE_API_BASE_URL` |
+| `confirm_deploy` | confirmation obligatoire avant sync S3 et invalidation CloudFront |
+
+Le workflow :
+
+```text
+checkout
+configure AWS credentials via OIDC
+terraform init -lockfile=readonly
+terraform output
+setup Node.js
+npm ci
+npm run build
+aws s3 sync dist/ s3://<frontend_bucket>
+aws cloudfront create-invalidation
+```
+
+Le workflow doit référencer l’environnement GitHub `test`, afin de bénéficier des reviewers requis.
+
+---
+
+## 7. Contrat Frontend -> API Gateway
+
+### 7.1 Endpoint cible
 
 ```http
 POST /agent/invoke
@@ -175,7 +278,7 @@ Authorization: Bearer <cognito_access_token>
 Content-Type: application/json
 ```
 
-### Payload accepté
+### 7.2 Payload accepté
 
 ```json
 {
@@ -184,7 +287,7 @@ Content-Type: application/json
 }
 ```
 
-### Champs interdits
+### 7.3 Champs interdits
 
 ```json
 {
@@ -199,20 +302,20 @@ La présence d’un champ d’identité client-side doit retourner une erreur 40
 
 ---
 
-## 7. API Gateway
+## 8. API Gateway
 
-### Type
+### 8.1 Type
 
 Amazon API Gateway HTTP API.
 
-### Routes V1
+### 8.2 Routes V1
 
 | Route | Méthode | Intégration | Auth |
 |---|---|---|---|
 | `/agent/invoke` | POST | Lambda Facade | Cognito JWT |
 | `/health` | GET | Lambda Facade ou mock | optionnel test |
 
-### Responsabilités
+### 8.3 Responsabilités
 
 - valider le JWT ;
 - transmettre les claims validés ;
@@ -221,7 +324,7 @@ Amazon API Gateway HTTP API.
 - limiter taux d’appel ;
 - journaliser sans données sensibles.
 
-### Critères d’acceptation
+### 8.4 Critères d’acceptation
 
 - JWT invalide rejeté ;
 - requête sans token rejetée ;
@@ -231,9 +334,9 @@ Amazon API Gateway HTTP API.
 
 ---
 
-## 8. Lambda Agent Invocation Facade
+## 9. Lambda Agent Invocation Facade
 
-### Responsabilités
+### 9.1 Responsabilités
 
 - parser la requête API Gateway ;
 - extraire les claims JWT validés ;
@@ -241,12 +344,12 @@ Amazon API Gateway HTTP API.
 - valider `prompt` et `sessionId` ;
 - rejeter les champs d’identité fournis par le client ;
 - construire le payload Runtime ;
-- invoquer AgentCore Runtime ;
+- invoquer AgentCore Runtime avec IAM/SigV4 ;
 - normaliser la réponse ;
 - mapper les erreurs ;
 - logger avec redaction.
 
-### Payload Runtime cible
+### 9.2 Payload Runtime cible
 
 ```json
 {
@@ -259,7 +362,7 @@ Amazon API Gateway HTTP API.
 }
 ```
 
-### Mapping erreurs
+### 9.3 Mapping erreurs
 
 | Cas | HTTP |
 |---|---|
@@ -271,7 +374,7 @@ Amazon API Gateway HTTP API.
 | erreur Runtime | 502 |
 | erreur interne | 500 |
 
-### Timeout cible
+### 9.4 Timeout cible
 
 | Composant | Timeout indicatif |
 |---|---|
@@ -282,15 +385,15 @@ Amazon API Gateway HTTP API.
 
 ---
 
-## 9. AgentCore Runtime
+## 10. AgentCore Runtime
 
-### Cible
+### 10.1 Cible
 
 ```text
 phase_4.py
 ```
 
-### Responsabilités
+### 10.2 Responsabilités
 
 - lire `trustedIdentity.actorId` ;
 - refuser de faire confiance à `actorId` issu du body client ;
@@ -300,7 +403,7 @@ phase_4.py
 - exécuter le raisonnement agentique ;
 - retourner une réponse normalisée.
 
-### Configuration externe attendue
+### 10.3 Configuration externe attendue
 
 | Variable / secret | Usage |
 |---|---|
@@ -312,7 +415,7 @@ phase_4.py
 | `LOG_LEVEL` | niveau de logs |
 | `ENABLE_RAG` | future capability |
 
-### Critères d’acceptation
+### 10.4 Critères d’acceptation
 
 - Runtime exécute bien `phase_4.py` ;
 - `actorId` provient de `trustedIdentity` ;
@@ -324,21 +427,21 @@ phase_4.py
 
 ---
 
-## 10. AgentCore Memory
+## 11. AgentCore Memory
 
-### Namespace V1
+### 11.1 Namespace V1
 
 ```text
 travel/{actorId}/preferences
 ```
 
-### Usage
+### 11.2 Usage
 
 - préférences utilisateur ;
 - contexte durable léger ;
 - informations conversationnelles utiles.
 
-### Non-usage
+### 11.3 Non-usage
 
 Memory ne doit pas stocker :
 
@@ -347,7 +450,7 @@ Memory ne doit pas stocker :
 - données métier transactionnelles ;
 - données cross-user.
 
-### Critères d’acceptation
+### 11.4 Critères d’acceptation
 
 - un utilisateur ne lit pas la Memory d’un autre ;
 - namespace construit côté serveur ;
@@ -356,9 +459,9 @@ Memory ne doit pas stocker :
 
 ---
 
-## 11. AgentCore Gateway et tools MCP
+## 12. AgentCore Gateway et tools MCP
 
-### Tools V1
+### 12.1 Tools V1
 
 | Tool | Description |
 |---|---|
@@ -367,14 +470,14 @@ Memory ne doit pas stocker :
 | `get_trip` | lire un trip |
 | `update_trip` | mettre à jour un trip |
 
-### Règles
+### 12.2 Règles
 
 - le Gateway est interne ;
 - le navigateur ne l’appelle pas ;
 - les tools reçoivent une identité déjà validée ;
 - les tools ne doivent pas accepter un `userId` arbitraire.
 
-### Critères d’acceptation
+### 12.3 Critères d’acceptation
 
 - chaque tool est testé positivement ;
 - chaque tool est testé avec tentative d’usurpation d’identité ;
@@ -383,9 +486,9 @@ Memory ne doit pas stocker :
 
 ---
 
-## 12. DynamoDB Trips
+## 13. DynamoDB Trips
 
-### Modèle V1 simple
+### 13.1 Modèle V1 simple
 
 | Champ | Rôle |
 |---|---|
@@ -398,7 +501,7 @@ Memory ne doit pas stocker :
 | `startDate` | début |
 | `endDate` | fin |
 
-### Sécurité
+### 13.2 Sécurité
 
 - table par environnement ;
 - chiffrement activé ;
@@ -406,7 +509,7 @@ Memory ne doit pas stocker :
 - IAM scoped ;
 - pas de scan global côté tools sauf besoin justifié.
 
-### Critères d’acceptation
+### 13.3 Critères d’acceptation
 
 - CRUD trip fonctionne ;
 - un utilisateur ne peut pas lire les trips d’un autre ;
@@ -416,15 +519,15 @@ Memory ne doit pas stocker :
 
 ---
 
-## 13. Secrets Manager
+## 14. Secrets Manager
 
-### Secrets attendus
+### 14.1 Secrets attendus
 
 - client secret Gateway si nécessaire ;
 - configuration Runtime sensible ;
 - future configuration RAG si nécessaire.
 
-### Règles
+### 14.2 Règles
 
 - aucun secret dans Git ;
 - aucun secret dans `variables.txt` commité ;
@@ -433,9 +536,9 @@ Memory ne doit pas stocker :
 
 ---
 
-## 14. IAM
+## 15. IAM
 
-### Rôles cibles
+### 15.1 Rôles cibles
 
 | Rôle | Usage |
 |---|---|
@@ -445,7 +548,7 @@ Memory ne doit pas stocker :
 | `iam_trip_tools_role` | Lambda Trip Tools |
 | `github_actions_test_role` | CI/CD test OIDC |
 
-### Principes
+### 15.2 Principes
 
 - least privilege ;
 - pas de `AdministratorAccess` ;
@@ -456,9 +559,9 @@ Memory ne doit pas stocker :
 
 ---
 
-## 15. Observabilité
+## 16. Observabilité
 
-### Logs
+### 16.1 Logs
 
 - CloudFront logs ou métriques selon besoin test ;
 - S3 access posture validation ;
@@ -468,7 +571,7 @@ Memory ne doit pas stocker :
 - tools logs ;
 - pipeline logs.
 
-### Redaction obligatoire
+### 16.2 Redaction obligatoire
 
 Ne jamais logger :
 
@@ -478,7 +581,7 @@ Ne jamais logger :
 - user profile complet ;
 - données sensibles.
 
-### Métriques cibles
+### 16.3 Métriques cibles
 
 - CloudFront requests/errors/cache behavior ;
 - invocations ;
@@ -491,12 +594,14 @@ Ne jamais logger :
 
 ---
 
-## 16. CI/CD test
+## 17. CI/CD test
+
+### 17.1 Workflow Terraform
 
 Workflow :
 
 ```text
-.github/workflows/secure-agentcore-test-deploy.yml
+.github/workflows/test-terraform-stack.yml
 ```
 
 Modes :
@@ -506,31 +611,57 @@ Modes :
 | Validate | push / PR | fmt, validate, scans |
 | Plan | workflow_dispatch | plan Terraform test |
 | Apply | workflow_dispatch | apply test avec reviewer |
-| Destroy | workflow_dispatch | destroy test avec confirmation |
+| Destroy Plan | workflow_dispatch | plan de destruction |
+| Destroy | workflow_dispatch | destroy test avec `confirm_destroy=true` |
 
-### Critères d’acceptation CI/CD
+Garde-fous :
 
-- workflow visible sur la branche par défaut ;
-- OIDC fonctionne ;
-- `apply` passe par environment `test` ;
-- `destroy` demande `confirm_destroy=true` ;
-- aucun job ne cible `main` pendant la phase test ;
-- rôle AWS limité à test.
+- `.terraform.lock.hcl` obligatoire ;
+- `terraform init -lockfile=readonly` ;
+- `errored.tfstate` uploadé en artifact si apply/destroy échoue ;
+- `destroy` sans confirmation échoue explicitement ;
+- `apply` et `destroy` passent par l’environnement GitHub `test`.
+
+### 17.2 Workflow frontend
+
+Workflow :
+
+```text
+.github/workflows/frontend-static-deploy.yml
+```
+
+Modes :
+
+| Mode | `api_base_url` | Effet |
+|---|---|---|
+| Static preview | `https://api-not-yet-deployed.invalid` | déploie l’app statique CloudFront/S3 sans parcours agent complet |
+| Full redeploy | endpoint API Gateway réel | redéploie l’app avec `/agent/invoke` opérationnel |
+
+Critères d’acceptation frontend pipeline :
+
+- workflow manuel uniquement ;
+- `confirm_deploy=true` obligatoire ;
+- environnement GitHub `test` utilisé ;
+- outputs Terraform lus depuis `infra/environments/test` ;
+- `npm ci` et `npm run build` passent ;
+- `dist/` synchronisé vers S3 ;
+- invalidation CloudFront créée ;
+- aucun secret ou Runtime ARN injecté dans le build.
 
 ---
 
-## 17. Tests
+## 18. Tests
 
-### Smoke tests
+### 18.1 Smoke tests
 
 - frontend accessible via CloudFront ;
 - S3 direct public access refusé ;
 - login contrôlé ;
-- appel `/agent/invoke` ;
-- réponse agent minimale ;
+- appel `/agent/invoke` après API Gateway/Facade/Runtime ;
+- réponse agent minimale après full redeploy ;
 - health check.
 
-### Integration tests
+### 18.2 Integration tests
 
 - CloudFront -> S3 privé ;
 - Browser app -> API Gateway ;
@@ -541,7 +672,7 @@ Modes :
 - Gateway -> Tools ;
 - Tools -> DynamoDB.
 
-### Security tests
+### 18.3 Security tests
 
 - S3 frontend non public ;
 - token absent ;
@@ -551,18 +682,18 @@ Modes :
 - tentative cross-user ;
 - logs redacted.
 
-### Latency tests
+### 18.4 Latency tests
 
 - CloudFront response time ;
 - p50 ;
 - p95 ;
 - p99 ;
 - timeout ;
-- cold start.
+- cold start suivi comme signal secondaire, sans le considérer comme risque principal avant mesure.
 
 ---
 
-## 18. RAG future capability
+## 19. RAG future capability
 
 Module futur :
 
@@ -591,35 +722,38 @@ Activation future conditionnée à :
 
 ---
 
-## 19. Dépendances de déploiement
+## 20. Dépendances de déploiement
 
-Ordre cible :
+Ordre cible V1 test :
 
 ```text
-1. IAM et secrets
-2. Cognito
-3. DynamoDB
-4. Lambda tools
-5. AgentCore Gateway
+0. Lockfile + pipeline Terraform verte
+1. Apply base Terraform : DynamoDB + Cognito + S3 frontend privé + CloudFront/OAC
+2. Frontend static deploy via GitHub Actions
+3. ECR agent image
+4. Lambda trip tools + IAM DynamoDB
+5. AgentCore Gateway + Gateway Target
 6. AgentCore Memory
-7. ECR agent image
-8. AgentCore Runtime
-9. Lambda Facade
-10. API Gateway
-11. Frontend S3 private bucket
-12. CloudFront distribution and OAC
-13. Observability
-14. Tests
+7. AgentCore Runtime IAM/SigV4
+8. Lambda Agent Invocation Facade
+9. API Gateway HTTP API + Cognito JWT authorizer
+10. Frontend full redeploy avec VITE_API_BASE_URL réel
+11. Post-deploy validation end-to-end
+12. Observability / cost hardening
 ```
+
+Règle : le frontend statique ne doit pas attendre AgentCore Runtime pour être servi par CloudFront. En revanche, le parcours agentique complet doit attendre API Gateway, Lambda Facade et Runtime.
 
 ---
 
-## 20. Critères d’acceptation LLD
+## 21. Critères d’acceptation LLD
 
 Le LLD est accepté si :
 
 - chaque composant a une responsabilité claire ;
 - le flux CloudFront -> S3 privé est documenté ;
+- le frontend static deploy et le full redeploy sont distingués ;
+- la pipeline frontend dédiée est documentée ;
 - le flux API Gateway -> Lambda Facade -> Runtime est documenté ;
 - les contrats API sont définis ;
 - les champs interdits sont explicités ;
