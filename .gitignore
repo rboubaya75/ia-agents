@@ -20,6 +20,7 @@ frontend/.vite/
 .env.*
 !.env.example
 !.env.production.example
+!frontend/.env.example
 
 # Generated local configuration
 variables.txt
@@ -29,7 +30,6 @@ deploy-agentcore/variables.txt
 
 # Terraform
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 crash.log
