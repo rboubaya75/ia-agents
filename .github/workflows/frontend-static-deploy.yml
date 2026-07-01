@@ -1,0 +1,158 @@
+name: Frontend Static Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_path:
+        description: "Terraform stack path used to read frontend outputs"
+        required: true
+        type: choice
+        options:
+          - infra/environments/test
+        default: infra/environments/test
+      api_base_url:
+        description: "VITE_API_BASE_URL. Use a placeholder for static preview, then the real API Gateway endpoint later."
+        required: true
+        type: string
+        default: "https://api-not-yet-deployed.invalid"
+      confirm_deploy:
+        description: "Required to deploy frontend assets to S3 and invalidate CloudFront"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-static-deploy-${{ github.ref }}-${{ inputs.stack_path || 'infra-environments-test' }}
+  cancel-in-progress: false
+
+env:
+  DEFAULT_STACK_PATH: infra/environments/test
+  TF_VERSION: "1.9.0"
+  NODE_VERSION: "20"
+  AWS_REGION: eu-west-3
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  frontend-static-deploy:
+    name: Frontend Static Deploy
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Confirm deployment
+        run: |
+          if [ "${{ inputs.confirm_deploy }}" != "true" ]; then
+            echo "Frontend static deploy requires confirm_deploy=true."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: frontend-static-deploy
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Require Terraform provider lockfile
+        run: |
+          lockfile="${{ steps.stack.outputs.path }}/.terraform.lock.hcl"
+          if [ ! -f "$lockfile" ]; then
+            echo "Missing Terraform lockfile: $lockfile"
+            exit 1
+          fi
+
+      - name: Terraform init
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform init -lockfile=readonly
+
+      - name: Read Terraform outputs
+        id: tfout
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          bucket_name="$(terraform output -raw frontend_bucket_name)"
+          cloudfront_distribution_id="$(terraform output -raw cloudfront_distribution_id)"
+          cloudfront_domain_name="$(terraform output -raw cloudfront_domain_name)"
+          cognito_user_pool_id="$(terraform output -raw cognito_user_pool_id)"
+          cognito_web_client_id="$(terraform output -raw cognito_web_client_id)"
+
+          if [ -z "$bucket_name" ] || [ -z "$cloudfront_distribution_id" ] || [ -z "$cloudfront_domain_name" ] || [ -z "$cognito_user_pool_id" ] || [ -z "$cognito_web_client_id" ]; then
+            echo "Required Terraform outputs are missing. Run the Terraform test stack apply first."
+            exit 1
+          fi
+
+          echo "bucket_name=$bucket_name" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_distribution_id=$cloudfront_distribution_id" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_domain_name=$cloudfront_domain_name" >> "$GITHUB_OUTPUT"
+          echo "cognito_user_pool_id=$cognito_user_pool_id" >> "$GITHUB_OUTPUT"
+          echo "cognito_web_client_id=$cognito_web_client_id" >> "$GITHUB_OUTPUT"
+
+      - name: Validate API base URL input
+        run: |
+          if [ -z "${{ inputs.api_base_url }}" ]; then
+            echo "api_base_url is required. Use https://api-not-yet-deployed.invalid for static preview."
+            exit 1
+          fi
+
+      - name: Generate frontend production environment
+        working-directory: frontend
+        run: |
+          cat > .env.production <<EOF
+          VITE_COGNITO_USER_POOL_ID=${{ steps.tfout.outputs.cognito_user_pool_id }}
+          VITE_COGNITO_CLIENT_ID=${{ steps.tfout.outputs.cognito_web_client_id }}
+          VITE_COGNITO_REGION=${{ env.AWS_REGION }}
+          VITE_API_BASE_URL=${{ inputs.api_base_url }}
+          EOF
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Sync frontend assets to S3
+        working-directory: frontend
+        run: aws s3 sync dist/ "s3://${{ steps.tfout.outputs.bucket_name }}" --delete
+
+      - name: Invalidate CloudFront distribution
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.tfout.outputs.cloudfront_distribution_id }}" \
+            --paths "/*"
+
+      - name: Deployment summary
+        run: |
+          echo "Frontend static deployment completed."
+          echo "CloudFront URL: https://${{ steps.tfout.outputs.cloudfront_domain_name }}"
+          echo "API base URL embedded in build: ${{ inputs.api_base_url }}"
