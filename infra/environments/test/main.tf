@@ -1,5 +1,15 @@
 data "aws_caller_identity" "current" {}
 
+module "frontend_static_site" {
+  source = "../../modules/frontend_static_site"
+
+  name_prefix   = local.name_prefix
+  bucket_name   = "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}-${var.region}"
+  price_class   = "PriceClass_100"
+  common_tags   = local.common_tags
+  force_destroy = false
+}
+
 module "dynamodb_trips" {
   source = "../../modules/dynamodb_trips"
 
