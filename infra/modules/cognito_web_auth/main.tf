@@ -8,15 +8,6 @@ resource "aws_cognito_user_pool" "this" {
     allow_admin_create_user_only = true
   }
 
-  password_policy {
-    minimum_length                   = 12
-    require_lowercase                = true
-    require_numbers                  = true
-    require_symbols                  = true
-    require_uppercase                = true
-    temporary_password_validity_days = 7
-  }
-
   account_recovery_setting {
     recovery_mechanism {
       name     = "verified_email"
@@ -48,7 +39,6 @@ resource "aws_cognito_user_pool_client" "web" {
 
   explicit_auth_flows = [
     "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_USER_SRP_AUTH"
   ]
 
