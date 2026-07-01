@@ -1,2 +1,7 @@
-# Backend Terraform à renseigner selon le backend déjà validé par le client.
-# Aucun backend distant n'est configuré dans cette PR non-déployante.
+terraform {
+  backend "s3" {
+    bucket = "tfstate-secure-eks-prod-eu-west-1"
+    key    = "secure-agentcore/test/terraform.tfstate"
+    region = "eu-west-1"
+  }
+}
