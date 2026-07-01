@@ -69,10 +69,48 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+  lockfile-check:
+    name: Terraform Lockfile Check
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Require Terraform provider lockfile
+        run: |
+          lockfile="${{ steps.stack.outputs.path }}/.terraform.lock.hcl"
+          if [ ! -f "$lockfile" ]; then
+            echo "Missing Terraform lockfile: $lockfile"
+            echo "Generate and commit it before running this workflow:"
+            echo "  cd ${{ steps.stack.outputs.path }}"
+            echo "  terraform init -upgrade"
+            echo "  terraform providers lock -platform=linux_amd64 -platform=darwin_amd64 -platform=darwin_arm64 -platform=windows_amd64"
+            exit 1
+          fi
+
+  destroy-confirmation-check:
+    name: Destroy Confirmation Check
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      inputs.confirm_destroy != true
+    steps:
+      - name: Fail when destroy is not confirmed
+        run: |
+          echo "action=destroy requires confirm_destroy=true."
+          echo "Re-run the workflow with action=destroy and confirm_destroy checked."
+          exit 1
+
   terraform-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
-    needs: secret-scan
+    needs: lockfile-check
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -92,7 +130,7 @@ jobs:
 
       - name: Terraform init without backend
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -backend=false
+        run: terraform init -backend=false -lockfile=readonly
 
       - name: Terraform validate
         working-directory: ${{ steps.stack.outputs.path }}
@@ -133,7 +171,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init
+        run: terraform init -lockfile=readonly
 
       - name: Terraform plan
         id: plan
@@ -195,11 +233,20 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init
+        run: terraform init -lockfile=readonly
 
       - name: Terraform apply
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform apply -auto-approve -lock-timeout=120s tfplan
+
+      - name: Upload errored tfstate
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: errored-tfstate-${{ github.run_id }}
+          path: ${{ steps.stack.outputs.path }}/errored.tfstate
+          retention-days: 7
+          if-no-files-found: ignore
 
   terraform-destroy-plan:
     name: Terraform Destroy Plan
@@ -207,13 +254,16 @@ jobs:
     needs: terraform-validate
     if: |
       github.event_name == 'workflow_dispatch' &&
-      (inputs.action == 'destroy-plan' || inputs.action == 'destroy') &&
+      (
+        inputs.action == 'destroy-plan' ||
+        (inputs.action == 'destroy' && inputs.confirm_destroy == true)
+      ) &&
       github.ref == 'refs/heads/migration/secure-agentcore-v1'
     permissions:
       contents: read
       id-token: write
     outputs:
-      destroy_plan_exit_code: ${{ steps.destroy-plan.outputs.exitcode }}
+      destroy_plan_exit_code: ${{ steps.destroy_plan.outputs.exitcode }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -236,20 +286,20 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init
+        run: terraform init -lockfile=readonly
 
       - name: Terraform destroy plan
-        id: destroy-plan
+        id: destroy_plan
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform plan -destroy -detailed-exitcode -out=tfdestroyplan -lock-timeout=60s
         continue-on-error: true
 
       - name: Fail on destroy plan error
-        if: steps.destroy-plan.outputs.exitcode == '1'
+        if: steps.destroy_plan.outputs.exitcode == '1'
         run: exit 1
 
       - name: Upload destroy plan
-        if: steps.destroy-plan.outputs.exitcode == '0' || steps.destroy-plan.outputs.exitcode == '2'
+        if: steps.destroy_plan.outputs.exitcode == '0' || steps.destroy_plan.outputs.exitcode == '2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: tfdestroyplan-${{ github.run_id }}
@@ -299,8 +349,17 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init
+        run: terraform init -lockfile=readonly
 
       - name: Terraform apply destroy plan
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform apply -auto-approve -lock-timeout=120s tfdestroyplan
+
+      - name: Upload errored tfstate
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: errored-tfstate-${{ github.run_id }}
+          path: ${{ steps.stack.outputs.path }}/errored.tfstate
+          retention-days: 7
+          if-no-files-found: ignore
