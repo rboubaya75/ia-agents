@@ -49,7 +49,7 @@ User Browser
   -> React / TypeScript / Vite static assets
 ```
 
-CloudFront est l’intermédiaire entre l’utilisateur et le bucket S3 privé. Le bucket S3 ne doit pas être public. L’accès au bucket doit passer par CloudFront, idéalement via Origin Access Control ou mécanisme équivalent.
+CloudFront est l’intermédiaire entre l’utilisateur et le bucket S3 privé. Le bucket S3 ne doit pas être public. L’accès au bucket doit passer par CloudFront via Origin Access Control.
 
 ### 2.2 Flux applicatif agentique
 
@@ -71,7 +71,69 @@ Règle clé : le navigateur ne doit jamais appeler directement AgentCore Runtime
 
 ---
 
-## 3. Branching et environnements
+## 3. Stratégie de déploiement frontend
+
+Le frontend est déployé en **deux temps**.
+
+### 3.1 Déploiement statique initial
+
+Dès que Terraform a créé Cognito, le bucket S3 privé et la distribution CloudFront, le frontend React/Vite peut être buildé et publié vers S3 via CloudFront.
+
+Objectifs de ce déploiement initial :
+
+- vérifier que CloudFront sert l’application ;
+- vérifier que le bucket S3 reste privé ;
+- vérifier que le fallback SPA fonctionne ;
+- vérifier le rendu React ;
+- préparer le socle de delivery web avant l’arrivée de l’API agentique.
+
+Limite assumée : le parcours agent `/agent/invoke` ne fonctionne pas encore tant qu’API Gateway, Lambda Facade et AgentCore Runtime ne sont pas déployés.
+
+### 3.2 Redéploiement frontend complet
+
+Après création d’API Gateway, Lambda Facade et AgentCore Runtime, le frontend doit être rebuildé avec le vrai endpoint applicatif :
+
+```text
+VITE_API_BASE_URL=https://<api-id>.execute-api.eu-west-3.amazonaws.com
+```
+
+Ce second déploiement active le parcours applicatif complet :
+
+```text
+Browser -> CloudFront -> React App -> API Gateway -> Lambda Facade -> AgentCore Runtime
+```
+
+### 3.3 Pipeline officielle
+
+Le déploiement officiel du frontend test passe par GitHub Actions :
+
+```text
+.github/workflows/frontend-static-deploy.yml
+```
+
+Ce workflow est manuel et protégé par l’environnement GitHub `test`.
+
+Il exécute :
+
+```text
+checkout
+configure AWS credentials via OIDC
+terraform init -lockfile=readonly
+terraform output
+npm ci
+npm run build
+aws s3 sync dist/ s3://<frontend_bucket>
+cloudfront invalidation
+```
+
+Le paramètre `api_base_url` peut être :
+
+- `https://api-not-yet-deployed.invalid` pour un static preview ;
+- l’endpoint API Gateway réel pour le redéploiement complet.
+
+---
+
+## 4. Branching et environnements
 
 | Branche | Rôle | Statut |
 |---|---|---|
@@ -96,7 +158,7 @@ Le switch vers `main` sera réalisé manuellement après :
 
 ---
 
-## 4. Documentation
+## 5. Documentation
 
 | Document | Objectif |
 |---|---|
@@ -109,7 +171,7 @@ Le switch vers `main` sera réalisé manuellement après :
 
 ---
 
-## 5. Étapes de travail recommandées
+## 6. Étapes de travail recommandées
 
 ### Étape 1 — Préparation locale
 
@@ -134,6 +196,7 @@ docs/lld/
 docs/specifications/
 infra/environments/test/
 infra/modules/
+frontend/
 lambda/
 tests/
 .github/workflows/
@@ -144,59 +207,65 @@ tests/
 ```bash
 cd infra/environments/test
 terraform fmt -check -recursive
-terraform init -backend=false
+terraform init -backend=false -lockfile=readonly
 terraform validate
 ```
 
-### Étape 4 — Exécution CI/CD automatique
-
-Les workflows se déclenchent sur la branche `migration/secure-agentcore-v1` pour les changements dans :
-
-```text
-infra/environments/test/**
-infra/modules/**
-.github/workflows/**
-```
-
-### Étape 5 — Plan Terraform test
+### Étape 4 — Pipeline Terraform test
 
 Depuis GitHub Actions :
 
 ```text
-Actions -> Secure AgentCore Test — Terraform CI/CD -> Run workflow -> action=plan
-```
-
-Le plan doit utiliser le rôle AWS OIDC dédié à l’environnement `test`.
-
-### Étape 6 — Apply Terraform test
-
-Depuis GitHub Actions :
-
-```text
-Actions -> Secure AgentCore Test — Terraform CI/CD -> Run workflow -> action=apply
+Actions -> Test Terraform Stack -> Run workflow -> action=plan
+Actions -> Test Terraform Stack -> Run workflow -> action=apply
 ```
 
 Conditions attendues :
 
 - branche `migration/secure-agentcore-v1` ;
+- fichier `infra/environments/test/.terraform.lock.hcl` commité ;
 - environnement GitHub `test` ;
 - reviewer obligatoire ;
-- rôle AWS limité à test ;
+- rôle AWS OIDC limité à test ;
 - aucun accès prod.
 
-### Étape 7 — Destroy Terraform test
+### Étape 5 — Déploiement frontend statique
+
+Après apply de la base Terraform :
+
+```text
+Actions -> Frontend Static Deploy -> Run workflow
+```
+
+Paramètres pour un static preview :
+
+```text
+stack_path = infra/environments/test
+api_base_url = https://api-not-yet-deployed.invalid
+confirm_deploy = true
+```
+
+Paramètres pour le redéploiement complet après API Gateway :
+
+```text
+stack_path = infra/environments/test
+api_base_url = https://<api-id>.execute-api.eu-west-3.amazonaws.com
+confirm_deploy = true
+```
+
+### Étape 6 — Destroy Terraform test
 
 Depuis GitHub Actions :
 
 ```text
-Actions -> Secure AgentCore Test — Terraform CI/CD -> Run workflow -> action=destroy -> confirm_destroy=true
+Actions -> Test Terraform Stack -> Run workflow -> action=destroy -> confirm_destroy=true
 ```
 
 `destroy` est réservé au test et doit rester soumis à validation humaine.
 
 ---
 
-## 6. Modules Terraform cibles
+## 7. Modules Terraform cibles
 
 Les modules sont décrits dans `docs/specifications/module-specifications-fr.md`.
 
@@ -220,7 +289,7 @@ Vue synthétique :
 
 ---
 
-## 7. Règles de sécurité
+## 8. Règles de sécurité
 
 - Pas de secrets dans le dépôt.
 - Pas de `AdministratorAccess` dans la cible.
@@ -234,15 +303,17 @@ Vue synthétique :
 
 ---
 
-## 8. Critères globaux d’acceptation V1 test
+## 9. Critères globaux d’acceptation V1 test
 
 La V1 test est acceptable si :
 
-- Terraform `fmt`, `init -backend=false` et `validate` passent ;
+- Terraform `fmt`, `init -backend=false -lockfile=readonly` et `validate` passent ;
 - la pipeline CI/CD test s’exécute sur la branche de migration ;
+- `.terraform.lock.hcl` est commité pour la stack test ;
 - `apply` et `destroy` restent manuels et protégés par l’environnement `test` ;
 - CloudFront sert le frontend depuis un bucket S3 privé ;
 - le bucket S3 frontend n’est pas public ;
+- le frontend statique est déployé par pipeline dédiée ;
 - API Gateway valide le JWT Cognito ;
 - Lambda Facade dérive `actorId` côté serveur ;
 - AgentCore Runtime exécute `phase_4.py` ;
@@ -255,7 +326,7 @@ La V1 test est acceptable si :
 
 ---
 
-## 9. Éléments hors périmètre V1
+## 10. Éléments hors périmètre V1
 
 - production go-live ;
 - multi-tenant B2B avancé ;
@@ -269,7 +340,7 @@ La V1 test est acceptable si :
 
 ---
 
-## 10. Promotion future vers production
+## 11. Promotion future vers production
 
 La promotion vers `main` devra faire l’objet d’une étape séparée :
 
