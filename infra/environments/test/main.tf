@@ -23,5 +23,6 @@ module "cognito_web_auth" {
 
   name            = "${local.name_prefix}-users"
   app_client_name = "${local.name_prefix}-web"
+  invited_users   = var.cognito_invited_users
   tags            = local.common_tags
 }
