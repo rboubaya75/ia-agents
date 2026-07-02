@@ -20,23 +20,6 @@ variable "scan_on_push" {
   default     = true
 }
 
-variable "max_image_count" {
-  type        = number
-  description = "Maximum number of images kept by the lifecycle policy."
-  default     = 10
-
-  validation {
-    condition     = var.max_image_count >= 1
-    error_message = "max_image_count must be at least 1."
-  }
-}
-
-variable "force_delete" {
-  type        = bool
-  description = "Whether to force delete the repository even if it contains images."
-  default     = false
-}
-
 variable "common_tags" {
   type        = map(string)
   description = "Common resource tags."
