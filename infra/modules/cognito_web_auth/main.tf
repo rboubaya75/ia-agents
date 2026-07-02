@@ -52,3 +52,22 @@ resource "aws_cognito_user_pool_client" "web" {
     refresh_token = "days"
   }
 }
+
+resource "aws_cognito_user" "invited" {
+  for_each = var.invited_users
+
+  user_pool_id = aws_cognito_user_pool.this.id
+  username     = each.value.email
+  enabled      = each.value.enabled
+
+  desired_delivery_mediums = ["EMAIL"]
+
+  attributes = merge(
+    {
+      email          = each.value.email
+      email_verified = "true"
+    },
+    each.value.given_name != null ? { given_name = each.value.given_name } : {},
+    each.value.family_name != null ? { family_name = each.value.family_name } : {}
+  )
+}
