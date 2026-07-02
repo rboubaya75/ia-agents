@@ -1,18 +1,17 @@
-/**
- * AuthContext
- * Provides global authentication state management for the application
- */
-
 import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import type { AuthState } from '../types';
 import * as authService from '../services/authService';
+import { NewPasswordRequiredError } from '../services/authService';
 import { extractUserId } from '../utils/jwtDecoder';
 
 interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<void>;
+  completeNewPassword: (newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshToken: () => Promise<void>;
   registerChatCleanup: (cleanup: () => void) => void;
+  newPasswordRequired: boolean;
+  pendingUsername: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -29,10 +28,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     jwtToken: null,
   });
 
-  // Store chat cleanup function
+  const [newPasswordRequired, setNewPasswordRequired] = useState(false);
+  const [pendingUsername, setPendingUsername] = useState<string | null>(null);
   const [chatCleanup, setChatCleanup] = useState<(() => void) | null>(null);
 
-  // Check for existing session on mount
   useEffect(() => {
     const checkExistingSession = async () => {
       try {
@@ -46,8 +45,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           userId,
           jwtToken,
         });
-      } catch (error) {
-        // No existing session or session expired
+      } catch {
         setAuthState({
           isAuthenticated: false,
           user: null,
@@ -60,15 +58,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     checkExistingSession();
   }, []);
 
-  /**
-   * Logs in a user with username and password
-   * @param username - The username
-   * @param password - The password
-   * @throws Error if authentication fails
-   */
   const login = async (username: string, password: string): Promise<void> => {
     try {
       const result = await authService.login(username, password);
+
+      setNewPasswordRequired(false);
+      setPendingUsername(null);
 
       setAuthState({
         isAuthenticated: true,
@@ -77,39 +72,51 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         jwtToken: result.jwtToken,
       });
     } catch (error) {
-      // Clear auth state on login failure
       setAuthState({
         isAuthenticated: false,
         user: null,
         userId: null,
         jwtToken: null,
       });
+
+      if (error instanceof NewPasswordRequiredError) {
+        setNewPasswordRequired(true);
+        setPendingUsername(error.username);
+      }
+
       throw error;
     }
   };
 
-  /**
-   * Register chat cleanup function to be called on logout
-   * @param cleanup - Function to clear chat state
-   */
+  const completeNewPassword = async (newPassword: string): Promise<void> => {
+    const result = await authService.completeNewPassword(newPassword);
+
+    setNewPasswordRequired(false);
+    setPendingUsername(null);
+
+    setAuthState({
+      isAuthenticated: true,
+      user: result.user,
+      userId: result.userId,
+      jwtToken: result.jwtToken,
+    });
+  };
+
   const registerChatCleanup = (cleanup: () => void): void => {
     setChatCleanup(() => cleanup);
   };
 
-  /**
-   * Logs out the current user
-   * Clears authentication state, chat messages, and Cognito session
-   */
   const logout = async (): Promise<void> => {
     try {
       await authService.logout();
     } finally {
-      // Clear chat state if cleanup function is registered
       if (chatCleanup) {
         chatCleanup();
       }
 
-      // Always clear auth state, even if logout fails
+      setNewPasswordRequired(false);
+      setPendingUsername(null);
+
       setAuthState({
         isAuthenticated: false,
         user: null,
@@ -119,11 +126,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  /**
-   * Refreshes the JWT token for the current user
-   * Updates the authentication state with the new token
-   * @throws Error if token refresh fails
-   */
   const refreshToken = async (): Promise<void> => {
     try {
       const jwtToken = await authService.getJwtToken();
@@ -137,7 +139,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         jwtToken,
       });
     } catch (error) {
-      // If token refresh fails, clear auth state
       setAuthState({
         isAuthenticated: false,
         user: null,
@@ -151,26 +152,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const value: AuthContextType = {
     ...authState,
     login,
+    completeNewPassword,
     logout,
     refreshToken,
     registerChatCleanup,
+    newPasswordRequired,
+    pendingUsername,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-/**
- * Custom hook to access the AuthContext
- * @returns The authentication context
- * @throws Error if used outside of AuthProvider
- */
 export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
-  
+
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
-  
+
   return context;
 };
 
