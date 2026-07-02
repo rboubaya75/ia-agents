@@ -20,6 +20,18 @@ variable "agent_runtime_arn" {
   default     = ""
 }
 
+variable "agent_runtime_endpoint_name" {
+  type        = string
+  description = "AgentCore Runtime endpoint name used as invocation qualifier."
+  default     = "default"
+}
+
+variable "request_timeout_seconds" {
+  type        = number
+  description = "Facade request timeout in seconds."
+  default     = 120
+}
+
 variable "log_level" {
   type        = string
   description = "Facade log level."
