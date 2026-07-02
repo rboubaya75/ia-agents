@@ -37,3 +37,15 @@ output "cognito_user_pool_arn" {
 output "cognito_web_client_id" {
   value = module.cognito_web_auth.client_id
 }
+
+output "agentcore_ecr_repository_name" {
+  value = module.agentcore_container_repository.repository_name
+}
+
+output "agentcore_ecr_repository_url" {
+  value = module.agentcore_container_repository.repository_url
+}
+
+output "agentcore_ecr_repository_arn" {
+  value = module.agentcore_container_repository.repository_arn
+}
