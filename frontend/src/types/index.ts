@@ -38,6 +38,7 @@ export interface AuthResult {
 
 export interface AuthService {
   login(username: string, password: string): Promise<AuthResult>;
+  completeNewPassword(newPassword: string): Promise<AuthResult>;
   logout(): Promise<void>;
   getCurrentUser(): Promise<User>;
   getJwtToken(): Promise<string>;
