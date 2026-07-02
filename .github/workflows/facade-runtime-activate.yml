@@ -1,0 +1,117 @@
+name: Facade Runtime Activate
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_path:
+        description: "Terraform stack path"
+        required: true
+        type: choice
+        options:
+          - infra/environments/test
+        default: infra/environments/test
+      agent_runtime_arn:
+        description: "AgentCore Runtime ARN returned by the Runtime deploy workflow"
+        required: true
+        type: string
+      endpoint_name:
+        description: "AgentCore Runtime endpoint name"
+        required: true
+        type: string
+        default: default
+      confirm_activate:
+        description: "Required to update the Lambda Facade to invoke Runtime"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: facade-runtime-activate-${{ github.ref }}-${{ inputs.stack_path || 'infra-environments-test' }}
+  cancel-in-progress: false
+
+env:
+  DEFAULT_STACK_PATH: infra/environments/test
+  TF_VERSION: "1.9.0"
+  AWS_REGION: eu-west-3
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  facade-runtime-activate:
+    name: Facade Runtime Activate
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Confirm activation
+        run: |
+          if [ "${{ inputs.confirm_activate }}" != "true" ]; then
+            echo "Facade Runtime activation requires confirm_activate=true."
+            exit 1
+          fi
+
+      - name: Validate runtime ARN
+        run: |
+          if ! echo "${{ inputs.agent_runtime_arn }}" | grep -Eq '^arn:aws[a-zA-Z-]*:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:.+'; then
+            echo "Invalid AgentCore Runtime ARN."
+            exit 1
+          fi
+
+      - name: Validate endpoint name
+        run: |
+          if ! echo "${{ inputs.endpoint_name }}" | grep -Eq '^[A-Za-z0-9_.-]{1,64}$'; then
+            echo "Invalid endpoint_name. Use only letters, numbers, underscore, dot, and dash."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: facade-runtime-activate
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform init -lockfile=readonly
+
+      - name: Terraform plan activation
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          terraform plan \
+            -lock-timeout=60s \
+            -var="agent_runtime_ready=true" \
+            -var="agent_runtime_arn=${{ inputs.agent_runtime_arn }}" \
+            -var="agent_runtime_endpoint_name=${{ inputs.endpoint_name }}" \
+            -out=tfplan
+
+      - name: Terraform apply activation
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform apply -auto-approve -lock-timeout=120s tfplan
+
+      - name: Activation summary
+        run: |
+          echo "Lambda Facade now targets AgentCore Runtime."
+          echo "Runtime ARN: ${{ inputs.agent_runtime_arn }}"
+          echo "Endpoint: ${{ inputs.endpoint_name }}"
