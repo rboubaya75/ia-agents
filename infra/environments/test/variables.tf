@@ -43,3 +43,21 @@ variable "agentcore_model_id" {
   description = "Default Bedrock model identifier for the AgentCore runtime."
   default     = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 }
+
+variable "agent_runtime_ready" {
+  type        = bool
+  description = "Enable Lambda Facade invocation of the AgentCore Runtime. Keep false until runtime ARN is known."
+  default     = false
+}
+
+variable "agent_runtime_arn" {
+  type        = string
+  description = "AgentCore Runtime ARN injected into the Lambda Facade after Runtime deployment."
+  default     = ""
+}
+
+variable "agent_runtime_endpoint_name" {
+  type        = string
+  description = "AgentCore Runtime endpoint name used by the Lambda Facade."
+  default     = "default"
+}
