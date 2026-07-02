@@ -1,0 +1,146 @@
+name: AgentCore Image Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_path:
+        description: "Terraform stack path used to read ECR outputs"
+        required: true
+        type: choice
+        options:
+          - infra/environments/test
+        default: infra/environments/test
+      image_tag:
+        description: "Image tag to push to ECR"
+        required: true
+        type: string
+        default: test
+      confirm_push:
+        description: "Required to build and push the AgentCore image to ECR"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentcore-image-build-${{ github.ref }}-${{ inputs.stack_path || 'infra-environments-test' }}
+  cancel-in-progress: false
+
+env:
+  DEFAULT_STACK_PATH: infra/environments/test
+  TF_VERSION: "1.9.0"
+  AWS_REGION: eu-west-3
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  DOCKERFILE_PATH: deploy-agentcore/Dockerfile
+  DOCKER_CONTEXT: deploy-agentcore
+  IMAGE_PLATFORM: linux/amd64
+
+jobs:
+  agentcore-image-build:
+    name: AgentCore Image Build
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Confirm image push
+        run: |
+          if [ "${{ inputs.confirm_push }}" != "true" ]; then
+            echo "AgentCore image build requires confirm_push=true."
+            exit 1
+          fi
+
+      - name: Validate image tag
+        run: |
+          if ! echo "${{ inputs.image_tag }}" | grep -Eq '^[A-Za-z0-9_.-]{1,128}$'; then
+            echo "Invalid image_tag. Use only letters, numbers, underscore, dot, and dash."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: agentcore-image-build
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Require Terraform provider lockfile
+        run: |
+          lockfile="${{ steps.stack.outputs.path }}/.terraform.lock.hcl"
+          if [ ! -f "$lockfile" ]; then
+            echo "Missing Terraform lockfile: $lockfile"
+            exit 1
+          fi
+
+      - name: Terraform init
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform init -lockfile=readonly
+
+      - name: Read ECR outputs
+        id: ecr
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          repository_url="$(terraform output -raw agentcore_ecr_repository_url)"
+          account_id="$(terraform output -raw aws_account_id)"
+
+          if [ -z "$repository_url" ] || [ -z "$account_id" ]; then
+            echo "Required ECR Terraform outputs are missing. Run the Terraform test stack apply first."
+            exit 1
+          fi
+
+          registry="${repository_url%%/*}"
+          sha_tag="${GITHUB_SHA::12}"
+
+          echo "repository_url=$repository_url" >> "$GITHUB_OUTPUT"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.ecr.outputs.registry }}"
+
+      - name: Create Docker buildx builder
+        run: |
+          docker buildx create --name agentcore-builder --use || docker buildx use agentcore-builder
+          docker buildx inspect --bootstrap
+
+      - name: Build and push AgentCore image
+        run: |
+          docker buildx build \
+            --platform "${{ env.IMAGE_PLATFORM }}" \
+            --file "${{ env.DOCKERFILE_PATH }}" \
+            --tag "${{ steps.ecr.outputs.repository_url }}:${{ inputs.image_tag }}" \
+            --tag "${{ steps.ecr.outputs.repository_url }}:${{ steps.ecr.outputs.sha_tag }}" \
+            --provenance=false \
+            --push \
+            "${{ env.DOCKER_CONTEXT }}"
+
+      - name: Image summary
+        run: |
+          echo "AgentCore image pushed."
+          echo "Repository: ${{ steps.ecr.outputs.repository_url }}"
+          echo "Tag: ${{ inputs.image_tag }}"
+          echo "Commit tag: ${{ steps.ecr.outputs.sha_tag }}"
+          echo "Platform: ${{ env.IMAGE_PLATFORM }}"
