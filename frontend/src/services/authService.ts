@@ -1,8 +1,3 @@
-/**
- * Authentication Service
- * Handles AWS Cognito authentication operations
- */
-
 import {
   CognitoUserPool,
   CognitoUser,
@@ -13,98 +8,134 @@ import {
 import type { AuthResult, User } from '../types';
 import { extractUserId } from '../utils/jwtDecoder';
 
-// Cognito User Pool configuration
 const userPool = new CognitoUserPool({
   UserPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID || '',
   ClientId: import.meta.env.VITE_COGNITO_CLIENT_ID || '',
 });
 
-// Store current user in memory
 let currentCognitoUser: CognitoUser | null = null;
+let pendingNewPasswordUser: CognitoUser | null = null;
 
-/**
- * Authenticates a user with AWS Cognito
- * @param username - The username
- * @param password - The password
- * @returns AuthResult containing user information, user ID, and JWT token
- * @throws Error if authentication fails
- */
+export class NewPasswordRequiredError extends Error {
+  username: string;
+
+  constructor(username: string) {
+    super('NEW_PASSWORD_REQUIRED');
+    this.name = 'NewPasswordRequiredError';
+    this.username = username;
+  }
+}
+
+const buildAuthResult = async (
+  cognitoUser: CognitoUser,
+  session: CognitoUserSession,
+  username: string
+): Promise<AuthResult> => {
+  currentCognitoUser = cognitoUser;
+
+  const jwtToken = session.getAccessToken().getJwtToken();
+  const idToken = session.getIdToken().getJwtToken();
+  const userId = extractUserId(idToken);
+
+  return new Promise((resolve) => {
+    cognitoUser.getUserAttributes((err, attributes) => {
+      if (err) {
+        resolve({
+          user: {
+            id: userId,
+            username,
+          },
+          userId,
+          jwtToken,
+        });
+        return;
+      }
+
+      const emailAttr = attributes?.find((attr) => attr.Name === 'email');
+      const email = emailAttr?.Value;
+
+      const user: User = {
+        id: userId,
+        username,
+        email,
+      };
+
+      resolve({
+        user,
+        userId,
+        jwtToken,
+      });
+    });
+  });
+};
+
 export const login = async (
   username: string,
   password: string
 ): Promise<AuthResult> => {
   return new Promise((resolve, reject) => {
+    const cleanUsername = username.trim();
+
     const authenticationDetails = new AuthenticationDetails({
-      Username: username,
+      Username: cleanUsername,
       Password: password,
     });
 
     const cognitoUser = new CognitoUser({
-      Username: username,
+      Username: cleanUsername,
       Pool: userPool,
     });
 
     cognitoUser.authenticateUser(authenticationDetails, {
-      onSuccess: (session: CognitoUserSession) => {
-        // Store user in memory
-        currentCognitoUser = cognitoUser;
-
-        // Extract JWT token - use ACCESS token for AgentCore (has client_id claim)
-        const jwtToken = session.getAccessToken().getJwtToken();
-
-        // Extract user ID from ID token (has sub claim)
-        const idToken = session.getIdToken().getJwtToken();
-        const userId = extractUserId(idToken);
-
-        // Get user attributes
-        cognitoUser.getUserAttributes((err, attributes) => {
-          if (err) {
-            // If we can't get attributes, still return basic user info
-            const user: User = {
-              id: userId,
-              username: username,
-            };
-
-            resolve({
-              user,
-              userId,
-              jwtToken,
-            });
-            return;
-          }
-
-          // Extract email from attributes if available
-          const emailAttr = attributes?.find(attr => attr.Name === 'email');
-          const email = emailAttr?.Value;
-
-          const user: User = {
-            id: userId,
-            username: username,
-            email: email,
-          };
-
-          resolve({
-            user,
-            userId,
-            jwtToken,
-          });
-        });
+      onSuccess: async (session: CognitoUserSession) => {
+        pendingNewPasswordUser = null;
+        const result = await buildAuthResult(cognitoUser, session, cleanUsername);
+        resolve(result);
       },
+
       onFailure: (err) => {
+        pendingNewPasswordUser = null;
         reject(new Error(`Authentication failed: ${err.message || 'Unknown error'}`));
+      },
+
+      newPasswordRequired: () => {
+        pendingNewPasswordUser = cognitoUser;
+        reject(new NewPasswordRequiredError(cleanUsername));
       },
     });
   });
 };
 
-/**
- * Registers a new user with AWS Cognito
- * @param username - The username
- * @param password - The password
- * @param email - The email address
- * @returns Success message and username
- * @throws Error if registration fails
- */
+export const completeNewPassword = async (
+  newPassword: string
+): Promise<AuthResult> => {
+  return new Promise((resolve, reject) => {
+    if (!pendingNewPasswordUser) {
+      reject(new Error('No password change challenge is pending'));
+      return;
+    }
+
+    const cognitoUser = pendingNewPasswordUser;
+    const username = cognitoUser.getUsername();
+
+    cognitoUser.completeNewPasswordChallenge(
+      newPassword,
+      {},
+      {
+        onSuccess: async (session: CognitoUserSession) => {
+          pendingNewPasswordUser = null;
+          const result = await buildAuthResult(cognitoUser, session, username);
+          resolve(result);
+        },
+
+        onFailure: (err) => {
+          reject(new Error(`Password change failed: ${err.message || 'Unknown error'}`));
+        },
+      }
+    );
+  });
+};
+
 export const signup = async (
   username: string,
   password: string,
@@ -135,8 +166,8 @@ export const signup = async (
         }
 
         resolve({
-          message: result.userConfirmed 
-            ? 'Registration successful! You can now log in.' 
+          message: result.userConfirmed
+            ? 'Registration successful! You can now log in.'
             : 'Registration successful! Please check your email for a verification code.',
           username: result.user.getUsername(),
           userConfirmed: result.userConfirmed,
@@ -146,13 +177,6 @@ export const signup = async (
   });
 };
 
-/**
- * Confirms user registration with verification code
- * @param username - The username
- * @param code - The verification code from email
- * @returns Success message
- * @throws Error if confirmation fails
- */
 export const confirmSignup = async (
   username: string,
   code: string
@@ -176,12 +200,6 @@ export const confirmSignup = async (
   });
 };
 
-/**
- * Resends the verification code to the user's email
- * @param username - The username
- * @returns Success message
- * @throws Error if resend fails
- */
 export const resendConfirmationCode = async (
   username: string
 ): Promise<{ message: string }> => {
@@ -204,28 +222,19 @@ export const resendConfirmationCode = async (
   });
 };
 
-/**
- * Logs out the current user
- * Clears the session and signs out from Cognito
- */
 export const logout = async (): Promise<void> => {
   return new Promise((resolve) => {
     if (currentCognitoUser) {
       currentCognitoUser.signOut();
     }
-    
-    // Clear stored user
+
     currentCognitoUser = null;
-    
+    pendingNewPasswordUser = null;
+
     resolve();
   });
 };
 
-/**
- * Gets the current authenticated user
- * @returns The current user information
- * @throws Error if no user is authenticated
- */
 export const getCurrentUser = async (): Promise<User> => {
   return new Promise((resolve, reject) => {
     const cognitoUser = userPool.getCurrentUser();
@@ -241,17 +250,13 @@ export const getCurrentUser = async (): Promise<User> => {
         return;
       }
 
-      // Store user in memory
       currentCognitoUser = cognitoUser;
-      
-      // Extract user ID from ID token (has sub claim)
+
       const idToken = session.getIdToken().getJwtToken();
       const userId = extractUserId(idToken);
 
-      // Get user attributes
       cognitoUser.getUserAttributes((attrErr, attributes) => {
         if (attrErr) {
-          // Return basic user info if attributes can't be retrieved
           resolve({
             id: userId,
             username: cognitoUser.getUsername(),
@@ -259,24 +264,19 @@ export const getCurrentUser = async (): Promise<User> => {
           return;
         }
 
-        const emailAttr = attributes?.find(attr => attr.Name === 'email');
+        const emailAttr = attributes?.find((attr) => attr.Name === 'email');
         const email = emailAttr?.Value;
 
         resolve({
           id: userId,
           username: cognitoUser.getUsername(),
-          email: email,
+          email,
         });
       });
     });
   });
 };
 
-/**
- * Gets the JWT token for the current authenticated user
- * @returns The JWT ID token
- * @throws Error if no user is authenticated or session is invalid
- */
 export const getJwtToken = async (): Promise<string> => {
   return new Promise((resolve, reject) => {
     const cognitoUser = userPool.getCurrentUser();
@@ -292,26 +292,24 @@ export const getJwtToken = async (): Promise<string> => {
         return;
       }
 
-      // Store user in memory
       currentCognitoUser = cognitoUser;
 
-      // Return ACCESS token for AgentCore (has client_id claim)
       const jwtToken = session.getAccessToken().getJwtToken();
       resolve(jwtToken);
     });
   });
 };
 
-// Export as default object matching AuthService interface
 const authService = {
   login,
+  completeNewPassword,
   signup,
   confirmSignup,
   resendConfirmationCode,
   logout,
   getCurrentUser,
   getJwtToken,
-  extractUserId, // Re-export from jwtDecoder for convenience
+  extractUserId,
 };
 
 export default authService;
