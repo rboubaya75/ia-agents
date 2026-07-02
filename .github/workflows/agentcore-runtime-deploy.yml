@@ -1,0 +1,149 @@
+name: AgentCore Runtime Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_path:
+        description: "Terraform stack path used to read Runtime outputs"
+        required: true
+        type: choice
+        options:
+          - infra/environments/test
+        default: infra/environments/test
+      image_tag:
+        description: "ECR image tag to deploy"
+        required: true
+        type: string
+        default: test
+      endpoint_name:
+        description: "AgentCore Runtime endpoint name"
+        required: true
+        type: string
+        default: default
+      confirm_deploy:
+        description: "Required to create or update the AgentCore Runtime"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentcore-runtime-deploy-${{ github.ref }}-${{ inputs.stack_path || 'infra-environments-test' }}
+  cancel-in-progress: false
+
+env:
+  DEFAULT_STACK_PATH: infra/environments/test
+  TF_VERSION: "1.9.0"
+  AWS_REGION: eu-west-3
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  agentcore-runtime-deploy:
+    name: AgentCore Runtime Deploy
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Confirm Runtime deployment
+        run: |
+          if [ "${{ inputs.confirm_deploy }}" != "true" ]; then
+            echo "AgentCore Runtime deployment requires confirm_deploy=true."
+            exit 1
+          fi
+
+      - name: Validate image tag
+        run: |
+          if ! echo "${{ inputs.image_tag }}" | grep -Eq '^[A-Za-z0-9_.-]{1,128}$'; then
+            echo "Invalid image_tag. Use only letters, numbers, underscore, dot, and dash."
+            exit 1
+          fi
+
+      - name: Validate endpoint name
+        run: |
+          if ! echo "${{ inputs.endpoint_name }}" | grep -Eq '^[A-Za-z0-9_.-]{1,64}$'; then
+            echo "Invalid endpoint_name. Use only letters, numbers, underscore, dot, and dash."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: agentcore-runtime-deploy
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Python
+        uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python -m pip install "boto3>=1.43.18"
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform init -lockfile=readonly
+
+      - name: Read deployment outputs
+        id: deploy_config
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          repository_url="$(terraform output -raw agentcore_ecr_repository_url)"
+          service_name="$(terraform output -raw agent_service_name)"
+          service_role_arn="$(terraform output -raw agent_service_role_arn)"
+          model_id="$(terraform output -raw agent_service_model_id)"
+
+          if [ -z "$repository_url" ] || [ -z "$service_name" ] || [ -z "$service_role_arn" ] || [ -z "$model_id" ]; then
+            echo "Required Terraform outputs are missing. Run the Terraform test stack apply first."
+            exit 1
+          fi
+
+          image_uri="${repository_url}:${{ inputs.image_tag }}"
+          echo "repository_url=$repository_url" >> "$GITHUB_OUTPUT"
+          echo "service_name=$service_name" >> "$GITHUB_OUTPUT"
+          echo "service_role_arn=$service_role_arn" >> "$GITHUB_OUTPUT"
+          echo "model_id=$model_id" >> "$GITHUB_OUTPUT"
+          echo "image_uri=$image_uri" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Runtime
+        id: runtime
+        run: |
+          python scripts/deploy_agent_runtime.py \
+            --name "${{ steps.deploy_config.outputs.service_name }}" \
+            --image-uri "${{ steps.deploy_config.outputs.image_uri }}" \
+            --role-arn "${{ steps.deploy_config.outputs.service_role_arn }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --model-id "${{ steps.deploy_config.outputs.model_id }}" \
+            --endpoint-name "${{ inputs.endpoint_name }}"
+
+      - name: Deployment summary
+        run: |
+          echo "AgentCore Runtime deployment completed."
+          echo "Runtime ID: ${{ steps.runtime.outputs.runtime_id }}"
+          echo "Runtime ARN: ${{ steps.runtime.outputs.runtime_arn }}"
+          echo "Runtime Version: ${{ steps.runtime.outputs.runtime_version }}"
+          echo "Endpoint ARN: ${{ steps.runtime.outputs.endpoint_arn }}"
+          echo "Endpoint Name: ${{ steps.runtime.outputs.endpoint_name }}"
+          echo "Image URI: ${{ steps.deploy_config.outputs.image_uri }}"
