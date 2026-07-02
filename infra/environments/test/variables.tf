@@ -20,3 +20,14 @@ variable "enable_rag" {
   description = "Enable the future RAG Knowledge Layer."
   default     = false
 }
+
+variable "cognito_invited_users" {
+  type = map(object({
+    email       = string
+    enabled     = optional(bool, true)
+    given_name  = optional(string)
+    family_name = optional(string)
+  }))
+  description = "Invitation-only Cognito users for the test environment. Leave empty unless explicitly onboarding approved users."
+  default     = {}
+}
