@@ -28,6 +28,16 @@ variable "allowed_origins" {
   }
 }
 
+variable "facade_lambda_invoke_arn" {
+  type        = string
+  description = "Invoke ARN of the Lambda Facade integrated behind POST /agent/invoke."
+}
+
+variable "facade_lambda_function_name" {
+  type        = string
+  description = "Lambda Facade function name used for API Gateway invoke permission."
+}
+
 variable "tags" {
   type        = map(string)
   description = "Common resource tags."
