@@ -61,7 +61,7 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   DOCKERFILE_PATH: deploy-agentcore/Dockerfile
-  DOCKER_CONTEXT: deploy-agentcore
+  DOCKER_BUILD_CONTEXT: deploy-agentcore
   IMAGE_PLATFORM: linux/amd64
 
 jobs:
@@ -225,7 +225,7 @@ jobs:
             --tag "${{ steps.tfout.outputs.ecr_repository_url }}:${{ steps.tfout.outputs.sha_tag }}" \
             --provenance=false \
             --push \
-            "${{ env.DOCKER_CONTEXT }}"
+            "${{ env.DOCKER_BUILD_CONTEXT }}"
 
       - name: Deploy or update AgentCore Runtime
         id: runtime
