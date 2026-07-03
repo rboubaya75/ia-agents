@@ -130,7 +130,7 @@ jobs:
 
       - name: Terraform init without backend
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -backend=false -lockfile=readonly
+        run: terraform init -backend=false
 
       - name: Terraform validate
         working-directory: ${{ steps.stack.outputs.path }}
@@ -171,7 +171,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -lockfile=readonly
+        run: terraform init
 
       - name: Terraform plan
         id: plan
@@ -233,7 +233,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -lockfile=readonly
+        run: terraform init
 
       - name: Terraform apply
         working-directory: ${{ steps.stack.outputs.path }}
@@ -286,7 +286,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -lockfile=readonly
+        run: terraform init
 
       - name: Terraform destroy plan
         id: destroy_plan
@@ -349,7 +349,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -lockfile=readonly
+        run: terraform init
 
       - name: Terraform apply destroy plan
         working-directory: ${{ steps.stack.outputs.path }}
