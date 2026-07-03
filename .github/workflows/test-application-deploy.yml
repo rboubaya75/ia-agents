@@ -140,7 +140,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init -lockfile=readonly
+        run: terraform init
 
       - name: Read Terraform outputs
         id: tfout
