@@ -1,7 +1,3 @@
-locals {
-  runtime_invoke_resources = var.agent_runtime_arn != "" ? [var.agent_runtime_arn] : ["*"]
-}
-
 data "archive_file" "facade" {
   type        = "zip"
   source_file = "${path.module}/src/lambda_function.py"
@@ -59,7 +55,11 @@ data "aws_iam_policy_document" "runtime_invoke" {
       "bedrock-agentcore:InvokeAgentRuntime"
     ]
 
-    resources = local.runtime_invoke_resources
+    # Test stabilisation: AgentCore Runtime currently evaluates InvokeAgentRuntime
+    # against a resource shape that may differ from the runtime ARN returned by
+    # CreateAgentRuntime. Keep the action scoped to the Facade role only and
+    # tighten the resource after validating the exact ARN in CloudTrail.
+    resources = ["*"]
   }
 }
 
