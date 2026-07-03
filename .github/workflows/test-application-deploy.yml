@@ -21,7 +21,7 @@ on:
           - full
         default: full
       image_tag:
-        description: "ECR image tag to build or deploy"
+        description: "ECR image tag to build or deploy. Use test for an auto-generated immutable test tag."
         required: true
         type: string
         default: test
@@ -186,8 +186,14 @@ jobs:
           fi
 
           ecr_registry="${ecr_repository_url%%/*}"
-          image_uri="${ecr_repository_url}:${{ inputs.image_tag }}"
-          sha_tag="${GITHUB_SHA::12}"
+          requested_image_tag="${{ inputs.image_tag }}"
+          if [ "$requested_image_tag" = "test" ]; then
+            resolved_image_tag="test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          else
+            resolved_image_tag="$requested_image_tag"
+          fi
+          sha_tag="sha-${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          image_uri="${ecr_repository_url}:${resolved_image_tag}"
 
           echo "frontend_bucket_name=$frontend_bucket_name" >> "$GITHUB_OUTPUT"
           echo "cloudfront_distribution_id=$cloudfront_distribution_id" >> "$GITHUB_OUTPUT"
@@ -197,6 +203,8 @@ jobs:
           echo "resolved_api_base_url=$resolved_api_base_url" >> "$GITHUB_OUTPUT"
           echo "ecr_repository_url=$ecr_repository_url" >> "$GITHUB_OUTPUT"
           echo "ecr_registry=$ecr_registry" >> "$GITHUB_OUTPUT"
+          echo "requested_image_tag=$requested_image_tag" >> "$GITHUB_OUTPUT"
+          echo "resolved_image_tag=$resolved_image_tag" >> "$GITHUB_OUTPUT"
           echo "image_uri=$image_uri" >> "$GITHUB_OUTPUT"
           echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
           echo "agent_service_name=$agent_service_name" >> "$GITHUB_OUTPUT"
@@ -221,7 +229,7 @@ jobs:
           docker buildx build \
             --platform "${{ env.IMAGE_PLATFORM }}" \
             --file "${{ env.DOCKERFILE_PATH }}" \
-            --tag "${{ steps.tfout.outputs.ecr_repository_url }}:${{ inputs.image_tag }}" \
+            --tag "${{ steps.tfout.outputs.ecr_repository_url }}:${{ steps.tfout.outputs.resolved_image_tag }}" \
             --tag "${{ steps.tfout.outputs.ecr_repository_url }}:${{ steps.tfout.outputs.sha_tag }}" \
             --provenance=false \
             --push \
@@ -291,6 +299,8 @@ jobs:
         run: |
           echo "Application deployment completed."
           echo "Mode: ${{ inputs.deploy_mode }}"
+          echo "Requested image tag: ${{ steps.tfout.outputs.requested_image_tag }}"
+          echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
           echo "Image: ${{ steps.tfout.outputs.image_uri }}"
           echo "API Base URL: ${{ steps.tfout.outputs.resolved_api_base_url }}"
           echo "CloudFront: https://${{ steps.tfout.outputs.cloudfront_domain_name }}"
