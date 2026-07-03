@@ -122,8 +122,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Python dependencies
-        if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+      - name: Install Python deployment dependencies
+        if: inputs.deploy_mode != 'frontend-only'
         run: python3 -m pip install "boto3>=1.43.18"
 
       - name: Resolve stack path
@@ -210,6 +210,25 @@ jobs:
           echo "agent_service_name=$agent_service_name" >> "$GITHUB_OUTPUT"
           echo "agent_service_role_arn=$agent_service_role_arn" >> "$GITHUB_OUTPUT"
           echo "agent_service_model_id=$agent_service_model_id" >> "$GITHUB_OUTPUT"
+
+      - name: Application deployment preflight
+        run: |
+          python3 scripts/preflight_application_deploy.py \
+            --mode "${{ inputs.deploy_mode }}" \
+            --requested-image-tag "${{ steps.tfout.outputs.requested_image_tag }}" \
+            --resolved-image-tag "${{ steps.tfout.outputs.resolved_image_tag }}" \
+            --image-platform "${{ env.IMAGE_PLATFORM }}" \
+            --ecr-repository-url "${{ steps.tfout.outputs.ecr_repository_url }}" \
+            --runtime-name "${{ steps.tfout.outputs.agent_service_name }}" \
+            --runtime-role-arn "${{ steps.tfout.outputs.agent_service_role_arn }}" \
+            --model-id "${{ steps.tfout.outputs.agent_service_model_id }}" \
+            --endpoint-name "${{ inputs.endpoint_name }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --api-base-url "${{ steps.tfout.outputs.resolved_api_base_url }}" \
+            --frontend-bucket-name "${{ steps.tfout.outputs.frontend_bucket_name }}" \
+            --cloudfront-distribution-id "${{ steps.tfout.outputs.cloudfront_distribution_id }}" \
+            --cognito-user-pool-id "${{ steps.tfout.outputs.cognito_user_pool_id }}" \
+            --cognito-web-client-id "${{ steps.tfout.outputs.cognito_web_client_id }}"
 
       - name: Login to ECR
         if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
