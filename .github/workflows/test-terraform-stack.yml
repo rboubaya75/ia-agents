@@ -191,6 +191,15 @@ jobs:
           path: ${{ steps.stack.outputs.path }}/tfplan
           retention-days: 1
 
+      - name: Upload facade lambda package
+        if: steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: facade-lambda-package-${{ github.run_id }}
+          path: infra/modules/agent_api_facade/lambda_facade.zip
+          retention-days: 1
+          if-no-files-found: error
+
   terraform-apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
@@ -230,6 +239,12 @@ jobs:
         with:
           name: tfplan-${{ github.run_id }}
           path: ${{ steps.stack.outputs.path }}
+
+      - name: Download facade lambda package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: facade-lambda-package-${{ github.run_id }}
+          path: infra/modules/agent_api_facade
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
@@ -306,6 +321,15 @@ jobs:
           path: ${{ steps.stack.outputs.path }}/tfdestroyplan
           retention-days: 1
 
+      - name: Upload facade lambda package for destroy
+        if: steps.destroy_plan.outputs.exitcode == '0' || steps.destroy_plan.outputs.exitcode == '2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: facade-lambda-package-destroy-${{ github.run_id }}
+          path: infra/modules/agent_api_facade/lambda_facade.zip
+          retention-days: 1
+          if-no-files-found: ignore
+
   terraform-destroy:
     name: Terraform Destroy
     runs-on: ubuntu-latest
@@ -346,6 +370,13 @@ jobs:
         with:
           name: tfdestroyplan-${{ github.run_id }}
           path: ${{ steps.stack.outputs.path }}
+
+      - name: Download facade lambda package for destroy
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: facade-lambda-package-destroy-${{ github.run_id }}
+          path: infra/modules/agent_api_facade
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
