@@ -62,7 +62,7 @@ env:
   TF_INPUT: "false"
   DOCKERFILE_PATH: deploy-agentcore/Dockerfile
   DOCKER_BUILD_CONTEXT: deploy-agentcore
-  IMAGE_PLATFORM: linux/amd64
+  IMAGE_PLATFORM: linux/arm64
 
 jobs:
   test-application-deploy:
@@ -302,6 +302,7 @@ jobs:
           echo "Requested image tag: ${{ steps.tfout.outputs.requested_image_tag }}"
           echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
           echo "Image: ${{ steps.tfout.outputs.image_uri }}"
+          echo "Platform: ${{ env.IMAGE_PLATFORM }}"
           echo "API Base URL: ${{ steps.tfout.outputs.resolved_api_base_url }}"
           echo "CloudFront: https://${{ steps.tfout.outputs.cloudfront_domain_name }}"
           if [ "${{ inputs.deploy_mode }}" = "runtime-only" ] || [ "${{ inputs.deploy_mode }}" = "full" ]; then
