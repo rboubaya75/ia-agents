@@ -84,6 +84,7 @@ def request_payload(options: argparse.Namespace) -> Dict[str, Any]:
             "MEMORY_ID": "",
             "GATEWAY_URL": "",
             "CLIENT_ID": "",
+            "CLIENT_SECRET": "",
             "TOKEN_URL": "",
             "SCOPE_STRING": "",
             "GUARDRAILS_ID": "",
