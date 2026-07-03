@@ -17,7 +17,3 @@ output "role_arn" {
 output "log_group_name" {
   value = aws_cloudwatch_log_group.this.name
 }
-
-output "code_bucket_name" {
-  value = aws_s3_bucket.code.bucket
-}
