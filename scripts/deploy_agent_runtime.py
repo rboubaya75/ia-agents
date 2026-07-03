@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, Optional
@@ -13,6 +14,7 @@ from botocore.exceptions import ClientError
 
 READY = "READY"
 FAILED = {"CREATE_FAILED", "UPDATE_FAILED", "DELETING"}
+RUNTIME_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
 
 
 def args() -> argparse.Namespace:
@@ -25,6 +27,17 @@ def args() -> argparse.Namespace:
     parser.add_argument("--endpoint-name", default="default")
     parser.add_argument("--wait-seconds", type=int, default=900)
     return parser.parse_args()
+
+
+def agentcore_runtime_name(raw_name: str) -> str:
+    name = re.sub(r"[^a-zA-Z0-9_]", "_", raw_name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    if not name or not name[0].isalpha():
+        name = f"A_{name}"
+    name = name[:48]
+    if not RUNTIME_NAME_PATTERN.match(name):
+        raise ValueError(f"Invalid AgentCore runtime name after normalization: {name}")
+    return name
 
 
 def find_runtime(client: Any, name: str) -> Optional[Dict[str, Any]]:
@@ -82,15 +95,19 @@ def request_payload(options: argparse.Namespace) -> Dict[str, Any]:
 
 def deploy_runtime(client: Any, options: argparse.Namespace) -> Dict[str, Any]:
     payload = request_payload(options)
-    existing = find_runtime(client, options.name)
+    runtime_name = agentcore_runtime_name(options.name)
+    if runtime_name != options.name:
+        print(f"Normalized runtime name: {options.name} -> {runtime_name}")
+
+    existing = find_runtime(client, runtime_name)
     if existing:
         runtime_id = existing["agentRuntimeId"]
-        print(f"Updating runtime {options.name} ({runtime_id})")
+        print(f"Updating runtime {runtime_name} ({runtime_id})")
         client.update_agent_runtime(agentRuntimeId=runtime_id, **payload)
     else:
-        print(f"Creating runtime {options.name}")
+        print(f"Creating runtime {runtime_name}")
         response = client.create_agent_runtime(
-            agentRuntimeName=options.name,
+            agentRuntimeName=runtime_name,
             tags={"Project": "wildrydes", "Environment": "test", "ManagedBy": "GitHubActions"},
             **payload,
         )
@@ -155,7 +172,7 @@ def main() -> int:
     try:
         runtime = deploy_runtime(client, options)
         endpoint = ensure_endpoint(client, runtime, options)
-    except (ClientError, RuntimeError, TimeoutError) as error:
+    except (ClientError, RuntimeError, TimeoutError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 1
 
