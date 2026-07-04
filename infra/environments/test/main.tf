@@ -7,7 +7,7 @@ module "frontend_static_site" {
   bucket_name   = "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}-${var.region}"
   price_class   = "PriceClass_100"
   common_tags   = local.common_tags
-  force_destroy = false
+  force_destroy = true
 }
 
 module "dynamodb_trips" {
