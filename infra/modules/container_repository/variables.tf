@@ -20,6 +20,12 @@ variable "scan_on_push" {
   default     = true
 }
 
+variable "force_delete" {
+  type        = bool
+  description = "Delete the ECR repository even if it still contains images. Use true only for ephemeral environments."
+  default     = false
+}
+
 variable "common_tags" {
   type        = map(string)
   description = "Common resource tags."
