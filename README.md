@@ -53,8 +53,6 @@ User Browser
   -> React / TypeScript / Vite static assets
 ```
 
-CloudFront est l’intermédiaire entre l’utilisateur et le bucket S3 privé. Le bucket S3 ne doit pas être public. L’accès au bucket doit passer par CloudFront via Origin Access Control.
-
 ### 2.2 Ingress utilisateur vers l’agent
 
 ```text
@@ -129,8 +127,6 @@ Le contrat exact **API Gateway -> AgentCore Gateway -> Runtime** doit être vali
 | `docs/adr/ADR-0002-agentcore-gateway-first-with-api-gateway.md` | Décision d’architecture : conserver API Gateway et retirer la Lambda Facade du nominal |
 | `docs/migration/REMEDIATION-Gateway-First-APIGW.md` | Plan de remédiation repo/code/pipelines |
 | `docs/specifications/module-specifications-fr.md` | Spécifications modules à réaligner avec ADR-0002 |
-| `docs/runbooks/` | Procédures opérationnelles |
-| `docs/legacy/` | Notes sur les éléments hérités du workshop |
 
 ---
 
@@ -153,50 +149,7 @@ L’ancien mécanisme `activate_facade` est à considérer comme legacy/fallback
 
 ---
 
-## 7. Étapes de travail recommandées
-
-### Étape 1 — Préparation locale
-
-```bash
-git clone https://github.com/rboubaya75/ia-agents.git
-cd ia-agents
-git checkout migration/secure-agentcore-v1
-git pull
-```
-
-### Étape 2 — Validation Terraform locale
-
-```bash
-cd infra/environments/test
-terraform fmt -check -recursive
-terraform init -backend=false -lockfile=readonly
-terraform validate
-```
-
-### Étape 3 — Pipeline Terraform test
-
-Depuis GitHub Actions :
-
-```text
-Actions -> Test Terraform Stack -> Run workflow -> action=plan
-Actions -> Test Terraform Stack -> Run workflow -> action=apply
-```
-
-### Étape 4 — Déploiement applicatif test
-
-Pour un déploiement complet corrigé :
-
-```text
-Actions -> Test Application Deploy -> Run workflow
-mode = full
-image_tag = test
-endpoint_name = default
-confirm_deploy = true
-```
-
----
-
-## 8. Points P0 avant codage massif
+## 7. Points P0 avant codage massif
 
 Avant de poursuivre l’implémentation Terraform et pipeline, valider explicitement :
 
