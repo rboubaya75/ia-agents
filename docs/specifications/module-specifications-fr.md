@@ -78,4 +78,5 @@ La prochaine révision complète de ce fichier doit :
 4. décrire les outputs `gateway_url`, `runtime_target_id`, `mcp_target_ids` ;
 5. aligner les tests sur `API Gateway -> Gateway -> Runtime` et `Runtime -> Gateway -> tools` ;
 6. conserver `VITE_API_BASE_URL` pointant vers Amazon API Gateway ;
-7. documenter la Lambda Facade uniquement comme fallback ADR-driven.
+7. documenter la Lambda Facade uniquement comme fallback ADR-driven ;
+8. mettre à jour le workflow applicatif pour remplacer l’activation façade par l’activation Gateway/targets.
