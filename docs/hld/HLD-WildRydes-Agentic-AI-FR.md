@@ -1,6 +1,6 @@
 # HLD — WildRydes Agentic AI Application Landing Zone
 
-**Version :** 1.1 complète  
+**Version :** 2.0 — Gateway-first avec Amazon API Gateway conservé  
 **Langue :** Français  
 **Branche de test :** `migration/secure-agentcore-v1`  
 **Branche future prod :** `main`  
@@ -16,55 +16,74 @@
 
 WildRydes est une application IA agentique destinée à démontrer puis industrialiser un parcours agentique sécurisé sur AWS.
 
-La cible V1 n’est pas une mise en production. Elle constitue un environnement `test` production-like permettant de valider :
+Cette version corrige l’ambiguïté de la proposition Gateway-first : **Gateway-first ne signifie pas suppression d’Amazon API Gateway**.
 
-- l’architecture applicative ;
-- le delivery sécurisé du frontend via CloudFront et S3 privé ;
-- l’identité utilisateur ;
-- le modèle de sécurité ;
-- l’invocation AgentCore Runtime ;
-- l’intégration AgentCore Memory ;
-- l’intégration AgentCore Gateway et tools ;
-- la persistance DynamoDB ;
-- l’observabilité ;
-- les coûts ;
-- la CI/CD avec GitHub Actions et OIDC ;
-- la trajectoire future vers la production.
+La cible V1 corrigée est :
 
-Le projet est une **application landing zone**, pas une plateforme landing zone. Les sujets AWS Organizations, Control Tower, SCP, hub-and-spoke réseau ou landing zone entreprise sont considérés comme dépendances externes ou hors périmètre V1.
+```text
+Browser / React App
+  -> Amazon API Gateway HTTP API
+  -> Amazon Bedrock AgentCore Gateway
+  -> HTTP Target: Amazon Bedrock AgentCore Runtime
+```
+
+Puis, pour les tools :
+
+```text
+AgentCore Runtime / phase_4.py
+  -> AgentCore Gateway MCP endpoint
+  -> MCP Targets: Lambda / API Gateway REST API / OpenAPI tools
+  -> DynamoDB Trips Table
+```
+
+Amazon API Gateway reste la frontière d’entrée applicative web : JWT Cognito, CORS, throttling, logs, custom domain futur et WAF futur. AgentCore Gateway devient la brique native de médiation agentique : HTTP target vers Runtime et MCP targets vers les outils métier.
+
+La Lambda Agent Invocation Facade n’est plus une brique nominale. Elle devient une option de repli uniquement si un écart fonctionnel est démontré sur la transformation d’identité, l’audit, les quotas ou des règles d’autorisation très spécifiques.
+
+Le projet reste une **application landing zone**, pas une platform landing zone. Les sujets AWS Organizations, Control Tower, SCP, hub-and-spoke réseau ou landing zone entreprise sont hors périmètre V1.
 
 ---
 
 ## 2. Décisions structurantes
 
-| Sujet | Décision V1 |
+| Sujet | Décision V1 corrigée |
 |---|---|
 | Environnement | `test` uniquement |
 | Branche par défaut en phase test | `migration/secure-agentcore-v1` |
 | Branche production future | `main` |
 | Frontend delivery | Amazon CloudFront devant S3 privé |
-| Ingress API externe | Amazon API Gateway HTTP API |
+| Ingress web externe | Amazon API Gateway HTTP API |
 | Authentification web | Amazon Cognito JWT |
-| Invocation AgentCore | Lambda Agent Invocation Facade |
+| Gateway agentique | Amazon Bedrock AgentCore Gateway |
+| Invocation Runtime | API Gateway appelle AgentCore Gateway ; AgentCore Gateway route vers Runtime via HTTP Target |
 | Runtime agent | AgentCore Runtime exécutant `phase_4.py` |
-| Identité runtime | `actorId` dérivé côté serveur depuis `claims.sub` |
+| Tools métier | AgentCore Gateway MCP Targets vers Lambda, API Gateway REST API ou OpenAPI tools |
+| Identité runtime | `actorId` dérivé d’un Cognito `sub` validé |
+| Lambda Facade | Retirée du chemin nominal ; fallback uniquement avec ADR explicite |
 | IaC | Terraform natif |
 | CI/CD | GitHub Actions avec OIDC |
 | RAG | Future capability, désactivée par défaut |
-| WAF | Hors V1 |
+| WAF | Hors V1, préparé pour V2 via API Gateway |
 | Guardrails | Hors V1 par défaut |
 | Production | V2 / phase ultérieure |
 
 ---
 
-## 3. Architecture logique cible
+## 3. Clarification : deux gateways, deux responsabilités
 
-L’architecture V1 distingue deux flux complémentaires :
+| Brique | Rôle | Pourquoi elle reste utile |
+|---|---|---|
+| Amazon API Gateway | Ingress HTTP public pour le frontend | JWT web, CORS, throttling, custom domain futur, WAF futur, access logs, contrôle d’exposition Internet |
+| Amazon Bedrock AgentCore Gateway | Gateway agentique managée pour Runtime, tools, agents et modèles | HTTP target vers Runtime, MCP targets, conversion API/OpenAPI/Lambda en tools, auth inbound/outbound, observabilité agentique |
+| Lambda Facade | Façade applicative custom | Non nominale ; à garder seulement si une règle non couverte nativement est prouvée |
 
-1. le **delivery du frontend statique** ;
-2. le **flux applicatif agentique**.
+La confusion précédente venait du fait que la Lambda Facade avait été utilisée à la fois comme frontière d’identité et comme mécanisme d’invocation Runtime. Dans la cible corrigée, cette responsabilité est rebasculée vers la combinaison native : Amazon API Gateway pour l’ingress web, AgentCore Gateway pour la médiation agentique.
 
-### 3.1 Delivery du frontend statique
+---
+
+## 4. Architecture logique cible
+
+### 4.1 Delivery du frontend statique
 
 ```text
 User Browser
@@ -83,7 +102,7 @@ React / TypeScript / Vite static assets
 
 CloudFront est le point d’accès public du frontend. S3 héberge les assets statiques, mais le bucket doit rester privé. L’accès utilisateur au frontend doit passer par CloudFront.
 
-### 3.2 Flux applicatif agentique
+### 4.2 Ingress utilisateur vers l’agent
 
 ```text
 React App loaded in Browser
@@ -93,63 +112,69 @@ React App loaded in Browser
 Amazon API Gateway HTTP API
   |
   | JWT Authorizer validates issuer, audience, expiry, scopes
+  | CORS / throttling / access logs
   v
-Lambda Agent Invocation Facade
+Amazon Bedrock AgentCore Gateway
   |
-  | derives actorId = claims.sub
-  | rejects actorId/userId/trustedIdentity from browser payload
-  | invokes AgentCore Runtime using IAM/SigV4
+  | HTTP Target: AgentCore Runtime
   v
 Amazon Bedrock AgentCore Runtime
   |
   | executes phase_4.py
-  | receives trustedIdentity.actorId
-  | orchestrates model, memory, tools
+  | orchestrates model and memory
   v
-Amazon Bedrock Model
+Amazon Bedrock Model + AgentCore Memory
+```
+
+### 4.3 Flux agent vers tools métier
+
+```text
+AgentCore Runtime / phase_4.py
   |
-  +--> AgentCore Memory
+  | MCP client
+  v
+Amazon Bedrock AgentCore Gateway MCP endpoint
   |
-  +--> AgentCore Gateway MCP
-            |
-            v
-        Lambda Trip Tools
-            |
-            v
-        DynamoDB Trips Table
+  +--> MCP Target: Lambda Trip Tools
+  |
+  +--> MCP Target: API Gateway REST API + OpenAPI specification
+  |
+  +--> MCP Target: future enterprise APIs / Smithy / MCP servers
+  |
+  v
+DynamoDB Trips Table, through tools only
 ```
 
 Cette séparation évite l’ambiguïté entre :
 
 - CloudFront, qui sert le frontend depuis S3 ;
-- API Gateway, qui sert de point d’entrée applicatif API ;
-- AgentCore Gateway, qui reste une médiation interne MCP pour les tools.
+- Amazon API Gateway, qui sert de point d’entrée applicatif web ;
+- AgentCore Gateway, qui sert de médiation agentique native vers Runtime et tools.
 
 ---
 
-## 4. Parcours d’exécution applicatif
+## 5. Parcours d’exécution applicatif
 
 1. L’utilisateur charge l’application via CloudFront.
 2. CloudFront récupère les assets statiques depuis le bucket S3 privé.
 3. L’utilisateur est invité dans Cognito.
 4. L’utilisateur se connecte via le frontend React.
 5. Le frontend récupère un token Cognito.
-6. Le frontend appelle API Gateway avec le token.
+6. Le frontend appelle Amazon API Gateway avec le token.
 7. API Gateway valide le JWT avec un authorizer Cognito/JWT.
-8. API Gateway transmet les claims validés à la Lambda Facade.
-9. La Lambda Facade extrait `claims.sub`.
-10. La Lambda Facade construit `trustedIdentity.actorId`.
-11. La Lambda Facade rejette tout champ d’identité fourni dans le body.
-12. La Lambda Facade invoque AgentCore Runtime.
-13. AgentCore Runtime exécute `phase_4.py`.
-14. L’agent utilise Memory pour les préférences utilisateur.
-15. L’agent utilise Gateway pour appeler les tools métier.
-16. Les tools lisent/écrivent dans DynamoDB.
-17. La réponse est retournée au frontend via la Facade.
+8. API Gateway applique CORS, throttling, limites payload et logs d’accès redacted.
+9. API Gateway transmet la requête vers AgentCore Gateway selon l’intégration retenue.
+10. AgentCore Gateway applique son authorizer inbound et route vers l’HTTP Target Runtime.
+11. AgentCore Runtime exécute `phase_4.py`.
+12. Runtime vérifie ou reconstruit l’identité de confiance selon le contrat validé en P0.
+13. L’agent utilise Memory pour les préférences utilisateur.
+14. L’agent utilise AgentCore Gateway MCP pour appeler les tools métier.
+15. Les tools lisent/écrivent dans DynamoDB.
+16. La réponse est retournée au frontend via AgentCore Gateway puis API Gateway.
 
 ---
 
-## 5. Modèle d’identité
+## 6. Modèle d’identité
 
 La règle V1 est stricte :
 
@@ -157,7 +182,7 @@ La règle V1 est stricte :
 actorId = Cognito claims.sub
 ```
 
-Le navigateur ne doit jamais fournir :
+Le navigateur ne doit jamais fournir comme source de confiance :
 
 - `actorId` ;
 - `userId` ;
@@ -165,9 +190,9 @@ Le navigateur ne doit jamais fournir :
 - `trustedIdentity` ;
 - groupes ou rôles applicatifs.
 
-Ces informations sont dérivées côté serveur.
+Ces informations doivent être dérivées ou vérifiées côté serveur.
 
-### V1 B2C simple
+### 6.1 V1 B2C simple
 
 ```text
 actorId = Cognito sub
@@ -175,7 +200,7 @@ DynamoDB PK = userId / actorId
 Memory namespace = travel/{actorId}/preferences
 ```
 
-### V2 B2B / SaaS future
+### 6.2 V2 B2B / SaaS future
 
 ```text
 tenantId = attribut Cognito ou groupe validé côté serveur
@@ -184,13 +209,32 @@ DynamoDB PK = tenantId#actorId
 Memory namespace = travel/{tenantId}/{actorId}/preferences
 ```
 
-La V2 n’est pas livrée en V1 mais doit rester compatible avec le design.
+### 6.3 Validation P0 obligatoire
+
+Avant l’implémentation complète, un spike doit valider le contrat exact :
+
+```text
+Amazon API Gateway
+  -> AgentCore Gateway
+  -> AgentCore Runtime
+  -> phase_4.py
+```
+
+Le spike doit prouver :
+
+- JWT Cognito validé ;
+- `actorId = claims.sub` dérivé ou vérifié dans le chemin de confiance ;
+- rejet des champs `actorId`, `userId`, `tenantId`, `trustedIdentity` dans le body client ;
+- Runtime refuse les payloads legacy ;
+- Runtime n’utilise jamais `sessionId` comme identité ;
+- tools reçoivent une identité validée ;
+- isolation User A / User B.
 
 ---
 
-## 6. Composants applicatifs
+## 7. Composants applicatifs
 
-### 6.1 Frontend static delivery
+### 7.1 Frontend static delivery
 
 Le frontend est une application React / TypeScript / Vite, compilée en assets statiques.
 
@@ -207,46 +251,36 @@ Responsabilités :
 - empêcher l’accès public direct au bucket S3 ;
 - fournir les headers et comportements SPA nécessaires ;
 - injecter `VITE_API_BASE_URL` lors du build ;
-- ne jamais exposer `VITE_AGENT_ARN`.
+- ne jamais exposer `VITE_AGENT_ARN`, Runtime ARN, AgentCore Gateway URL ou secret.
 
-### 6.2 Frontend runtime behavior
+### 7.2 Amazon API Gateway
 
-Cible V1 :
-
-- utiliser `VITE_API_BASE_URL` ;
-- ne plus exposer `VITE_AGENT_ARN` ;
-- ne jamais transmettre `actorId` ;
-- envoyer uniquement `prompt` et `sessionId` ;
-- gérer les erreurs normalisées de la Facade.
-
-### 6.3 API Gateway
-
-Rôle : point d’entrée applicatif externe pour les appels API.
+Rôle : point d’entrée applicatif externe pour les appels API du frontend.
 
 Responsabilités :
 
 - exposer `/agent/invoke` ;
 - valider le JWT Cognito ;
-- transmettre les claims validés à Lambda ;
-- appliquer CORS ;
-- gérer throttling et limites payload ;
-- journaliser les accès sans données sensibles.
+- appliquer CORS limité au domaine CloudFront ;
+- appliquer throttling et limites payload ;
+- journaliser les accès sans données sensibles ;
+- préparer WAF et custom domain en V2 ;
+- transmettre la requête vers AgentCore Gateway.
 
-### 6.4 Lambda Agent Invocation Facade
+### 7.3 AgentCore Gateway
 
-Rôle : frontière de sécurité entre le web et AgentCore Runtime.
+Rôle : gateway agentique native.
 
 Responsabilités :
 
-- valider la requête ;
-- extraire `claims.sub` ;
-- construire `trustedIdentity` ;
-- refuser les identités client-side ;
-- appeler AgentCore Runtime avec IAM/SigV4 ;
-- normaliser erreurs et réponses ;
-- émettre logs redacted, métriques et traces.
+- exposer un endpoint d’entrée vers l’HTTP Target Runtime ;
+- exposer des MCP targets vers les tools métier ;
+- gérer les credentials et authorizers des targets ;
+- limiter les targets autorisés ;
+- fournir une observabilité agentique ;
+- convertir APIs, Lambda functions, OpenAPI specs ou services existants en tools MCP-compatible.
 
-### 6.5 AgentCore Runtime
+### 7.4 AgentCore Runtime
 
 Rôle : exécution de l’agent.
 
@@ -260,12 +294,13 @@ Responsabilités :
 
 - orchestrer le modèle Bedrock ;
 - utiliser AgentCore Memory ;
-- utiliser AgentCore Gateway ;
+- utiliser AgentCore Gateway MCP pour les tools ;
 - appliquer les règles prompt/tool ;
 - ne pas faire confiance au payload utilisateur pour l’identité ;
-- émettre logs et métriques.
+- rejeter toute requête sans identité de confiance ;
+- émettre logs et métriques redacted.
 
-### 6.6 AgentCore Memory
+### 7.5 AgentCore Memory
 
 Rôle : mémoire utilisateur contrôlée.
 
@@ -277,18 +312,7 @@ travel/{actorId}/preferences
 
 La Memory stocke les préférences et éléments contextuels utilisateur. Elle ne remplace pas DynamoDB.
 
-### 6.7 AgentCore Gateway
-
-Rôle : médiation MCP vers les tools.
-
-Responsabilités :
-
-- exposer les tools métier à l’agent ;
-- protéger les invocations ;
-- limiter les cibles autorisées ;
-- centraliser l’accès aux Lambda tools.
-
-### 6.8 Lambda Trip Tools
+### 7.6 Lambda Trip Tools ou API métier existante
 
 Rôle : opérations métier trips.
 
@@ -299,9 +323,9 @@ Tools cibles :
 - `get_trip` ;
 - `update_trip`.
 
-Chaque tool doit recevoir l’identité injectée côté serveur et ne doit pas accepter un `userId` arbitraire non validé.
+Chaque tool doit recevoir l’identité injectée ou vérifiée côté serveur et ne doit pas accepter un `userId` arbitraire non validé.
 
-### 6.9 DynamoDB Trips
+### 7.7 DynamoDB Trips
 
 Rôle : persistance transactionnelle.
 
@@ -315,211 +339,152 @@ Cible :
 
 ---
 
-## 7. Sécurité
+## 8. Sécurité
 
-### 7.1 Principes
+### 8.1 Principes
 
 - least privilege IAM ;
 - pas de `AdministratorAccess` ;
 - pas de secret dans Git ;
 - bucket S3 frontend privé ;
 - accès au frontend via CloudFront ;
+- API Gateway comme ingress web public ;
+- AgentCore Gateway comme gateway agentique ;
 - pas de JWT dans les logs ;
 - pas de prompt brut dans les logs ;
 - pas d’identité client-side ;
 - OIDC GitHub limité à test ;
 - séparation future test/prod.
 
-### 7.2 Sécurité CI/CD
+### 8.2 Sécurité runtime
 
-Pendant la phase test :
-
-- branche par défaut : `migration/secure-agentcore-v1` ;
-- GitHub Environment : `test` ;
-- reviewer obligatoire ;
-- rôle AWS OIDC test-only ;
-- `apply` manuel ;
-- `destroy` manuel avec confirmation ;
-- pas d’accès prod.
-
-### 7.3 Sécurité runtime
-
-La Lambda Facade constitue la frontière de confiance.
-
-Elle doit rejeter toute requête contenant :
+Le chemin de confiance devient :
 
 ```text
-actorId
-userId
-tenantId
-trustedIdentity
+Cognito JWT
+  -> API Gateway JWT Authorizer
+  -> AgentCore Gateway authorizer / target context
+  -> AgentCore Runtime
+  -> phase_4.py
 ```
 
-si ces champs proviennent du navigateur.
+Le Runtime doit rejeter toute requête contenant des champs d’identité client-side non fiables.
 
 ---
 
-## 8. Observabilité
+## 9. Observabilité
 
-Composants attendus :
+V1 doit fournir :
 
-- CloudFront standard logs ou métriques CloudFront selon besoin test ;
-- S3 access posture validée ;
-- CloudWatch Logs ;
-- métriques Lambda ;
-- métriques API Gateway ;
-- métriques Runtime ;
-- X-Ray ou tracing distribué si applicable ;
+- CloudFront metrics ;
+- API Gateway access logs, 4xx/5xx, latency et throttling ;
+- AgentCore Gateway target latency, tool count, auth failures et target errors ;
+- Runtime logs et metrics ;
+- Trip tools logs ;
+- DynamoDB throttles ;
 - dashboards test ;
-- alarmes sur erreurs, latence et throttling.
+- budget alarm ;
+- correlationId ;
+- hashedActorId ;
+- hashedSessionId.
 
-Métriques minimales :
+Logs interdits :
 
-- `InvocationCount` ;
-- `InvocationErrorCount` ;
-- `LatencyP50/P95/P99` ;
-- `UnauthorizedCount` ;
-- `RejectedIdentityPayloadCount` ;
-- `ToolInvocationCount` ;
-- `ToolErrorCount` ;
-- coût estimé par environnement.
+- JWT ;
+- Authorization header ;
+- prompt brut ;
+- réponse brute avec PII ;
+- secrets ;
+- actorId brut ;
+- sessionId brut ;
+- email complet.
 
 ---
 
-## 9. Performance et résilience
+## 10. Performance et résilience
 
 Risques principaux :
 
 - invalidations CloudFront trop fréquentes ;
 - mauvais cache headers frontend ;
-- cold start Lambda ;
 - latence AgentCore Runtime ;
 - timeout API Gateway ;
+- latence AgentCore Gateway target ;
 - appels tools longs ;
 - erreurs modèle ;
-- throttling Bedrock ou Lambda.
+- throttling Bedrock, Gateway, Lambda ou DynamoDB.
 
-Mesures V1 :
-
-- cache policy CloudFront adaptée aux assets statiques ;
-- SPA fallback contrôlé ;
-- timeouts cohérents entre API Gateway, Lambda et Runtime ;
-- retries limités et contrôlés ;
-- circuit breaker applicatif si nécessaire ;
-- dashboards latence ;
-- test p95/p99 ;
-- provisioned concurrency optionnelle sur Lambda Facade si nécessaire.
+La suppression du chemin nominal Lambda Facade réduit un hop custom et le risque de cold start façade. La latence réelle doit toutefois être mesurée par des tests p50/p95/p99.
 
 ---
 
-## 10. Coûts
+## 11. CI/CD
 
-Principes :
+GitHub Actions gère :
 
-- environnement test uniquement ;
-- budgets et alertes ;
-- logs avec rétention limitée ;
-- CloudFront et S3 dimensionnés pour le test ;
-- modèle Haiku-class par défaut si compatible ;
-- escalade Sonnet uniquement si nécessaire ;
-- RAG désactivé par défaut ;
-- pas de WAF/Guardrails actifs en V1 sauf décision client.
+- Terraform plan ;
+- Terraform apply test ;
+- build Lambda artifacts si tools Lambda ;
+- build agent Docker image ;
+- push image ECR ;
+- création ou mise à jour AgentCore Gateway ;
+- création ou mise à jour HTTP Target Runtime ;
+- création ou mise à jour MCP Targets tools ;
+- build frontend ;
+- deploy frontend S3 ;
+- CloudFront invalidation ;
+- smoke tests ;
+- negative security tests ;
+- latency tests ;
+- automated validation gates.
 
----
+Le gate automatisé doit valider :
 
-## 11. RAG future capability
-
-Le RAG est une capacité future distincte de :
-
-- AgentCore Memory ;
-- DynamoDB ;
-- tools ;
-- historique de conversation.
-
-Architecture cible future :
-
-```text
-AgentCore Runtime
-  -> RAG Retrieval Layer
-  -> Amazon Bedrock Knowledge Bases
-  -> S3 Document Repository
-  -> Vector Store
-```
-
-La V1 doit rester compatible avec un module futur :
-
-```hcl
-enable_rag = false
-```
-
-Activation future conditionnée à :
-
-- corpus documentaire validé ;
-- classification documentaire ;
-- règles d’accès ;
-- tests de retrieval ;
-- citations ;
-- coût estimé ;
-- sécurité prompt injection documentaire.
+- API Gateway -> AgentCore Gateway ;
+- AgentCore Gateway -> Runtime ;
+- Runtime -> AgentCore Gateway MCP ;
+- Gateway -> tools ;
+- payload identité ;
+- IAM minimal ;
+- logs redacted ;
+- timeouts ;
+- erreurs.
 
 ---
 
-## 12. Modules industriels cibles
+## 12. Roadmap V2
 
-Les modules sont détaillés dans :
+V2 inclura :
 
-```text
-docs/specifications/module-specifications-fr.md
-```
-
-Domaine cible :
-
-```text
-identity
-frontend static delivery with CloudFront and S3
-ingress
-facade
-agent packaging
-agentcore runtime
-agentcore memory
-agentcore gateway
-tools
-data
-secrets
-iam
-observability
-cost
-tests
-rag future
-```
-
----
-
-## 13. Hors périmètre V1
-
-- production go-live ;
+- environnement production ;
+- promotion test vers prod ;
+- WAF ;
+- Bedrock Guardrails ;
 - custom domain ;
-- WAF actif ;
-- Guardrails actifs ;
-- RAG actif ;
-- streaming/WebSocket ;
-- admin portal ;
-- multi-tenant B2B avancé ;
-- promotion automatique vers `main`.
+- ACM ;
+- Route 53 ;
+- quotas par utilisateur ;
+- quotas par tenant ;
+- streaming ou WebSocket si nécessaire ;
+- portail admin/support ;
+- runbooks production ;
+- rollback avancé.
 
 ---
 
-## 14. Critères d’acceptation HLD
+## 13. Critères d’acceptation HLD
 
 Le HLD est accepté si :
 
-- l’architecture V1 est claire ;
+- Amazon API Gateway reste explicitement dans le chemin utilisateur ;
+- AgentCore Gateway est la gateway agentique centrale ;
+- Lambda Facade n’est plus le chemin nominal ;
 - le flux frontend `Browser -> CloudFront -> S3 privé` est explicite ;
-- le flux API `Browser app -> API Gateway -> Lambda Facade -> AgentCore Runtime` est explicite ;
+- le flux API `Browser app -> API Gateway -> AgentCore Gateway -> Runtime` est explicite ;
+- le flux tools `Runtime -> AgentCore Gateway MCP -> Lambda/API Gateway REST/OpenAPI tools` est explicite ;
 - le périmètre test est explicite ;
 - `main` est documentée comme future prod ;
 - l’identity model est server-side ;
-- API Gateway et Lambda Facade sont retenus ;
 - Runtime cible `phase_4.py` est documenté ;
 - Memory, Gateway, tools et DynamoDB sont distingués ;
 - RAG est documenté comme future capability ;
@@ -528,13 +493,14 @@ Le HLD est accepté si :
 
 ---
 
-## 15. Roadmap
+## 14. Roadmap
 
 | Phase | Objectif |
 |---|---|
 | V1.0 test | Fondations, CI/CD test, Terraform skeleton, docs |
-| V1.1 test | CloudFront/S3 frontend, API Gateway, Lambda Facade, Runtime invocation |
-| V1.2 test | AgentCore Memory/Gateway/Tools Terraform |
-| V1.3 test | tests sécurité, observabilité, coût |
+| V1.1 test | CloudFront/S3 frontend, Cognito, API Gateway web ingress |
+| V1.2 test | AgentCore Gateway HTTP Target vers Runtime |
+| V1.3 test | AgentCore Memory/Gateway MCP/Tools Terraform |
+| V1.4 test | tests sécurité, observabilité, coût |
 | V2 | production, multi-tenant, WAF/Guardrails selon besoin |
 | V2+ | RAG actif après corpus validé |
