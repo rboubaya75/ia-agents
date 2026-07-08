@@ -49,6 +49,8 @@ def main() -> int:
     missing = []
     if not is_https_url(options.agentcore_gateway_url):
         missing.append("agentcore_gateway_url")
+    if not is_https_url(options.agentcore_gateway_mcp_url):
+        missing.append("agentcore_gateway_mcp_url")
     if not options.agentcore_memory_id:
         missing.append("agentcore_memory_id")
 
@@ -56,7 +58,7 @@ def main() -> int:
         return fail(
             "Missing Gateway-first Terraform outputs: "
             + ", ".join(missing)
-            + ". Add AgentCore Gateway, HTTP Runtime Target and Memory outputs before runtime/full deploy."
+            + ". Add AgentCore Gateway, MCP endpoint, HTTP Runtime Target and Memory outputs before runtime/full deploy."
         )
 
     if missing:
@@ -65,13 +67,6 @@ def main() -> int:
 
     if options.runtime_arn:
         print("Runtime ARN output present.")
-
-    if options.agentcore_gateway_mcp_url:
-        if not is_https_url(options.agentcore_gateway_mcp_url):
-            return fail("agentcore_gateway_mcp_url must be HTTPS when provided.")
-        print("MCP Gateway URL present.")
-    else:
-        print("WARNING: agentcore_gateway_mcp_url is empty; MCP tool smoke tests must be added when target outputs exist.")
 
     print("Gateway-first contract validation completed.")
     return 0
