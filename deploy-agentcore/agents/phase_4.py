@@ -128,6 +128,18 @@ def get_secret_value(key: str, default: Optional[str] = None) -> Optional[str]:
     return _secret_cache.get(key, default)
 
 
+def normalize_request_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Accept both raw app payloads and AgentCore Runtime target input envelopes."""
+    if not isinstance(payload, dict):
+        raise ValueError("Request payload must be a JSON object.")
+
+    wrapped_payload = payload.get("input")
+    if isinstance(wrapped_payload, dict):
+        return wrapped_payload
+
+    return payload
+
+
 def _context_get(source: Any, key: str) -> Any:
     if source is None:
         return None
@@ -224,7 +236,7 @@ def _extract_claims_from_context(context: RequestContext | None) -> Dict[str, An
 
 
 def _decode_jwt_claims_unverified(token: str) -> Dict[str, Any]:
-    """Decode JWT claims after Gateway validation. This does not verify the signature locally."""
+    """Decode JWT claims after upstream Gateway validation. This does not verify the signature locally."""
     parts = token.split(".")
     if len(parts) < 2:
         return {}
@@ -563,12 +575,13 @@ async def invoke(payload: Dict[str, Any], context: RequestContext = None) -> str
     actor_id = "unknown"
 
     try:
-        user_input = payload.get("prompt")
+        request_payload = normalize_request_payload(payload)
+        user_input = request_payload.get("prompt")
         if not isinstance(user_input, str) or not user_input.strip():
             raise ValueError("prompt is required.")
 
-        session_id = extract_session_id(payload, context)
-        actor_id = extract_actor_id(payload, context)
+        session_id = extract_session_id(request_payload, context)
+        actor_id = extract_actor_id(request_payload, context)
 
         memory_id = get_secret_value("MEMORY_ID")
         guardrail_id = get_secret_value("GUARDRAILS_ID")
@@ -580,7 +593,8 @@ async def invoke(payload: Dict[str, Any], context: RequestContext = None) -> str
                     "event": "request_accepted",
                     "session_hash": safe_hash(session_id),
                     "actor_hash": safe_hash(actor_id),
-                    "payload_keys": sorted(payload.keys()),
+                    "payload_keys": sorted(request_payload.keys()),
+                    "outer_payload_keys": sorted(payload.keys()) if payload is not request_payload else [],
                 }
             )
         )
