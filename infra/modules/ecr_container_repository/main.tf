@@ -21,24 +21,24 @@ resource "aws_ecr_lifecycle_policy" "this" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep only the most recent tagged images for the test runtime repository"
-        selection = {
-          tagStatus   = "tagged"
-          countType   = "imageCountMoreThan"
-          countNumber = var.keep_last_images
-        }
-        action = {
-          type = "expire"
-        }
-      },
-      {
-        rulePriority = 2
         description  = "Expire untagged images after 7 days"
         selection = {
           tagStatus   = "untagged"
           countType   = "sinceImagePushed"
           countUnit   = "days"
           countNumber = 7
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 100
+        description  = "Keep only the most recent images for the test runtime repository"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.keep_last_images
         }
         action = {
           type = "expire"
