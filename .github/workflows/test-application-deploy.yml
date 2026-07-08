@@ -3,11 +3,13 @@ name: Test Application Deploy
 on:
   workflow_dispatch:
     inputs:
-      confirm_deploy:
-        description: "Required to run deployment validation"
+      stack_path:
+        description: "Terraform stack path"
         required: true
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - infra/environments/test
+        default: infra/environments/test
       deploy_mode:
         description: "Application deployment mode"
         required: true
@@ -18,8 +20,28 @@ on:
           - runtime-only
           - full
         default: full
-      activate_facade:
-        description: "LEGACY fallback only. Default false. Target is API Gateway -> AgentCore Gateway -> Runtime."
+      image_tag:
+        description: "ECR image tag to build or deploy. Use test for an auto-generated immutable test tag."
+        required: true
+        type: string
+        default: test
+      endpoint_name:
+        description: "AgentCore Runtime endpoint name"
+        required: true
+        type: string
+        default: default
+      api_base_url:
+        description: "Optional API Gateway base URL override for frontend deploy. Leave empty to use Terraform service_url."
+        required: false
+        type: string
+        default: ""
+      enforce_gateway_first:
+        description: "Fail runtime/full deploy unless AgentCore Gateway and Memory Terraform outputs exist."
+        required: true
+        type: boolean
+        default: true
+      confirm_deploy:
+        description: "Required to run the selected application deployment mode"
         required: true
         type: boolean
         default: false
@@ -27,29 +49,306 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: test-application-deploy-${{ github.ref }}-${{ inputs.stack_path || 'infra-environments-test' }}-${{ inputs.deploy_mode || 'full' }}
+  cancel-in-progress: false
+
+env:
+  DEFAULT_STACK_PATH: infra/environments/test
+  TF_VERSION: "1.9.0"
+  NODE_VERSION: "20"
+  AWS_REGION: eu-west-3
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  DOCKERFILE_PATH: deploy-agentcore/Dockerfile
+  DOCKER_BUILD_CONTEXT: deploy-agentcore
+  IMAGE_PLATFORM: linux/arm64
+
 jobs:
-  gateway-first-validation:
-    name: Gateway-first validation
+  test-application-deploy:
+    name: Test Application Deploy Gateway-first
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Confirm deployment
         run: |
           if [ "${{ inputs.confirm_deploy }}" != "true" ]; then
-            echo "confirm_deploy=true is required."
+            echo "Application deployment requires confirm_deploy=true."
             exit 1
           fi
 
-      - name: Validate target architecture
+      - name: Gateway-first architecture notice
         run: |
           echo "Target: Browser -> API Gateway -> AgentCore Gateway -> Runtime."
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools."
-          if [ "${{ inputs.activate_facade }}" = "true" ]; then
-            echo "Legacy Lambda Facade fallback was requested. This requires an explicit ADR approval."
+          echo "Lambda Facade activation has been removed from the nominal workflow."
+
+      - name: Validate image tag
+        run: |
+          if ! echo "${{ inputs.image_tag }}" | grep -Eq '^[A-Za-z0-9_.-]{1,128}$'; then
+            echo "Invalid image_tag. Use only letters, numbers, underscore, dot, and dash."
             exit 1
           fi
 
-      - name: Next implementation gate
+      - name: Validate endpoint name
         run: |
-          echo "TODO: wire Terraform outputs for AgentCore Gateway, HTTP Runtime Target, MCP Tool Targets, Memory and Runtime."
-          echo "This workflow has been neutralized to prevent accidental Lambda Facade activation."
+          if ! echo "${{ inputs.endpoint_name }}" | grep -Eq '^[A-Za-z0-9_.-]{1,64}$'; then
+            echo "Invalid endpoint_name. Use only letters, numbers, underscore, dot, and dash."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: test-application-deploy-gateway-first
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Node.js
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python deployment dependencies
+        if: inputs.deploy_mode != 'frontend-only'
+        run: python3 -m pip install "boto3>=1.43.18"
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform init
+
+      - name: Read Terraform outputs
+        id: tfout
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          mode="${{ inputs.deploy_mode }}"
+
+          frontend_bucket_name="$(terraform output -raw frontend_bucket_name 2>/dev/null || true)"
+          cloudfront_distribution_id="$(terraform output -raw cloudfront_distribution_id 2>/dev/null || true)"
+          cloudfront_domain_name="$(terraform output -raw cloudfront_domain_name 2>/dev/null || true)"
+          cognito_user_pool_id="$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)"
+          cognito_web_client_id="$(terraform output -raw cognito_web_client_id 2>/dev/null || true)"
+          service_url="$(terraform output -raw service_url 2>/dev/null || true)"
+          ecr_repository_url="$(terraform output -raw agentcore_ecr_repository_url 2>/dev/null || true)"
+          agent_service_name="$(terraform output -raw agent_service_name 2>/dev/null || true)"
+          agent_service_role_arn="$(terraform output -raw agent_service_role_arn 2>/dev/null || true)"
+          agent_service_model_id="$(terraform output -raw agent_service_model_id 2>/dev/null || true)"
+          agentcore_gateway_url="$(terraform output -raw agentcore_gateway_url 2>/dev/null || true)"
+          agentcore_gateway_mcp_url="$(terraform output -raw agentcore_gateway_mcp_url 2>/dev/null || true)"
+          agentcore_memory_id="$(terraform output -raw agentcore_memory_id 2>/dev/null || true)"
+          app_secret_name="$(terraform output -raw app_secret_name 2>/dev/null || true)"
+
+          resolved_api_base_url="${{ inputs.api_base_url }}"
+          if [ -z "$resolved_api_base_url" ]; then
+            resolved_api_base_url="$service_url"
+          fi
+
+          if [ "$mode" = "frontend-only" ] || [ "$mode" = "full" ]; then
+            if [ -z "$frontend_bucket_name" ] || [ -z "$cloudfront_distribution_id" ] || [ -z "$cognito_user_pool_id" ] || [ -z "$cognito_web_client_id" ] || [ -z "$resolved_api_base_url" ]; then
+              echo "Frontend outputs are missing. Run the Terraform test stack apply first, or provide api_base_url."
+              exit 1
+            fi
+          fi
+
+          if [ "$mode" = "image-only" ] || [ "$mode" = "runtime-only" ] || [ "$mode" = "full" ]; then
+            if [ -z "$ecr_repository_url" ]; then
+              echo "ECR output is missing. Run the Terraform test stack apply first."
+              exit 1
+            fi
+          fi
+
+          if [ "$mode" = "runtime-only" ] || [ "$mode" = "full" ]; then
+            if [ -z "$agent_service_name" ] || [ -z "$agent_service_role_arn" ] || [ -z "$agent_service_model_id" ]; then
+              echo "Runtime deployment outputs are missing. Run the Terraform test stack apply first."
+              exit 1
+            fi
+          fi
+
+          ecr_registry="${ecr_repository_url%%/*}"
+          requested_image_tag="${{ inputs.image_tag }}"
+          if [ "$requested_image_tag" = "test" ]; then
+            resolved_image_tag="test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          else
+            resolved_image_tag="$requested_image_tag"
+          fi
+          sha_tag="sha-${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          image_uri="${ecr_repository_url}:${resolved_image_tag}"
+
+          echo "frontend_bucket_name=$frontend_bucket_name" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_distribution_id=$cloudfront_distribution_id" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_domain_name=$cloudfront_domain_name" >> "$GITHUB_OUTPUT"
+          echo "cognito_user_pool_id=$cognito_user_pool_id" >> "$GITHUB_OUTPUT"
+          echo "cognito_web_client_id=$cognito_web_client_id" >> "$GITHUB_OUTPUT"
+          echo "resolved_api_base_url=$resolved_api_base_url" >> "$GITHUB_OUTPUT"
+          echo "ecr_repository_url=$ecr_repository_url" >> "$GITHUB_OUTPUT"
+          echo "ecr_registry=$ecr_registry" >> "$GITHUB_OUTPUT"
+          echo "requested_image_tag=$requested_image_tag" >> "$GITHUB_OUTPUT"
+          echo "resolved_image_tag=$resolved_image_tag" >> "$GITHUB_OUTPUT"
+          echo "image_uri=$image_uri" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
+          echo "agent_service_name=$agent_service_name" >> "$GITHUB_OUTPUT"
+          echo "agent_service_role_arn=$agent_service_role_arn" >> "$GITHUB_OUTPUT"
+          echo "agent_service_model_id=$agent_service_model_id" >> "$GITHUB_OUTPUT"
+          echo "agentcore_gateway_url=$agentcore_gateway_url" >> "$GITHUB_OUTPUT"
+          echo "agentcore_gateway_mcp_url=$agentcore_gateway_mcp_url" >> "$GITHUB_OUTPUT"
+          echo "agentcore_memory_id=$agentcore_memory_id" >> "$GITHUB_OUTPUT"
+          echo "app_secret_name=$app_secret_name" >> "$GITHUB_OUTPUT"
+
+      - name: Application deployment preflight
+        run: |
+          python3 scripts/preflight_application_deploy.py \
+            --mode "${{ inputs.deploy_mode }}" \
+            --requested-image-tag "${{ steps.tfout.outputs.requested_image_tag }}" \
+            --resolved-image-tag "${{ steps.tfout.outputs.resolved_image_tag }}" \
+            --image-platform "${{ env.IMAGE_PLATFORM }}" \
+            --ecr-repository-url "${{ steps.tfout.outputs.ecr_repository_url }}" \
+            --runtime-name "${{ steps.tfout.outputs.agent_service_name }}" \
+            --runtime-role-arn "${{ steps.tfout.outputs.agent_service_role_arn }}" \
+            --model-id "${{ steps.tfout.outputs.agent_service_model_id }}" \
+            --endpoint-name "${{ inputs.endpoint_name }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --api-base-url "${{ steps.tfout.outputs.resolved_api_base_url }}" \
+            --frontend-bucket-name "${{ steps.tfout.outputs.frontend_bucket_name }}" \
+            --cloudfront-distribution-id "${{ steps.tfout.outputs.cloudfront_distribution_id }}" \
+            --cognito-user-pool-id "${{ steps.tfout.outputs.cognito_user_pool_id }}" \
+            --cognito-web-client-id "${{ steps.tfout.outputs.cognito_web_client_id }}"
+
+      - name: Gateway-first contract pre-deploy gate
+        run: |
+          enforce_flag=""
+          if [ "${{ inputs.enforce_gateway_first }}" = "true" ]; then
+            enforce_flag="--enforce"
+          fi
+          python3 scripts/validate_gateway_first_contract.py \
+            --mode "${{ inputs.deploy_mode }}" \
+            --api-base-url "${{ steps.tfout.outputs.resolved_api_base_url }}" \
+            --agentcore-gateway-url "${{ steps.tfout.outputs.agentcore_gateway_url }}" \
+            --agentcore-gateway-mcp-url "${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}" \
+            --agentcore-memory-id "${{ steps.tfout.outputs.agentcore_memory_id }}" \
+            $enforce_flag
+
+      - name: Login to ECR
+        if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
+        uses: aws-actions/amazon-ecr-login@2b4f396d7dc6998f02e6f4a915e8798c568f93a1
+
+      - name: Create Docker buildx builder
+        if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
+        run: |
+          docker buildx create --name agentcore-builder --use || docker buildx use agentcore-builder
+          docker buildx inspect --bootstrap
+
+      - name: Build and push AgentCore image
+        if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
+        run: |
+          docker buildx build \
+            --platform "${{ env.IMAGE_PLATFORM }}" \
+            --file "${{ env.DOCKERFILE_PATH }}" \
+            --tag "${{ steps.tfout.outputs.ecr_repository_url }}:${{ steps.tfout.outputs.resolved_image_tag }}" \
+            --tag "${{ steps.tfout.outputs.ecr_repository_url }}:${{ steps.tfout.outputs.sha_tag }}" \
+            --provenance=false \
+            --push \
+            "${{ env.DOCKER_BUILD_CONTEXT }}"
+
+      - name: Deploy or update AgentCore Runtime
+        id: runtime
+        if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+        run: |
+          python3 scripts/deploy_agent_runtime.py \
+            --name "${{ steps.tfout.outputs.agent_service_name }}" \
+            --image-uri "${{ steps.tfout.outputs.image_uri }}" \
+            --role-arn "${{ steps.tfout.outputs.agent_service_role_arn }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --model-id "${{ steps.tfout.outputs.agent_service_model_id }}" \
+            --endpoint-name "${{ inputs.endpoint_name }}" \
+            --memory-id "${{ steps.tfout.outputs.agentcore_memory_id }}" \
+            --gateway-url "${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}" \
+            --gateway-auth-mode "oauth" \
+            --secret-name "${{ steps.tfout.outputs.app_secret_name }}" \
+            --enable-rag "false"
+
+      - name: Gateway-first contract post-runtime gate
+        if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+        run: |
+          enforce_flag=""
+          if [ "${{ inputs.enforce_gateway_first }}" = "true" ]; then
+            enforce_flag="--enforce"
+          fi
+          python3 scripts/validate_gateway_first_contract.py \
+            --mode "${{ inputs.deploy_mode }}" \
+            --api-base-url "${{ steps.tfout.outputs.resolved_api_base_url }}" \
+            --agentcore-gateway-url "${{ steps.tfout.outputs.agentcore_gateway_url }}" \
+            --agentcore-gateway-mcp-url "${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}" \
+            --agentcore-memory-id "${{ steps.tfout.outputs.agentcore_memory_id }}" \
+            --runtime-arn "${{ steps.runtime.outputs.runtime_arn }}" \
+            $enforce_flag
+
+      - name: Generate frontend production environment
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        working-directory: frontend
+        run: |
+          {
+            echo "VITE_COGNITO_USER_POOL_ID=${{ steps.tfout.outputs.cognito_user_pool_id }}"
+            echo "VITE_COGNITO_CLIENT_ID=${{ steps.tfout.outputs.cognito_web_client_id }}"
+            echo "VITE_COGNITO_REGION=${{ env.AWS_REGION }}"
+            echo "VITE_API_BASE_URL=${{ steps.tfout.outputs.resolved_api_base_url }}"
+          } > .env.production
+
+      - name: Install frontend dependencies
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        working-directory: frontend
+        run: npm run build
+
+      - name: Sync frontend assets to S3
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        working-directory: frontend
+        run: aws s3 sync dist/ "s3://${{ steps.tfout.outputs.frontend_bucket_name }}" --delete
+
+      - name: Invalidate CloudFront distribution
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.tfout.outputs.cloudfront_distribution_id }}" \
+            --paths "/*"
+
+      - name: Deployment summary
+        run: |
+          echo "Application deployment completed."
+          echo "Mode: ${{ inputs.deploy_mode }}"
+          echo "Architecture: Browser -> API Gateway -> AgentCore Gateway -> Runtime"
+          echo "Tools: Runtime -> AgentCore Gateway MCP -> tools"
+          echo "Requested image tag: ${{ steps.tfout.outputs.requested_image_tag }}"
+          echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
+          echo "Image: ${{ steps.tfout.outputs.image_uri }}"
+          echo "API Base URL: ${{ steps.tfout.outputs.resolved_api_base_url }}"
+          echo "AgentCore Gateway URL: ${{ steps.tfout.outputs.agentcore_gateway_url }}"
+          echo "AgentCore Gateway MCP URL: ${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}"
+          echo "AgentCore Memory ID present: ${{ steps.tfout.outputs.agentcore_memory_id != '' }}"
+          echo "CloudFront: https://${{ steps.tfout.outputs.cloudfront_domain_name }}"
