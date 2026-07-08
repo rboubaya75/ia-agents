@@ -30,12 +30,23 @@ variable "allowed_origins" {
 
 variable "facade_lambda_invoke_arn" {
   type        = string
-  description = "Invoke ARN of the Lambda Facade integrated behind POST /agent/invoke."
+  description = "Invoke ARN of the Lambda Facade integrated behind POST /agent/invoke. Legacy fallback path during P0."
 }
 
 variable "facade_lambda_function_name" {
   type        = string
-  description = "Lambda Facade function name used for API Gateway invoke permission."
+  description = "Lambda Facade function name used for API Gateway invoke permission. Legacy fallback path during P0."
+}
+
+variable "p0_agentcore_gateway_url" {
+  type        = string
+  description = "Optional AgentCore Gateway invoke URL for the isolated P0 route POST /p0/agent/invoke. Leave empty to disable the P0 route."
+  default     = ""
+
+  validation {
+    condition     = var.p0_agentcore_gateway_url == "" || can(regex("^https://", var.p0_agentcore_gateway_url))
+    error_message = "p0_agentcore_gateway_url must be empty or start with https://."
+  }
 }
 
 variable "tags" {
