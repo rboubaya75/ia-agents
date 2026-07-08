@@ -1,7 +1,12 @@
 locals {
-  agentcore_gateway_invoke_url = var.agentcore_gateway_url != "" ? var.agentcore_gateway_url : var.p0_agentcore_gateway_url
-  gateway_first_enabled        = var.gateway_first_enabled
-  legacy_facade_enabled        = var.enable_legacy_facade && var.facade_lambda_invoke_arn != "" && var.facade_lambda_function_name != ""
+  agentcore_gateway_base_url = var.agentcore_gateway_url != "" ? trimsuffix(var.agentcore_gateway_url, "/") : trimsuffix(var.p0_agentcore_gateway_url, "/")
+  agentcore_runtime_invoke_url = (
+    local.agentcore_gateway_base_url != "" && var.agentcore_runtime_target_name != ""
+    ? "${local.agentcore_gateway_base_url}/${var.agentcore_runtime_target_name}/invocations"
+    : local.agentcore_gateway_base_url
+  )
+  gateway_first_enabled = var.gateway_first_enabled
+  legacy_facade_enabled = var.enable_legacy_facade && var.facade_lambda_invoke_arn != "" && var.facade_lambda_function_name != ""
 }
 
 resource "aws_apigatewayv2_api" "this" {
@@ -37,7 +42,7 @@ resource "aws_apigatewayv2_integration" "agentcore_gateway" {
   api_id             = aws_apigatewayv2_api.this.id
   integration_type   = "HTTP_PROXY"
   integration_method = "POST"
-  integration_uri    = local.agentcore_gateway_invoke_url
+  integration_uri    = local.agentcore_runtime_invoke_url
 }
 
 resource "aws_apigatewayv2_route" "agent_invoke_gateway_first" {
