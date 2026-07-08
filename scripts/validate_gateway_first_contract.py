@@ -7,9 +7,10 @@ from urllib.parse import urlparse
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate Gateway-first deployment contract before/after deploy.")
+    parser = argparse.ArgumentParser(description="Validate native AgentCore Runtime JWT deployment contract.")
     parser.add_argument("--mode", required=True, choices=["frontend-only", "image-only", "runtime-only", "full"])
     parser.add_argument("--api-base-url", default="")
+    parser.add_argument("--agent-runtime-invoke-url", default="")
     parser.add_argument("--agentcore-gateway-url", default="")
     parser.add_argument("--agentcore-gateway-mcp-url", default="")
     parser.add_argument("--agentcore-memory-id", default="")
@@ -31,44 +32,46 @@ def fail(message: str) -> int:
 def main() -> int:
     options = parse_args()
 
-    print("Gateway-first target: Browser -> API Gateway -> AgentCore Gateway -> Runtime")
-    print("Gateway-first tools: Runtime -> AgentCore Gateway MCP -> tools")
+    print("Native Runtime JWT target: Browser -> AgentCore Runtime direct HTTPS invoke.")
+    print("Tools path remains: Runtime -> AgentCore Gateway MCP -> tools.")
 
     if options.mode == "image-only":
-        print("Image-only mode does not require Gateway-first runtime outputs.")
+        print("Image-only mode does not require Runtime JWT outputs.")
         return 0
 
     if options.mode in {"frontend-only", "full"}:
-        if not is_https_url(options.api_base_url):
-            return fail("api_base_url must be an HTTPS Amazon API Gateway URL or an approved HTTPS custom domain.")
+        if not is_https_url(options.agent_runtime_invoke_url):
+            return fail("agent_runtime_invoke_url must be an HTTPS AgentCore Runtime invocation URL.")
 
     if options.mode not in {"runtime-only", "full"}:
-        print("Runtime Gateway contract not required for this mode.")
+        print("Runtime control-plane contract not required for this mode.")
         return 0
 
     missing = []
-    if not is_https_url(options.agentcore_gateway_url):
-        missing.append("agentcore_gateway_url")
+    if not is_https_url(options.agent_runtime_invoke_url):
+        missing.append("agent_runtime_invoke_url")
     if not is_https_url(options.agentcore_gateway_mcp_url):
         missing.append("agentcore_gateway_mcp_url")
     if not options.agentcore_memory_id:
         missing.append("agentcore_memory_id")
+    if not options.runtime_arn:
+        missing.append("runtime_arn")
 
     if options.enforce and missing:
         return fail(
-            "Missing Gateway-first Terraform outputs: "
+            "Missing native Runtime JWT Terraform outputs: "
             + ", ".join(missing)
-            + ". Add AgentCore Gateway, MCP endpoint, HTTP Runtime Target and Memory outputs before runtime/full deploy."
+            + ". Runtime must expose direct invoke URL, MCP tools gateway and Memory before runtime/full deploy."
         )
 
     if missing:
-        print("WARNING: Gateway-first outputs are incomplete: " + ", ".join(missing))
-        print("Runtime deploy will continue because enforcement is disabled.")
+        print("WARNING: Native Runtime JWT outputs are incomplete: " + ", ".join(missing))
+        print("Deploy will continue because enforcement is disabled.")
 
-    if options.runtime_arn:
-        print("Runtime ARN output present.")
+    if options.agentcore_gateway_url:
+        print("WARNING: agentcore_gateway_url is set but user ingress should no longer proxy through AgentCore Gateway.")
 
-    print("Gateway-first contract validation completed.")
+    print("Native Runtime JWT contract validation completed.")
     return 0
 
 
