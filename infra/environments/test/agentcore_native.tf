@@ -59,7 +59,7 @@ resource "aws_bedrockagentcore_gateway" "ingress" {
   name            = "${local.name_prefix}-ingress-gw"
   description     = "HTTP ingress gateway routing API Gateway traffic to AgentCore Runtime"
   role_arn        = aws_iam_role.agentcore_gateway.arn
-  authorizer_type = "AUTHENTICATE_ONLY"
+  authorizer_type = "CUSTOM_JWT"
 
   authorizer_configuration {
     custom_jwt_authorizer {
