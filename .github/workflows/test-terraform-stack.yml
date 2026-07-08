@@ -176,7 +176,36 @@ jobs:
       - name: Terraform plan
         id: plan
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform plan -detailed-exitcode -out=tfplan -lock-timeout=60s
+        run: |
+          agentcore_args=()
+          state_list="$(terraform state list 2>/dev/null || true)"
+
+          if echo "$state_list" | grep -Eq '^aws_bedrockagentcore_'; then
+            if ! echo "$state_list" | grep -Fq 'aws_bedrockagentcore_agent_runtime.agent[0]'; then
+              echo "AgentCore resources exist in Terraform state, but the Runtime resource is missing."
+              echo "Refusing to run the base Terraform plan because it could destroy or orphan AgentCore control-plane resources."
+              echo "Run Test Application Deploy with deploy_mode=full to reconcile the AgentCore control plane."
+              exit 1
+            fi
+
+            runtime_state="$(terraform state show -no-color 'aws_bedrockagentcore_agent_runtime.agent[0]')"
+            image_uri="$(printf '%s\n' "$runtime_state" | awk -F' = ' '/container_uri/ {gsub(/"/, "", $2); print $2; exit}')"
+            image_tag="${image_uri##*:}"
+
+            if [ -z "$image_uri" ] || [ -z "$image_tag" ] || [ "$image_tag" = "$image_uri" ]; then
+              echo "Unable to resolve the current AgentCore Runtime image tag from Terraform state."
+              echo "Refusing to run the base Terraform plan because it could reset or destroy AgentCore resources."
+              exit 1
+            fi
+
+            agentcore_args+=("-var=enable_agentcore_control_plane=true")
+            agentcore_args+=("-var=agentcore_image_tag=${image_tag}")
+            echo "Preserving existing AgentCore control plane with image tag: ${image_tag}"
+          else
+            echo "No AgentCore resources found in Terraform state; using the stack defaults."
+          fi
+
+          terraform plan -detailed-exitcode -out=tfplan -lock-timeout=60s "${agentcore_args[@]}"
         continue-on-error: true
 
       - name: Fail on plan error
