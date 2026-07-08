@@ -3,13 +3,14 @@
 V1 security principles:
 - the browser must not call AgentCore Runtime directly;
 - client-side identity fields are rejected;
-- actor identity is accepted only from trustedIdentity.actorId, injected by the
-  Lambda Agent Invocation Facade;
+- actor identity is derived from trusted server-side context such as API Gateway
+  JWT claim headers, AgentCore Gateway context, or the legacy server-side facade;
 - logs must avoid raw prompts, tokens, secrets and tool inputs.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -93,6 +94,14 @@ FORBIDDEN_IDENTITY_FIELDS = {
     "tenant_id",
 }
 
+TRUSTED_ACTOR_HEADERS = (
+    "x-trusted-actor-id",
+    "x-agentcore-actor-id",
+    "x-amzn-oidc-identity",
+)
+
+ACTOR_CLAIM_NAMES = ("sub", "username", "cognito:username")
+
 
 def safe_hash(value: Optional[str]) -> str:
     if not value:
@@ -119,15 +128,155 @@ def get_secret_value(key: str, default: Optional[str] = None) -> Optional[str]:
     return _secret_cache.get(key, default)
 
 
+def _context_get(source: Any, key: str) -> Any:
+    if source is None:
+        return None
+
+    if isinstance(source, dict):
+        if key in source:
+            return source[key]
+        lower_key = key.lower()
+        for candidate_key, candidate_value in source.items():
+            if isinstance(candidate_key, str) and candidate_key.lower() == lower_key:
+                return candidate_value
+        return None
+
+    getter = getattr(source, "get", None)
+    if callable(getter):
+        try:
+            value = getter(key)
+            if value is not None:
+                return value
+        except Exception:
+            pass
+
+    return getattr(source, key, None)
+
+
+def _context_path(source: Any, *path: str) -> Any:
+    current = source
+    for key in path:
+        current = _context_get(current, key)
+        if current is None:
+            return None
+    return current
+
+
+def _header_value(headers: Any, name: str) -> Optional[str]:
+    if not isinstance(headers, dict):
+        return None
+
+    lower_name = name.lower()
+    for key, value in headers.items():
+        if isinstance(key, str) and key.lower() == lower_name and isinstance(value, str):
+            return value
+    return None
+
+
+def _extract_headers(context: RequestContext | None) -> Dict[str, str]:
+    candidates = [
+        context,
+        _context_get(context, "headers"),
+        _context_path(context, "request", "headers"),
+        _context_path(context, "requestContext", "headers"),
+        _context_path(context, "request_context", "headers"),
+    ]
+
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            string_headers = {
+                str(key): str(value)
+                for key, value in candidate.items()
+                if isinstance(key, str) and value is not None
+            }
+            if string_headers:
+                return string_headers
+    return {}
+
+
+def _normalize_claims(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            return decoded if isinstance(decoded, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _extract_claims_from_context(context: RequestContext | None) -> Dict[str, Any]:
+    paths = [
+        ("authorizer", "jwt", "claims"),
+        ("requestContext", "authorizer", "jwt", "claims"),
+        ("request_context", "authorizer", "jwt", "claims"),
+        ("jwt", "claims"),
+        ("identity", "claims"),
+        ("claims",),
+    ]
+
+    for path in paths:
+        claims = _normalize_claims(_context_path(context, *path))
+        if claims:
+            return claims
+    return {}
+
+
+def _decode_jwt_claims_unverified(token: str) -> Dict[str, Any]:
+    """Decode JWT claims after Gateway validation. This does not verify the signature locally."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((payload + padding).encode("utf-8"))
+        claims = json.loads(decoded.decode("utf-8"))
+        return claims if isinstance(claims, dict) else {}
+    except Exception:
+        return {}
+
+
+def _extract_claims_from_authorization_header(headers: Dict[str, str]) -> Dict[str, Any]:
+    authorization = _header_value(headers, "authorization")
+    if not authorization:
+        return {}
+
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return {}
+
+    return _decode_jwt_claims_unverified(token.strip())
+
+
+def _claim_actor_id(claims: Dict[str, Any]) -> Optional[str]:
+    for claim_name in ACTOR_CLAIM_NAMES:
+        value = claims.get(claim_name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _trusted_header_actor_id(headers: Dict[str, str]) -> Optional[str]:
+    token_use = _header_value(headers, "x-trusted-token-use")
+    if token_use and token_use != "access":
+        logger.warning(json.dumps({"event": "trusted_actor_header_rejected", "reason": "unexpected_token_use"}))
+        return None
+
+    for header_name in TRUSTED_ACTOR_HEADERS:
+        value = _header_value(headers, header_name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
 def extract_session_id(payload: Dict[str, Any], context: RequestContext | None) -> str:
     session_id = payload.get("sessionId") or payload.get("session_id")
 
     if not session_id and context:
-        getter = getattr(context, "get", None)
-        if callable(getter):
-            session_id = getter("session_id") or getter("sessionId")
-        else:
-            session_id = getattr(context, "session_id", None) or getattr(context, "sessionId", None)
+        session_id = _context_get(context, "session_id") or _context_get(context, "sessionId")
 
     if not session_id:
         raise ValueError("Session ID is required.")
@@ -136,20 +285,45 @@ def extract_session_id(payload: Dict[str, Any], context: RequestContext | None) 
     return session_id
 
 
-def extract_actor_id(payload: Dict[str, Any]) -> str:
+def extract_actor_id(payload: Dict[str, Any], context: RequestContext | None) -> str:
     supplied = sorted(field for field in FORBIDDEN_IDENTITY_FIELDS if field in payload)
     if supplied:
         raise ValueError("Client-supplied identity fields are forbidden.")
 
+    headers = _extract_headers(context)
+    actor_id = _trusted_header_actor_id(headers)
+    if actor_id:
+        return actor_id
+
+    context_claims = _extract_claims_from_context(context)
+    actor_id = _claim_actor_id(context_claims)
+    if actor_id:
+        return actor_id
+
+    header_claims = _extract_claims_from_authorization_header(headers)
+    actor_id = _claim_actor_id(header_claims)
+    if actor_id:
+        return actor_id
+
     trusted_identity = payload.get("trustedIdentity") or payload.get("trusted_identity")
-    if not isinstance(trusted_identity, dict):
-        raise ValueError("trustedIdentity.actorId is required from the server-side facade.")
+    if isinstance(trusted_identity, dict):
+        legacy_actor_id = trusted_identity.get("actorId") or trusted_identity.get("actor_id")
+        if isinstance(legacy_actor_id, str) and legacy_actor_id.strip():
+            return legacy_actor_id.strip()
 
-    actor_id = trusted_identity.get("actorId") or trusted_identity.get("actor_id")
-    if not isinstance(actor_id, str) or not actor_id.strip():
-        raise ValueError("trustedIdentity.actorId is required from the server-side facade.")
-
-    return actor_id.strip()
+    logger.warning(
+        json.dumps(
+            {
+                "event": "actor_resolution_failed",
+                "payload_keys": sorted(payload.keys()),
+                "context_type": type(context).__name__ if context else "none",
+                "header_keys_hash": [safe_hash(key.lower()) for key in sorted(headers.keys())],
+                "context_claim_keys": sorted(context_claims.keys()),
+                "header_claim_keys": sorted(header_claims.keys()),
+            }
+        )
+    )
+    raise ValueError("Authenticated actor identity is unavailable from Gateway-first context.")
 
 
 def log_invocation(session_id: str, actor_id: str, duration_ms: float, status: str, error: str | None = None) -> None:
@@ -394,7 +568,7 @@ async def invoke(payload: Dict[str, Any], context: RequestContext = None) -> str
             raise ValueError("prompt is required.")
 
         session_id = extract_session_id(payload, context)
-        actor_id = extract_actor_id(payload)
+        actor_id = extract_actor_id(payload, context)
 
         memory_id = get_secret_value("MEMORY_ID")
         guardrail_id = get_secret_value("GUARDRAILS_ID")
