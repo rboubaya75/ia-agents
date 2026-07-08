@@ -41,8 +41,8 @@ variable "agentcore_image_tag" {
 
 variable "agentcore_model_id" {
   type        = string
-  description = "Default Bedrock model identifier for the AgentCore runtime."
-  default     = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+  description = "Bedrock model or inference profile identifier for the AgentCore runtime in eu-west-3."
+  default     = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 variable "enable_agentcore_control_plane" {
