@@ -28,25 +28,44 @@ variable "allowed_origins" {
   }
 }
 
-variable "facade_lambda_invoke_arn" {
+variable "agentcore_gateway_url" {
   type        = string
-  description = "Invoke ARN of the Lambda Facade integrated behind POST /agent/invoke. Legacy fallback path during P0."
-}
+  description = "AgentCore Gateway HTTPS invoke URL used by POST /agent/invoke. Leave empty until the Gateway-first contract is validated."
+  default     = ""
 
-variable "facade_lambda_function_name" {
-  type        = string
-  description = "Lambda Facade function name used for API Gateway invoke permission. Legacy fallback path during P0."
+  validation {
+    condition     = var.agentcore_gateway_url == "" || can(regex("^https://", var.agentcore_gateway_url))
+    error_message = "agentcore_gateway_url must be empty or start with https://."
+  }
 }
 
 variable "p0_agentcore_gateway_url" {
   type        = string
-  description = "Optional AgentCore Gateway invoke URL for the isolated P0 route POST /p0/agent/invoke. Leave empty to disable the P0 route."
+  description = "Deprecated alias for the isolated P0 route POST /p0/agent/invoke. Prefer agentcore_gateway_url."
   default     = ""
 
   validation {
     condition     = var.p0_agentcore_gateway_url == "" || can(regex("^https://", var.p0_agentcore_gateway_url))
     error_message = "p0_agentcore_gateway_url must be empty or start with https://."
   }
+}
+
+variable "enable_legacy_facade" {
+  type        = bool
+  description = "Legacy fallback only. Enables API Gateway -> Lambda Facade -> Runtime if an ADR explicitly approves it."
+  default     = false
+}
+
+variable "facade_lambda_invoke_arn" {
+  type        = string
+  description = "Legacy fallback Lambda Facade invoke ARN. Required only when enable_legacy_facade=true."
+  default     = ""
+}
+
+variable "facade_lambda_function_name" {
+  type        = string
+  description = "Legacy fallback Lambda Facade function name. Required only when enable_legacy_facade=true."
+  default     = ""
 }
 
 variable "tags" {
