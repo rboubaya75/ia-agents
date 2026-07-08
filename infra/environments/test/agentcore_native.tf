@@ -11,7 +11,7 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
   count = var.enable_agentcore_control_plane ? 1 : 0
 
   agent_runtime_name = local.agentcore_runtime_name
-  description        = "WildRydes ${var.environment} AgentCore Runtime"
+  description        = "WildRydes ${var.environment} AgentCore Runtime with native Cognito JWT inbound auth"
   role_arn           = aws_iam_role.agentcore_runtime.arn
 
   agent_runtime_artifact {
@@ -31,35 +31,6 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
     GATEWAY_URL        = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
     GATEWAY_AUTH_MODE  = "aws_iam"
   }
-
-  network_configuration {
-    network_mode = "PUBLIC"
-  }
-
-  protocol_configuration {
-    server_protocol = "HTTP"
-  }
-
-  tags = local.common_tags
-}
-
-resource "aws_bedrockagentcore_agent_runtime_endpoint" "default" {
-  count = var.enable_agentcore_control_plane ? 1 : 0
-
-  name                  = var.agent_runtime_endpoint_name
-  agent_runtime_id      = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_id
-  agent_runtime_version = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_version
-  description           = "Default endpoint for WildRydes ${var.environment} AgentCore Runtime"
-  tags                  = local.common_tags
-}
-
-resource "aws_bedrockagentcore_gateway" "ingress" {
-  count = var.enable_agentcore_control_plane ? 1 : 0
-
-  name            = "${local.name_prefix}-ingress-gw"
-  description     = "HTTP ingress gateway routing API Gateway traffic to AgentCore Runtime"
-  role_arn        = aws_iam_role.agentcore_gateway.arn
-  authorizer_type = "CUSTOM_JWT"
 
   authorizer_configuration {
     custom_jwt_authorizer {
@@ -81,27 +52,29 @@ resource "aws_bedrockagentcore_gateway" "ingress" {
     }
   }
 
+  request_header_configuration {
+    request_header_allowlist = ["Authorization"]
+  }
+
+  network_configuration {
+    network_mode = "PUBLIC"
+  }
+
+  protocol_configuration {
+    server_protocol = "HTTP"
+  }
+
   tags = local.common_tags
 }
 
-resource "aws_bedrockagentcore_gateway_target" "runtime_http" {
+resource "aws_bedrockagentcore_agent_runtime_endpoint" "default" {
   count = var.enable_agentcore_control_plane ? 1 : 0
 
-  name               = "${local.name_prefix}-runtime-http"
-  gateway_identifier = aws_bedrockagentcore_gateway.ingress[0].gateway_id
-  description        = "HTTP target from AgentCore ingress gateway to AgentCore Runtime"
-
-  credential_provider_configuration {
-    gateway_iam_role {}
-  }
-
-  target_configuration {
-    http {
-      agentcore_runtime {
-        arn = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn
-      }
-    }
-  }
+  name                  = var.agent_runtime_endpoint_name
+  agent_runtime_id      = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_id
+  agent_runtime_version = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_version
+  description           = "Default endpoint for WildRydes ${var.environment} AgentCore Runtime"
+  tags                  = local.common_tags
 }
 
 resource "aws_bedrockagentcore_gateway" "tools_mcp" {
