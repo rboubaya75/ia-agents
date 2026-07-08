@@ -41,6 +41,25 @@ resource "aws_apigatewayv2_route" "agent_invoke" {
   target             = "integrations/${aws_apigatewayv2_integration.agent_facade.id}"
 }
 
+resource "aws_apigatewayv2_integration" "p0_agentcore_gateway" {
+  count = var.p0_agentcore_gateway_url != "" ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.this.id
+  integration_type   = "HTTP_PROXY"
+  integration_method = "POST"
+  integration_uri    = var.p0_agentcore_gateway_url
+}
+
+resource "aws_apigatewayv2_route" "p0_agent_invoke" {
+  count = var.p0_agentcore_gateway_url != "" ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "POST /p0/agent/invoke"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito_jwt.id
+  target             = "integrations/${aws_apigatewayv2_integration.p0_agentcore_gateway[0].id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.this.id
   name        = "$default"
