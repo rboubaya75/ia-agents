@@ -71,7 +71,7 @@ output "agent_service_name" {
 }
 
 output "agent_service_role_arn" {
-  value = ""
+  value = aws_iam_role.agentcore_runtime.arn
 }
 
 output "agent_service_model_id" {
