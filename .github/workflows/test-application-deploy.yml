@@ -36,7 +36,7 @@ on:
         type: string
         default: ""
       enforce_gateway_first:
-        description: "Fail runtime/full deploy unless AgentCore Gateway and Memory Terraform outputs exist."
+        description: "Fail runtime/full deploy unless native AgentCore Gateway and Memory Terraform outputs exist."
         required: true
         type: boolean
         default: true
@@ -86,8 +86,9 @@ jobs:
 
       - name: Gateway-first architecture notice
         run: |
-          echo "Target: Browser -> API Gateway -> AgentCore Gateway -> Runtime."
+          echo "Target: Browser -> API Gateway -> AgentCore Gateway HTTP target -> Runtime."
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools."
+          echo "AgentCore Runtime, Memory and Gateways are managed by Terraform native resources."
           echo "Lambda Facade activation has been removed from the nominal workflow."
 
       - name: Validate image tag
@@ -129,7 +130,6 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Python deployment dependencies
-        if: inputs.deploy_mode != 'frontend-only'
         run: python3 -m pip install "boto3>=1.43.18"
 
       - name: Resolve stack path
@@ -140,7 +140,7 @@ jobs:
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform init
 
-      - name: Read Terraform outputs
+      - name: Read Terraform base outputs
         id: tfout
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
@@ -156,10 +156,6 @@ jobs:
           agent_service_name="$(terraform output -raw agent_service_name 2>/dev/null || true)"
           agent_service_role_arn="$(terraform output -raw agent_service_role_arn 2>/dev/null || true)"
           agent_service_model_id="$(terraform output -raw agent_service_model_id 2>/dev/null || true)"
-          agentcore_gateway_url="$(terraform output -raw agentcore_gateway_url 2>/dev/null || true)"
-          agentcore_gateway_mcp_url="$(terraform output -raw agentcore_gateway_mcp_url 2>/dev/null || true)"
-          agentcore_memory_id="$(terraform output -raw agentcore_memory_id 2>/dev/null || true)"
-          app_secret_name="$(terraform output -raw app_secret_name 2>/dev/null || true)"
 
           resolved_api_base_url="${{ inputs.api_base_url }}"
           if [ -z "$resolved_api_base_url" ]; then
@@ -212,10 +208,6 @@ jobs:
           echo "agent_service_name=$agent_service_name" >> "$GITHUB_OUTPUT"
           echo "agent_service_role_arn=$agent_service_role_arn" >> "$GITHUB_OUTPUT"
           echo "agent_service_model_id=$agent_service_model_id" >> "$GITHUB_OUTPUT"
-          echo "agentcore_gateway_url=$agentcore_gateway_url" >> "$GITHUB_OUTPUT"
-          echo "agentcore_gateway_mcp_url=$agentcore_gateway_mcp_url" >> "$GITHUB_OUTPUT"
-          echo "agentcore_memory_id=$agentcore_memory_id" >> "$GITHUB_OUTPUT"
-          echo "app_secret_name=$app_secret_name" >> "$GITHUB_OUTPUT"
 
       - name: Application deployment preflight
         run: |
@@ -235,20 +227,6 @@ jobs:
             --cloudfront-distribution-id "${{ steps.tfout.outputs.cloudfront_distribution_id }}" \
             --cognito-user-pool-id "${{ steps.tfout.outputs.cognito_user_pool_id }}" \
             --cognito-web-client-id "${{ steps.tfout.outputs.cognito_web_client_id }}"
-
-      - name: Gateway-first contract pre-deploy gate
-        run: |
-          enforce_flag=""
-          if [ "${{ inputs.enforce_gateway_first }}" = "true" ]; then
-            enforce_flag="--enforce"
-          fi
-          python3 scripts/validate_gateway_first_contract.py \
-            --mode "${{ inputs.deploy_mode }}" \
-            --api-base-url "${{ steps.tfout.outputs.resolved_api_base_url }}" \
-            --agentcore-gateway-url "${{ steps.tfout.outputs.agentcore_gateway_url }}" \
-            --agentcore-gateway-mcp-url "${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}" \
-            --agentcore-memory-id "${{ steps.tfout.outputs.agentcore_memory_id }}" \
-            $enforce_flag
 
       - name: Login to ECR
         if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
@@ -272,25 +250,43 @@ jobs:
             --push \
             "${{ env.DOCKER_BUILD_CONTEXT }}"
 
-      - name: Deploy or update AgentCore Runtime
-        id: runtime
+      - name: Apply native AgentCore control plane
         if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+        working-directory: ${{ steps.stack.outputs.path }}
         run: |
-          python3 scripts/deploy_agent_runtime.py \
-            --name "${{ steps.tfout.outputs.agent_service_name }}" \
-            --image-uri "${{ steps.tfout.outputs.image_uri }}" \
-            --role-arn "${{ steps.tfout.outputs.agent_service_role_arn }}" \
-            --region "${{ env.AWS_REGION }}" \
-            --model-id "${{ steps.tfout.outputs.agent_service_model_id }}" \
-            --endpoint-name "${{ inputs.endpoint_name }}" \
-            --memory-id "${{ steps.tfout.outputs.agentcore_memory_id }}" \
-            --gateway-url "${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}" \
-            --gateway-auth-mode "oauth" \
-            --secret-name "${{ steps.tfout.outputs.app_secret_name }}" \
-            --enable-rag "false"
+          terraform plan \
+            -lock-timeout=60s \
+            -var="enable_agentcore_control_plane=true" \
+            -var="agentcore_image_tag=${{ steps.tfout.outputs.resolved_image_tag }}" \
+            -var="agent_runtime_endpoint_name=${{ inputs.endpoint_name }}" \
+            -out=tfplan-agentcore-control-plane
 
-      - name: Gateway-first contract post-runtime gate
-        if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+          terraform apply -auto-approve -lock-timeout=120s tfplan-agentcore-control-plane
+
+      - name: Refresh Terraform outputs
+        id: tfout_after
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          resolved_api_base_url="${{ inputs.api_base_url }}"
+          service_url="$(terraform output -raw service_url 2>/dev/null || true)"
+          if [ -z "$resolved_api_base_url" ]; then
+            resolved_api_base_url="$service_url"
+          fi
+
+          echo "resolved_api_base_url=$resolved_api_base_url" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_domain_name=$(terraform output -raw cloudfront_domain_name 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "frontend_bucket_name=$(terraform output -raw frontend_bucket_name 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_distribution_id=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "cognito_web_client_id=$(terraform output -raw cognito_web_client_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "agentcore_gateway_url=$(terraform output -raw agentcore_gateway_url 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "agentcore_gateway_mcp_url=$(terraform output -raw agentcore_gateway_mcp_url 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "agentcore_memory_id=$(terraform output -raw agentcore_memory_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "agent_runtime_arn=$(terraform output -raw agent_runtime_arn 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "agent_runtime_endpoint_arn=$(terraform output -raw agent_runtime_endpoint_arn 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+
+      - name: Gateway-first contract gate
+        if: inputs.deploy_mode != 'image-only'
         run: |
           enforce_flag=""
           if [ "${{ inputs.enforce_gateway_first }}" = "true" ]; then
@@ -298,11 +294,11 @@ jobs:
           fi
           python3 scripts/validate_gateway_first_contract.py \
             --mode "${{ inputs.deploy_mode }}" \
-            --api-base-url "${{ steps.tfout.outputs.resolved_api_base_url }}" \
-            --agentcore-gateway-url "${{ steps.tfout.outputs.agentcore_gateway_url }}" \
-            --agentcore-gateway-mcp-url "${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}" \
-            --agentcore-memory-id "${{ steps.tfout.outputs.agentcore_memory_id }}" \
-            --runtime-arn "${{ steps.runtime.outputs.runtime_arn }}" \
+            --api-base-url "${{ steps.tfout_after.outputs.resolved_api_base_url }}" \
+            --agentcore-gateway-url "${{ steps.tfout_after.outputs.agentcore_gateway_url }}" \
+            --agentcore-gateway-mcp-url "${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url }}" \
+            --agentcore-memory-id "${{ steps.tfout_after.outputs.agentcore_memory_id }}" \
+            --runtime-arn "${{ steps.tfout_after.outputs.agent_runtime_arn }}" \
             $enforce_flag
 
       - name: Generate frontend production environment
@@ -310,10 +306,10 @@ jobs:
         working-directory: frontend
         run: |
           {
-            echo "VITE_COGNITO_USER_POOL_ID=${{ steps.tfout.outputs.cognito_user_pool_id }}"
-            echo "VITE_COGNITO_CLIENT_ID=${{ steps.tfout.outputs.cognito_web_client_id }}"
+            echo "VITE_COGNITO_USER_POOL_ID=${{ steps.tfout_after.outputs.cognito_user_pool_id }}"
+            echo "VITE_COGNITO_CLIENT_ID=${{ steps.tfout_after.outputs.cognito_web_client_id }}"
             echo "VITE_COGNITO_REGION=${{ env.AWS_REGION }}"
-            echo "VITE_API_BASE_URL=${{ steps.tfout.outputs.resolved_api_base_url }}"
+            echo "VITE_API_BASE_URL=${{ steps.tfout_after.outputs.resolved_api_base_url }}"
           } > .env.production
 
       - name: Install frontend dependencies
@@ -329,26 +325,27 @@ jobs:
       - name: Sync frontend assets to S3
         if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
         working-directory: frontend
-        run: aws s3 sync dist/ "s3://${{ steps.tfout.outputs.frontend_bucket_name }}" --delete
+        run: aws s3 sync dist/ "s3://${{ steps.tfout_after.outputs.frontend_bucket_name }}" --delete
 
       - name: Invalidate CloudFront distribution
         if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id "${{ steps.tfout.outputs.cloudfront_distribution_id }}" \
+            --distribution-id "${{ steps.tfout_after.outputs.cloudfront_distribution_id }}" \
             --paths "/*"
 
       - name: Deployment summary
         run: |
           echo "Application deployment completed."
           echo "Mode: ${{ inputs.deploy_mode }}"
-          echo "Architecture: Browser -> API Gateway -> AgentCore Gateway -> Runtime"
+          echo "Architecture: Browser -> API Gateway -> AgentCore Gateway HTTP target -> Runtime"
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools"
           echo "Requested image tag: ${{ steps.tfout.outputs.requested_image_tag }}"
           echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
           echo "Image: ${{ steps.tfout.outputs.image_uri }}"
-          echo "API Base URL: ${{ steps.tfout.outputs.resolved_api_base_url }}"
-          echo "AgentCore Gateway URL: ${{ steps.tfout.outputs.agentcore_gateway_url }}"
-          echo "AgentCore Gateway MCP URL: ${{ steps.tfout.outputs.agentcore_gateway_mcp_url }}"
-          echo "AgentCore Memory ID present: ${{ steps.tfout.outputs.agentcore_memory_id != '' }}"
-          echo "CloudFront: https://${{ steps.tfout.outputs.cloudfront_domain_name }}"
+          echo "API Base URL: ${{ steps.tfout_after.outputs.resolved_api_base_url }}"
+          echo "AgentCore Gateway URL: ${{ steps.tfout_after.outputs.agentcore_gateway_url }}"
+          echo "AgentCore Gateway MCP URL: ${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url }}"
+          echo "AgentCore Memory ID present: ${{ steps.tfout_after.outputs.agentcore_memory_id != '' }}"
+          echo "AgentCore Runtime ARN: ${{ steps.tfout_after.outputs.agent_runtime_arn }}"
+          echo "CloudFront: https://${{ steps.tfout_after.outputs.cloudfront_domain_name }}"
