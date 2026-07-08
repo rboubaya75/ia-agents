@@ -230,7 +230,9 @@ jobs:
 
       - name: Login to ECR
         if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
-        uses: aws-actions/amazon-ecr-login@2b4f396d7dc6998f02e6f4a915e8798c568f93a1
+        run: |
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tfout.outputs.ecr_registry }}"
 
       - name: Create Docker buildx builder
         if: inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full'
