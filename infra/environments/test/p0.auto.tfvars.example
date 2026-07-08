@@ -1,0 +1,4 @@
+# Copy to p0.auto.tfvars only during the P0 spike.
+# Do not commit real endpoint values.
+
+p0_agentcore_gateway_url = "https://<agentcore-gateway-invoke-url>"
