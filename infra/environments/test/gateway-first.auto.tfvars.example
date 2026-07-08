@@ -1,8 +1,0 @@
-# Copy to gateway-first.auto.tfvars after the P0 AgentCore Gateway/Memory spike has produced real values.
-# Do not commit real secrets.
-
-agentcore_gateway_url      = "https://replace-with-agentcore-gateway-runtime-target-url.example.com"
-agentcore_gateway_mcp_url  = "https://replace-with-agentcore-gateway-mcp-url.example.com"
-agentcore_memory_id        = "replace-with-agentcore-memory-id"
-agentcore_gateway_auth_mode = "oauth"
-app_secret_name            = ""
