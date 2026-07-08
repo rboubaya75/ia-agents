@@ -44,27 +44,67 @@ variable "agentcore_model_id" {
   default     = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 }
 
+variable "agentcore_gateway_url" {
+  type        = string
+  description = "AgentCore Gateway HTTPS invoke URL used by API Gateway /agent/invoke. Required for Gateway-first runtime/full deploy."
+  default     = ""
+
+  validation {
+    condition     = var.agentcore_gateway_url == "" || can(regex("^https://", var.agentcore_gateway_url))
+    error_message = "agentcore_gateway_url must be empty or start with https://."
+  }
+}
+
+variable "agentcore_gateway_mcp_url" {
+  type        = string
+  description = "AgentCore Gateway MCP HTTPS endpoint used by Runtime to call tools. Required for Gateway-first runtime/full deploy."
+  default     = ""
+
+  validation {
+    condition     = var.agentcore_gateway_mcp_url == "" || can(regex("^https://", var.agentcore_gateway_mcp_url))
+    error_message = "agentcore_gateway_mcp_url must be empty or start with https://."
+  }
+}
+
+variable "agentcore_memory_id" {
+  type        = string
+  description = "AgentCore Memory identifier injected into Runtime. Required for Gateway-first runtime/full deploy."
+  default     = ""
+}
+
+variable "agentcore_gateway_auth_mode" {
+  type        = string
+  description = "Runtime-to-Gateway auth mode injected into Runtime."
+  default     = "oauth"
+}
+
+variable "app_secret_name" {
+  type        = string
+  description = "Optional Secrets Manager secret name injected into Runtime for Gateway auth or application credentials."
+  default     = ""
+}
+
 variable "agent_runtime_ready" {
   type        = bool
-  description = "Enable Lambda Facade invocation of the AgentCore Runtime. Keep false until runtime ARN is known. Legacy fallback only during P0."
+  description = "Legacy fallback only. Do not use for the nominal Gateway-first path."
   default     = false
 }
 
 variable "agent_runtime_arn" {
   type        = string
-  description = "AgentCore Runtime ARN injected into the Lambda Facade after Runtime deployment. Legacy fallback only during P0."
+  description = "Legacy fallback only. Do not use for the nominal Gateway-first path."
   default     = ""
 }
 
 variable "agent_runtime_endpoint_name" {
   type        = string
-  description = "AgentCore Runtime endpoint name used by the Lambda Facade. Legacy fallback only during P0."
+  description = "Legacy fallback only. Do not use for the nominal Gateway-first path."
   default     = "default"
 }
 
 variable "p0_agentcore_gateway_url" {
   type        = string
-  description = "Optional AgentCore Gateway invoke URL used by the isolated P0 route POST /p0/agent/invoke. Leave empty to disable the P0 route."
+  description = "Deprecated alias for agentcore_gateway_url. Kept for P0 compatibility."
   default     = ""
 
   validation {
