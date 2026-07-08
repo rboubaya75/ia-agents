@@ -21,15 +21,15 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
   }
 
   environment_variables = {
-    AWS_REGION        = var.region
+    AWS_REGION         = var.region
     AWS_DEFAULT_REGION = var.region
-    MODEL_ID          = var.agentcore_model_id
-    LOG_LEVEL         = "INFO"
-    SESSION_DIR       = "/tmp/sessions"
-    ENABLE_RAG        = tostring(var.enable_rag)
-    MEMORY_ID         = aws_bedrockagentcore_memory.agent[0].id
-    GATEWAY_URL       = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
-    GATEWAY_AUTH_MODE = "aws_iam"
+    MODEL_ID           = var.agentcore_model_id
+    LOG_LEVEL          = "INFO"
+    SESSION_DIR        = "/tmp/sessions"
+    ENABLE_RAG         = tostring(var.enable_rag)
+    MEMORY_ID          = aws_bedrockagentcore_memory.agent[0].id
+    GATEWAY_URL        = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
+    GATEWAY_AUTH_MODE  = "aws_iam"
   }
 
   network_configuration {
