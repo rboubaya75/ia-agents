@@ -28,15 +28,16 @@ variable "allowed_origins" {
   }
 }
 
+variable "gateway_first_enabled" {
+  type        = bool
+  description = "Create API Gateway routes that proxy to AgentCore Gateway. Must be known at plan time."
+  default     = false
+}
+
 variable "agentcore_gateway_url" {
   type        = string
-  description = "AgentCore Gateway HTTPS invoke URL used by POST /agent/invoke. Leave empty until the Gateway-first contract is validated."
+  description = "AgentCore Gateway HTTPS invoke URL used by POST /agent/invoke."
   default     = ""
-
-  validation {
-    condition     = var.agentcore_gateway_url == "" || can(regex("^https://", var.agentcore_gateway_url))
-    error_message = "agentcore_gateway_url must be empty or start with https://."
-  }
 }
 
 variable "p0_agentcore_gateway_url" {
