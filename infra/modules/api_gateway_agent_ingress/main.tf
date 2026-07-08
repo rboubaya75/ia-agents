@@ -1,6 +1,6 @@
 locals {
   agentcore_gateway_invoke_url = var.agentcore_gateway_url != "" ? var.agentcore_gateway_url : var.p0_agentcore_gateway_url
-  gateway_first_enabled        = local.agentcore_gateway_invoke_url != ""
+  gateway_first_enabled        = var.gateway_first_enabled
   legacy_facade_enabled        = var.enable_legacy_facade && var.facade_lambda_invoke_arn != "" && var.facade_lambda_function_name != ""
 }
 
