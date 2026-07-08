@@ -33,8 +33,9 @@ const buildAuthResult = async (
 ): Promise<AuthResult> => {
   currentCognitoUser = cognitoUser;
 
-  const jwtToken = session.getIdToken().getJwtToken();
-  const userId = extractUserId(jwtToken);
+  const jwtToken = session.getAccessToken().getJwtToken();
+  const idToken = session.getIdToken().getJwtToken();
+  const userId = extractUserId(idToken);
 
   return new Promise((resolve) => {
     cognitoUser.getUserAttributes((err, attributes) => {
@@ -293,7 +294,7 @@ export const getJwtToken = async (): Promise<string> => {
 
       currentCognitoUser = cognitoUser;
 
-      const jwtToken = session.getIdToken().getJwtToken();
+      const jwtToken = session.getAccessToken().getJwtToken();
       resolve(jwtToken);
     });
   });
