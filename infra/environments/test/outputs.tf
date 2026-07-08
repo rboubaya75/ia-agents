@@ -91,7 +91,7 @@ output "agent_runtime_endpoint_arn" {
 }
 
 output "agent_runtime_invoke_url" {
-  value = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=${var.agent_runtime_endpoint_name}", "")
+  value = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=DEFAULT", "")
 }
 
 output "agentcore_gateway_url" {
