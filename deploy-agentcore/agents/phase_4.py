@@ -39,17 +39,10 @@ Guidelines:
 - Ask clarifying questions when needed.
 - Provide specific, actionable travel recommendations.
 - Stay focused on travel-related topics.
-- Use trip planning tools to create, view and update trips for users when tools are available.
+- Use trip planning tools to create, view and update trips for users.
 - Do not ask the user for userId, actorId, tenantId or trustedIdentity.
 - Trip tool identity is injected by the runtime based on the authenticated server context.
 - Keep answers concise and helpful.
-"""
-
-TOOLS_DISABLED_PROMPT_SUFFIX = """
-
-Runtime note: external tools are unavailable for the selected model in streaming mode.
-Answer from model knowledge and conversation context only, and do not claim to have created,
-updated, searched or persisted trips unless a tool result is present in the conversation.
 """
 
 
@@ -80,8 +73,8 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 
 
-MODEL_ID = os.getenv("MODEL_ID", "eu.mistral.pixtral-large-2502-v1:0")
-REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "eu-west-3"))
+MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
+REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
 SESSION_DIR = os.getenv("SESSION_DIR", "/tmp/sessions")
 APP_SECRET_NAME = os.getenv("APP_SECRET_NAME")
 
@@ -109,12 +102,6 @@ TRUSTED_ACTOR_HEADERS = (
 )
 
 ACTOR_CLAIM_NAMES = ("sub", "username", "cognito:username")
-TOOLS_ENABLED_VALUES = {"1", "true", "yes", "on"}
-TOOLS_DISABLED_VALUES = {"0", "false", "no", "off"}
-STREAMING_TOOL_UNSUPPORTED_MODEL_MARKERS = (
-    "mistral",
-    "pixtral",
-)
 
 
 def safe_hash(value: Optional[str]) -> str:
@@ -130,7 +117,7 @@ def validate_session_id(session_id: str) -> bool:
 def get_secret_value(key: str, default: Optional[str] = None) -> Optional[str]:
     """Read config from env first, then optional Secrets Manager config.
 
-    Terraform injects runtime config directly as environment variables. Secrets
+    P0 Terraform injects runtime config directly as environment variables. Secrets
     Manager is optional. Missing optional secrets must not fail the Runtime path.
     """
     global _secret_cache, _secret_lookup_failed
@@ -604,56 +591,6 @@ def initialize_mcp_tools() -> list[Any]:
     return mcp_tools
 
 
-def _parse_bool(value: Optional[str]) -> Optional[bool]:
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    if normalized in TOOLS_ENABLED_VALUES:
-        return True
-    if normalized in TOOLS_DISABLED_VALUES:
-        return False
-    return None
-
-
-def model_supports_streaming_tools(model_id: str) -> bool:
-    """Return whether tools should be passed to Strands for the current streaming Bedrock path.
-
-    Strands uses Bedrock ConverseStream under the hood. Some Bedrock models, including
-    the currently selected Mistral/Pixtral inference profile, reject toolConfig with
-    ConverseStream and fail with: "This model doesn't support tool use in streaming mode."
-    """
-    override = _parse_bool(os.getenv("AGENT_TOOLS_ENABLED"))
-    if override is not None:
-        return override
-
-    normalized_model_id = model_id.lower()
-    return not any(marker in normalized_model_id for marker in STREAMING_TOOL_UNSUPPORTED_MODEL_MARKERS)
-
-
-def build_tools_for_model(model_id: str) -> list[Any]:
-    if not model_supports_streaming_tools(model_id):
-        logger.warning(
-            json.dumps(
-                {
-                    "event": "agent_tools_disabled_for_model",
-                    "model_hash": safe_hash(model_id),
-                    "reason": "model_does_not_support_tool_use_in_streaming_mode",
-                }
-            )
-        )
-        return []
-
-    tools: list[Any] = [web_search]
-    tools.extend(initialize_mcp_tools())
-    return tools
-
-
-def system_prompt_for_tools(tools: list[Any]) -> str:
-    if tools:
-        return PHASE4_SYSTEM_PROMPT
-    return PHASE4_SYSTEM_PROMPT + TOOLS_DISABLED_PROMPT_SUFFIX
-
-
 @app.entrypoint
 async def invoke(payload: Dict[str, Any], context: RequestContext = None) -> str:
     start_time = datetime.utcnow()
@@ -699,21 +636,22 @@ async def invoke(payload: Dict[str, Any], context: RequestContext = None) -> str
         session_manager = FileSessionManager(session_id=session_id, session_dir=SESSION_DIR)
 
         hooks: list[HookProvider] = [UserIdInjectionHook(actor_id)]
+        memory_hooks = None
         if memory_id:
-            hooks.append(TravelAgentMemoryHooks(memory_id, memory_client))
+            memory_hooks = TravelAgentMemoryHooks(memory_id, memory_client)
+            hooks.append(memory_hooks)
 
-        tools = build_tools_for_model(MODEL_ID)
-        agent_kwargs: Dict[str, Any] = {
-            "system_prompt": system_prompt_for_tools(tools),
-            "model": model,
-            "session_manager": session_manager,
-            "hooks": hooks,
-            "state": {"actor_id": actor_id, "session_id": session_id},
-        }
-        if tools:
-            agent_kwargs["tools"] = tools
+        tools: list[Any] = [web_search]
+        tools.extend(initialize_mcp_tools())
 
-        agent = Agent(**agent_kwargs)
+        agent = Agent(
+            system_prompt=PHASE4_SYSTEM_PROMPT,
+            model=model,
+            session_manager=session_manager,
+            hooks=hooks,
+            tools=tools,
+            state={"actor_id": actor_id, "session_id": session_id},
+        )
 
         response = agent(user_input)
         result = response.message["content"][0]["text"]
