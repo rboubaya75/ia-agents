@@ -45,44 +45,27 @@ variable "agentcore_model_id" {
   default     = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 }
 
-variable "agentcore_gateway_url" {
+variable "enable_agentcore_control_plane" {
+  type        = bool
+  description = "Create the native AgentCore Runtime, Memory, Gateways and Gateway HTTP target. Enable only after the runtime image exists in ECR."
+  default     = false
+}
+
+variable "agent_runtime_endpoint_name" {
   type        = string
-  description = "AgentCore Gateway HTTPS invoke URL used by API Gateway /agent/invoke. Required for Gateway-first runtime/full deploy."
-  default     = ""
+  description = "AgentCore Runtime endpoint name managed by Terraform."
+  default     = "default"
+}
+
+variable "agentcore_memory_event_expiry_days" {
+  type        = number
+  description = "Number of days after which AgentCore Memory events expire."
+  default     = 30
 
   validation {
-    condition     = var.agentcore_gateway_url == "" || can(regex("^https://", var.agentcore_gateway_url))
-    error_message = "agentcore_gateway_url must be empty or start with https://."
+    condition     = var.agentcore_memory_event_expiry_days >= 7 && var.agentcore_memory_event_expiry_days <= 365
+    error_message = "agentcore_memory_event_expiry_days must be between 7 and 365."
   }
-}
-
-variable "agentcore_gateway_mcp_url" {
-  type        = string
-  description = "AgentCore Gateway MCP HTTPS endpoint used by Runtime to call tools. Required for Gateway-first runtime/full deploy."
-  default     = ""
-
-  validation {
-    condition     = var.agentcore_gateway_mcp_url == "" || can(regex("^https://", var.agentcore_gateway_mcp_url))
-    error_message = "agentcore_gateway_mcp_url must be empty or start with https://."
-  }
-}
-
-variable "agentcore_memory_id" {
-  type        = string
-  description = "AgentCore Memory identifier injected into Runtime. Required for Gateway-first runtime/full deploy."
-  default     = ""
-}
-
-variable "agentcore_gateway_auth_mode" {
-  type        = string
-  description = "Runtime-to-Gateway auth mode injected into Runtime."
-  default     = "oauth"
-}
-
-variable "app_secret_name" {
-  type        = string
-  description = "Optional Secrets Manager secret name injected into Runtime for Gateway auth or application credentials."
-  default     = ""
 }
 
 variable "agent_runtime_ready" {
@@ -97,15 +80,9 @@ variable "agent_runtime_arn" {
   default     = ""
 }
 
-variable "agent_runtime_endpoint_name" {
-  type        = string
-  description = "Legacy fallback only. Do not use for the nominal Gateway-first path."
-  default     = "default"
-}
-
 variable "p0_agentcore_gateway_url" {
   type        = string
-  description = "Deprecated alias for agentcore_gateway_url. Kept for P0 compatibility."
+  description = "Deprecated legacy/P0 override. Do not use for the native Gateway-first path."
   default     = ""
 
   validation {
