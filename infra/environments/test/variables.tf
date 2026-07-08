@@ -46,18 +46,29 @@ variable "agentcore_model_id" {
 
 variable "agent_runtime_ready" {
   type        = bool
-  description = "Enable Lambda Facade invocation of the AgentCore Runtime. Keep false until runtime ARN is known."
+  description = "Enable Lambda Facade invocation of the AgentCore Runtime. Keep false until runtime ARN is known. Legacy fallback only during P0."
   default     = false
 }
 
 variable "agent_runtime_arn" {
   type        = string
-  description = "AgentCore Runtime ARN injected into the Lambda Facade after Runtime deployment."
+  description = "AgentCore Runtime ARN injected into the Lambda Facade after Runtime deployment. Legacy fallback only during P0."
   default     = ""
 }
 
 variable "agent_runtime_endpoint_name" {
   type        = string
-  description = "AgentCore Runtime endpoint name used by the Lambda Facade."
+  description = "AgentCore Runtime endpoint name used by the Lambda Facade. Legacy fallback only during P0."
   default     = "default"
+}
+
+variable "p0_agentcore_gateway_url" {
+  type        = string
+  description = "Optional AgentCore Gateway invoke URL used by the isolated P0 route POST /p0/agent/invoke. Leave empty to disable the P0 route."
+  default     = ""
+
+  validation {
+    condition     = var.p0_agentcore_gateway_url == "" || can(regex("^https://", var.p0_agentcore_gateway_url))
+    error_message = "p0_agentcore_gateway_url must be empty or start with https://."
+  }
 }
