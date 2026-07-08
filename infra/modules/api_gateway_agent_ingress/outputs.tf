@@ -26,10 +26,18 @@ output "jwt_audience" {
   value = var.jwt_audience
 }
 
+output "gateway_first_enabled" {
+  value = local.gateway_first_enabled
+}
+
+output "agent_invoke_url" {
+  value = local.gateway_first_enabled ? "${aws_apigatewayv2_api.this.api_endpoint}/agent/invoke" : ""
+}
+
 output "p0_agentcore_gateway_enabled" {
-  value = var.p0_agentcore_gateway_url != ""
+  value = local.gateway_first_enabled
 }
 
 output "p0_agent_invoke_url" {
-  value = var.p0_agentcore_gateway_url != "" ? "${aws_apigatewayv2_api.this.api_endpoint}/p0/agent/invoke" : ""
+  value = local.gateway_first_enabled ? "${aws_apigatewayv2_api.this.api_endpoint}/p0/agent/invoke" : ""
 }
