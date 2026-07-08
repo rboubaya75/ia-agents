@@ -59,12 +59,12 @@ resource "aws_bedrockagentcore_gateway" "ingress" {
   name            = "${local.name_prefix}-ingress-gw"
   description     = "HTTP ingress gateway routing API Gateway traffic to AgentCore Runtime"
   role_arn        = aws_iam_role.agentcore_gateway.arn
-  authorizer_type = "CUSTOM_JWT"
+  authorizer_type = "AUTHENTICATE_ONLY"
 
   authorizer_configuration {
     custom_jwt_authorizer {
-      discovery_url    = "https://cognito-idp.${var.region}.amazonaws.com/${module.cognito_web_auth.user_pool_id}/.well-known/openid-configuration"
-      allowed_audience = [module.cognito_web_auth.client_id]
+      discovery_url   = "https://cognito-idp.${var.region}.amazonaws.com/${module.cognito_web_auth.user_pool_id}/.well-known/openid-configuration"
+      allowed_clients = [module.cognito_web_auth.client_id]
 
       custom_claim {
         inbound_token_claim_name       = "token_use"
@@ -74,7 +74,7 @@ resource "aws_bedrockagentcore_gateway" "ingress" {
           claim_match_operator = "EQUALS"
 
           claim_match_value {
-            match_value_string = "id"
+            match_value_string = "access"
           }
         }
       }
