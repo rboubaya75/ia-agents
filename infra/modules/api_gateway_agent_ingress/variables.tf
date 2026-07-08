@@ -36,7 +36,13 @@ variable "gateway_first_enabled" {
 
 variable "agentcore_gateway_url" {
   type        = string
-  description = "AgentCore Gateway HTTPS invoke URL used by POST /agent/invoke."
+  description = "AgentCore Gateway base HTTPS URL. Runtime HTTP targets are invoked through /{targetName}/invocations."
+  default     = ""
+}
+
+variable "agentcore_runtime_target_name" {
+  type        = string
+  description = "AgentCore Gateway Runtime HTTP target name used in /{targetName}/invocations."
   default     = ""
 }
 
