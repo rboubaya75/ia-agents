@@ -68,12 +68,17 @@ def check_frontend(options: argparse.Namespace, result: CheckResult) -> None:
         return
 
     required = {
-        "api_base_url": options.api_base_url,
         "frontend_bucket_name": options.frontend_bucket_name,
         "cloudfront_distribution_id": options.cloudfront_distribution_id,
         "cognito_user_pool_id": options.cognito_user_pool_id,
         "cognito_web_client_id": options.cognito_web_client_id,
     }
+
+    # In full mode the native Runtime JWT invoke URL is created/refreshed by the
+    # Terraform apply later in the workflow, before the frontend .env is generated.
+    if options.mode == "frontend-only":
+        required["api_base_url"] = options.api_base_url
+
     missing = [name for name, value in required.items() if not value]
     if missing:
         result.error(f"Missing frontend outputs: {', '.join(missing)}")
@@ -168,7 +173,6 @@ def check_runtime(options: argparse.Namespace, result: CheckResult) -> None:
     except Exception as exc:  # pragma: no cover - defensive in CI
         result.warn(f"Unable to import boto3 for AgentCore SDK preflight: {exc}")
         return
-
     services = set(boto3.session.Session(region_name=options.region).get_available_services())
     if "bedrock-agentcore-control" not in services:
         result.error("Installed boto3/botocore does not expose bedrock-agentcore-control service.")
