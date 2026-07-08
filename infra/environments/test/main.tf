@@ -1,9 +1,5 @@
 data "aws_caller_identity" "current" {}
 
-locals {
-  effective_agentcore_gateway_url = var.agentcore_gateway_url != "" ? var.agentcore_gateway_url : var.p0_agentcore_gateway_url
-}
-
 module "frontend_static_site" {
   source = "../../modules/frontend_static_site"
 
@@ -39,16 +35,6 @@ module "agentcore_container_repository" {
   tags         = local.common_tags
 }
 
-module "agentcore_gateway_contract" {
-  source = "../../modules/agentcore_gateway_contract"
-
-  gateway_url     = local.effective_agentcore_gateway_url
-  gateway_mcp_url = var.agentcore_gateway_mcp_url
-  memory_id       = var.agentcore_memory_id
-  auth_mode       = var.agentcore_gateway_auth_mode
-  app_secret_name = var.app_secret_name
-}
-
 module "api_gateway_agent_ingress" {
   source = "../../modules/api_gateway_agent_ingress"
 
@@ -56,6 +42,6 @@ module "api_gateway_agent_ingress" {
   jwt_issuer            = "https://cognito-idp.${var.region}.amazonaws.com/${module.cognito_web_auth.user_pool_id}"
   jwt_audience          = [module.cognito_web_auth.client_id]
   allowed_origins       = ["https://${module.frontend_static_site.cloudfront_domain_name}"]
-  agentcore_gateway_url = module.agentcore_gateway_contract.gateway_url
+  agentcore_gateway_url = try(aws_bedrockagentcore_gateway.ingress[0].gateway_url, var.p0_agentcore_gateway_url)
   tags                  = local.common_tags
 }
