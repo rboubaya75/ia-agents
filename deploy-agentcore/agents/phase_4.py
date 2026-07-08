@@ -1,10 +1,10 @@
 """Secure Phase 4 AgentCore runtime entrypoint.
 
 V1 security principles:
-- the browser must not call AgentCore Runtime directly;
+- user requests are authorized by AgentCore Runtime native JWT inbound auth;
 - client-side identity fields are rejected;
-- actor identity is derived from trusted server-side context such as API Gateway
-  JWT claim headers, AgentCore Gateway context, or the legacy server-side facade;
+- actor identity is derived from Runtime-validated JWT claims propagated through
+  the allowlisted Authorization header, or from legacy trustedIdentity.actorId;
 - logs must avoid raw prompts, tokens, secrets and tool inputs.
 """
 
@@ -209,11 +209,12 @@ def _header_value(headers: Any, name: str) -> Optional[str]:
 
 def _extract_headers(context: RequestContext | None) -> Dict[str, str]:
     candidates = [
-        context,
+        _context_get(context, "request_headers"),
         _context_get(context, "headers"),
         _context_path(context, "request", "headers"),
         _context_path(context, "requestContext", "headers"),
         _context_path(context, "request_context", "headers"),
+        context,
     ]
 
     for candidate in candidates:
@@ -258,7 +259,7 @@ def _extract_claims_from_context(context: RequestContext | None) -> Dict[str, An
 
 
 def _decode_jwt_claims_unverified(token: str) -> Dict[str, Any]:
-    """Decode JWT claims after upstream Gateway validation. This does not verify the signature locally."""
+    """Decode JWT claims after upstream Runtime validation. This does not verify the signature locally."""
     parts = token.split(".")
     if len(parts) < 2:
         return {}
@@ -357,7 +358,7 @@ def extract_actor_id(payload: Dict[str, Any], context: RequestContext | None) ->
             }
         )
     )
-    raise ValueError("Authenticated actor identity is unavailable from Gateway-first context.")
+    raise ValueError("Authenticated actor identity is unavailable from Runtime JWT context.")
 
 
 def log_invocation(session_id: str, actor_id: str, duration_ms: float, status: str, error: str | None = None) -> None:
