@@ -42,7 +42,7 @@ variable "agentcore_image_tag" {
 variable "agentcore_model_id" {
   type        = string
   description = "Bedrock model or inference profile identifier for the AgentCore runtime in eu-west-3."
-  default     = "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+  default     = "eu.mistral.pixtral-large-2502-v1:0"
 }
 
 variable "enable_agentcore_control_plane" {
