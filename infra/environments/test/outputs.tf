@@ -50,6 +50,58 @@ output "agentcore_ecr_repository_arn" {
   value = module.agentcore_container_repository.repository_arn
 }
 
+output "service_url" {
+  value = module.api_gateway_agent_ingress.api_endpoint
+}
+
+output "agent_invoke_url" {
+  value = module.api_gateway_agent_ingress.agent_invoke_url
+}
+
+output "api_gateway_api_id" {
+  value = module.api_gateway_agent_ingress.api_id
+}
+
+output "api_gateway_stage_name" {
+  value = module.api_gateway_agent_ingress.stage_name
+}
+
+output "agent_service_name" {
+  value = "${local.name_prefix}-runtime"
+}
+
+output "agent_service_role_arn" {
+  value = ""
+}
+
+output "agent_service_model_id" {
+  value = var.agentcore_model_id
+}
+
+output "agentcore_gateway_url" {
+  value = module.agentcore_gateway_contract.gateway_url
+}
+
+output "agentcore_gateway_mcp_url" {
+  value = module.agentcore_gateway_contract.gateway_mcp_url
+}
+
+output "agentcore_memory_id" {
+  value = module.agentcore_gateway_contract.memory_id
+}
+
+output "agentcore_gateway_auth_mode" {
+  value = module.agentcore_gateway_contract.auth_mode
+}
+
+output "app_secret_name" {
+  value = module.agentcore_gateway_contract.app_secret_name
+}
+
+output "gateway_first_ready" {
+  value = module.agentcore_gateway_contract.gateway_first_ready
+}
+
 output "p0_agentcore_gateway_enabled" {
   value = module.api_gateway_agent_ingress.p0_agentcore_gateway_enabled
 }
