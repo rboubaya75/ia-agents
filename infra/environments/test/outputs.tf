@@ -67,7 +67,7 @@ output "api_gateway_stage_name" {
 }
 
 output "agent_service_name" {
-  value = "${local.name_prefix}-runtime"
+  value = local.agentcore_runtime_name
 }
 
 output "agent_service_role_arn" {
@@ -78,28 +78,44 @@ output "agent_service_model_id" {
   value = var.agentcore_model_id
 }
 
+output "agent_runtime_arn" {
+  value = try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn, "")
+}
+
+output "agent_runtime_id" {
+  value = try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_id, "")
+}
+
+output "agent_runtime_endpoint_arn" {
+  value = try(aws_bedrockagentcore_agent_runtime_endpoint.default[0].agent_runtime_endpoint_arn, "")
+}
+
 output "agentcore_gateway_url" {
-  value = module.agentcore_gateway_contract.gateway_url
+  value = try(aws_bedrockagentcore_gateway.ingress[0].gateway_url, "")
 }
 
 output "agentcore_gateway_mcp_url" {
-  value = module.agentcore_gateway_contract.gateway_mcp_url
+  value = try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "")
 }
 
 output "agentcore_memory_id" {
-  value = module.agentcore_gateway_contract.memory_id
+  value = try(aws_bedrockagentcore_memory.agent[0].id, "")
+}
+
+output "agentcore_memory_arn" {
+  value = try(aws_bedrockagentcore_memory.agent[0].arn, "")
 }
 
 output "agentcore_gateway_auth_mode" {
-  value = module.agentcore_gateway_contract.auth_mode
+  value = "aws_iam"
 }
 
 output "app_secret_name" {
-  value = module.agentcore_gateway_contract.app_secret_name
+  value = ""
 }
 
 output "gateway_first_ready" {
-  value = module.agentcore_gateway_contract.gateway_first_ready
+  value = var.enable_agentcore_control_plane && try(aws_bedrockagentcore_gateway.ingress[0].gateway_url, "") != "" && try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "") != "" && try(aws_bedrockagentcore_memory.agent[0].id, "") != ""
 }
 
 output "p0_agentcore_gateway_enabled" {
