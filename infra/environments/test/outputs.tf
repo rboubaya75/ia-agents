@@ -90,8 +90,12 @@ output "agent_runtime_endpoint_arn" {
   value = try(aws_bedrockagentcore_agent_runtime_endpoint.default[0].agent_runtime_endpoint_arn, "")
 }
 
+output "agent_runtime_invoke_url" {
+  value = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=${var.agent_runtime_endpoint_name}", "")
+}
+
 output "agentcore_gateway_url" {
-  value = try(aws_bedrockagentcore_gateway.ingress[0].gateway_url, "")
+  value = ""
 }
 
 output "agentcore_gateway_mcp_url" {
@@ -115,13 +119,5 @@ output "app_secret_name" {
 }
 
 output "gateway_first_ready" {
-  value = var.enable_agentcore_control_plane && try(aws_bedrockagentcore_gateway.ingress[0].gateway_url, "") != "" && try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "") != "" && try(aws_bedrockagentcore_memory.agent[0].id, "") != ""
-}
-
-output "p0_agentcore_gateway_enabled" {
-  value = module.api_gateway_agent_ingress.p0_agentcore_gateway_enabled
-}
-
-output "p0_agent_invoke_url" {
-  value = module.api_gateway_agent_ingress.p0_agent_invoke_url
+  value = var.enable_agentcore_control_plane && try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn, "") != "" && try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "") != "" && try(aws_bedrockagentcore_memory.agent[0].id, "") != ""
 }
