@@ -25,3 +25,11 @@ output "jwt_issuer" {
 output "jwt_audience" {
   value = var.jwt_audience
 }
+
+output "p0_agentcore_gateway_enabled" {
+  value = var.p0_agentcore_gateway_url != ""
+}
+
+output "p0_agent_invoke_url" {
+  value = var.p0_agentcore_gateway_url != "" ? "${aws_apigatewayv2_api.this.api_endpoint}/p0/agent/invoke" : ""
+}
