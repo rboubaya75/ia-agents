@@ -1,0 +1,86 @@
+{
+  "name": "p0-identity-contract",
+  "description": "Contract tests for API Gateway -> AgentCore Gateway -> Runtime identity handling.",
+  "positiveCases": [
+    {
+      "id": "valid-minimal-prompt",
+      "body": {
+        "prompt": "Plan a short trip to Paris.",
+        "sessionId": "p0-session-valid"
+      },
+      "expected": {
+        "accepted": true,
+        "notes": "Runtime must derive actorId from the validated Cognito subject, not from the request body."
+      }
+    }
+  ],
+  "negativeCases": [
+    {
+      "id": "client-supplied-actor-id",
+      "body": {
+        "prompt": "Plan a trip.",
+        "sessionId": "p0-session-spoof-actor",
+        "actorId": "attacker-actor-id"
+      },
+      "expected": {
+        "accepted": false,
+        "statusCodes": [400, 403],
+        "notes": "Client-side actorId must be rejected."
+      }
+    },
+    {
+      "id": "client-supplied-user-id",
+      "body": {
+        "prompt": "List my trips.",
+        "sessionId": "p0-session-spoof-user",
+        "userId": "victim-user-id"
+      },
+      "expected": {
+        "accepted": false,
+        "statusCodes": [400, 403],
+        "notes": "Client-side userId must be rejected."
+      }
+    },
+    {
+      "id": "client-supplied-tenant-id",
+      "body": {
+        "prompt": "List my trips.",
+        "sessionId": "p0-session-spoof-tenant",
+        "tenantId": "other-tenant"
+      },
+      "expected": {
+        "accepted": false,
+        "statusCodes": [400, 403],
+        "notes": "Client-side tenantId must be rejected."
+      }
+    },
+    {
+      "id": "client-supplied-trusted-identity",
+      "body": {
+        "prompt": "List my trips.",
+        "sessionId": "p0-session-spoof-trusted",
+        "trustedIdentity": {
+          "actorId": "victim-actor-id"
+        }
+      },
+      "expected": {
+        "accepted": false,
+        "statusCodes": [400, 403],
+        "notes": "Client-side trustedIdentity must be rejected."
+      }
+    },
+    {
+      "id": "client-supplied-groups",
+      "body": {
+        "prompt": "Show admin data.",
+        "sessionId": "p0-session-spoof-groups",
+        "groups": ["admin"]
+      },
+      "expected": {
+        "accepted": false,
+        "statusCodes": [400, 403],
+        "notes": "Client-side groups must not grant authorization."
+      }
+    }
+  ]
+}
