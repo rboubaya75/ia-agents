@@ -1,11 +1,19 @@
 import type { ChatResponse } from '../types';
 
+const AGENT_RUNTIME_INVOKE_URL =
+  import.meta.env.VITE_AGENT_RUNTIME_INVOKE_URL || import.meta.env.NEXT_PUBLIC_AGENT_RUNTIME_INVOKE_URL;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.NEXT_PUBLIC_API_BASE_URL;
 const REQUEST_TIMEOUT = 120000;
 
 const getAgentInvokeEndpoint = (): string => {
+  if (AGENT_RUNTIME_INVOKE_URL) {
+    return AGENT_RUNTIME_INVOKE_URL;
+  }
+
   if (!API_BASE_URL) {
-    throw new Error('API base URL is not configured. Please set VITE_API_BASE_URL.');
+    throw new Error(
+      'Agent Runtime invoke URL is not configured. Please set VITE_AGENT_RUNTIME_INVOKE_URL.'
+    );
   }
 
   return `${API_BASE_URL.replace(/\/$/, '')}/agent/invoke`;
@@ -38,6 +46,7 @@ export const sendMessage = async (
       headers: {
         Authorization: ['Bearer', accessToken].join(' '),
         'Content-Type': 'application/json',
+        'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': sessionId,
       },
       body: JSON.stringify({
         prompt: message,
