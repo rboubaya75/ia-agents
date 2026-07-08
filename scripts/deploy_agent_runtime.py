@@ -25,6 +25,11 @@ def args() -> argparse.Namespace:
     parser.add_argument("--region", required=True)
     parser.add_argument("--model-id", required=True)
     parser.add_argument("--endpoint-name", default="default")
+    parser.add_argument("--memory-id", default="")
+    parser.add_argument("--gateway-url", default="")
+    parser.add_argument("--gateway-auth-mode", default="")
+    parser.add_argument("--secret-name", default="")
+    parser.add_argument("--enable-rag", default="false", choices=["true", "false"])
     parser.add_argument("--wait-seconds", type=int, default=900)
     return parser.parse_args()
 
@@ -70,26 +75,31 @@ def wait_runtime(client: Any, runtime_id: str, wait_seconds: int) -> Dict[str, A
 
 
 def request_payload(options: argparse.Namespace) -> Dict[str, Any]:
+    environment_variables = {
+        "AWS_REGION": options.region,
+        "AWS_DEFAULT_REGION": options.region,
+        "MODEL_ID": options.model_id,
+        "LOG_LEVEL": "INFO",
+        "SESSION_DIR": "/tmp/sessions",
+        "ENABLE_RAG": options.enable_rag,
+    }
+
+    optional_values = {
+        "MEMORY_ID": options.memory_id,
+        "GATEWAY_URL": options.gateway_url,
+        "GATEWAY_AUTH_MODE": options.gateway_auth_mode,
+        "SECRET_NAME": options.secret_name,
+    }
+    for key, value in optional_values.items():
+        if value:
+            environment_variables[key] = value
+
     return {
         "agentRuntimeArtifact": {"containerConfiguration": {"containerUri": options.image_uri}},
         "roleArn": options.role_arn,
         "networkConfiguration": {"networkMode": "PUBLIC"},
         "protocolConfiguration": {"serverProtocol": "HTTP"},
-        "environmentVariables": {
-            "AWS_REGION": options.region,
-            "AWS_DEFAULT_REGION": options.region,
-            "MODEL_ID": options.model_id,
-            "LOG_LEVEL": "INFO",
-            "SESSION_DIR": "/tmp/sessions",
-            "MEMORY_ID": "",
-            "GATEWAY_URL": "",
-            "CLIENT_ID": "",
-            "CLIENT_SECRET": "",
-            "TOKEN_URL": "",
-            "SCOPE_STRING": "",
-            "GUARDRAILS_ID": "",
-            "GUARDRAILS_VERSION": "1",
-        },
+        "environmentVariables": environment_variables,
         "description": "Secure WildRydes AgentCore Runtime managed by the test deployment workflow.",
     }
 
