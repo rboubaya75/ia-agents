@@ -76,13 +76,14 @@ logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 MODEL_ID = os.getenv("MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
 REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
 SESSION_DIR = os.getenv("SESSION_DIR", "/tmp/sessions")
-APP_SECRET_NAME = os.getenv("APP_SECRET_NAME", "wildrydes-secrets")
+APP_SECRET_NAME = os.getenv("APP_SECRET_NAME")
 
 app = BedrockAgentCoreApp()
 memory_client = MemoryClient(region_name=REGION)
 mcp_client: Optional[MCPClient] = None
 mcp_tools = []
 _secret_cache: Optional[Dict[str, Any]] = None
+_secret_lookup_failed = False
 
 
 FORBIDDEN_IDENTITY_FIELDS = {
@@ -114,16 +115,37 @@ def validate_session_id(session_id: str) -> bool:
 
 
 def get_secret_value(key: str, default: Optional[str] = None) -> Optional[str]:
-    global _secret_cache
+    """Read config from env first, then optional Secrets Manager config.
+
+    P0 Terraform injects runtime config directly as environment variables. Secrets
+    Manager is optional. Missing optional secrets must not fail the Runtime path.
+    """
+    global _secret_cache, _secret_lookup_failed
 
     env_value = os.getenv(key)
     if env_value is not None:
         return env_value
 
+    if not APP_SECRET_NAME or _secret_lookup_failed:
+        return default
+
     if _secret_cache is None:
-        client = boto3.client("secretsmanager", region_name=REGION)
-        response = client.get_secret_value(SecretId=APP_SECRET_NAME)
-        _secret_cache = json.loads(response.get("SecretString", "{}"))
+        try:
+            client = boto3.client("secretsmanager", region_name=REGION)
+            response = client.get_secret_value(SecretId=APP_SECRET_NAME)
+            _secret_cache = json.loads(response.get("SecretString", "{}"))
+        except Exception as exc:
+            _secret_lookup_failed = True
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "optional_secret_lookup_failed",
+                        "secret_hash": safe_hash(APP_SECRET_NAME),
+                        "error_type": type(exc).__name__,
+                    }
+                )
+            )
+            return default
 
     return _secret_cache.get(key, default)
 
