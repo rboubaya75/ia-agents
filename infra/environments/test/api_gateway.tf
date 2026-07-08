@@ -7,5 +7,6 @@ module "api_gateway_agent_ingress" {
   allowed_origins             = ["https://${module.frontend_static_site.cloudfront_domain_name}"]
   facade_lambda_invoke_arn    = module.agent_api_facade.invoke_arn
   facade_lambda_function_name = module.agent_api_facade.function_name
+  p0_agentcore_gateway_url    = var.p0_agentcore_gateway_url
   tags                        = local.common_tags
 }
