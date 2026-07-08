@@ -65,6 +65,21 @@ resource "aws_bedrockagentcore_gateway" "ingress" {
     custom_jwt_authorizer {
       discovery_url    = "https://cognito-idp.${var.region}.amazonaws.com/${module.cognito_web_auth.user_pool_id}/.well-known/openid-configuration"
       allowed_audience = [module.cognito_web_auth.client_id]
+      allowed_clients  = [module.cognito_web_auth.client_id]
+      allowed_scopes   = ["aws.cognito.signin.user.admin"]
+
+      custom_claim {
+        inbound_token_claim_name       = "token_use"
+        inbound_token_claim_value_type = "STRING"
+
+        authorizing_claim_match_value {
+          claim_match_operator = "EQUALS"
+
+          claim_match_value {
+            match_value_string = "access"
+          }
+        }
+      }
     }
   }
 
