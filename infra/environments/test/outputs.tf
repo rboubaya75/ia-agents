@@ -49,3 +49,11 @@ output "agentcore_ecr_repository_url" {
 output "agentcore_ecr_repository_arn" {
   value = module.agentcore_container_repository.repository_arn
 }
+
+output "p0_agentcore_gateway_enabled" {
+  value = module.api_gateway_agent_ingress.p0_agentcore_gateway_enabled
+}
+
+output "p0_agent_invoke_url" {
+  value = module.api_gateway_agent_ingress.p0_agent_invoke_url
+}
