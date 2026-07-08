@@ -45,10 +45,7 @@ resource "aws_apigatewayv2_integration" "agentcore_gateway" {
   integration_uri    = local.agentcore_runtime_invoke_url
 
   request_parameters = {
-    "overwrite:header.x-trusted-actor-id"   = "$context.authorizer.jwt.claims.sub"
-    "overwrite:header.x-trusted-client-id"  = "$context.authorizer.jwt.claims.client_id"
-    "overwrite:header.x-trusted-token-use"  = "$context.authorizer.jwt.claims.token_use"
-    "overwrite:header.x-trusted-token-scope" = "$context.authorizer.jwt.claims.scope"
+    "overwrite:header.x-trusted-actor-id" = "$context.authorizer.claims.sub"
   }
 }
 
