@@ -1,3 +1,9 @@
+locals {
+  agentcore_gateway_invoke_url = var.agentcore_gateway_url != "" ? var.agentcore_gateway_url : var.p0_agentcore_gateway_url
+  gateway_first_enabled        = local.agentcore_gateway_invoke_url != ""
+  legacy_facade_enabled        = var.enable_legacy_facade && var.facade_lambda_invoke_arn != "" && var.facade_lambda_function_name != ""
+}
+
 resource "aws_apigatewayv2_api" "this" {
   name          = var.name
   protocol_type = "HTTP"
@@ -25,7 +31,38 @@ resource "aws_apigatewayv2_authorizer" "cognito_jwt" {
   }
 }
 
-resource "aws_apigatewayv2_integration" "agent_facade" {
+resource "aws_apigatewayv2_integration" "agentcore_gateway" {
+  count = local.gateway_first_enabled ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.this.id
+  integration_type   = "HTTP_PROXY"
+  integration_method = "POST"
+  integration_uri    = local.agentcore_gateway_invoke_url
+}
+
+resource "aws_apigatewayv2_route" "agent_invoke_gateway_first" {
+  count = local.gateway_first_enabled ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "POST /agent/invoke"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito_jwt.id
+  target             = "integrations/${aws_apigatewayv2_integration.agentcore_gateway[0].id}"
+}
+
+resource "aws_apigatewayv2_route" "p0_agent_invoke_gateway_first" {
+  count = local.gateway_first_enabled ? 1 : 0
+
+  api_id             = aws_apigatewayv2_api.this.id
+  route_key          = "POST /p0/agent/invoke"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito_jwt.id
+  target             = "integrations/${aws_apigatewayv2_integration.agentcore_gateway[0].id}"
+}
+
+resource "aws_apigatewayv2_integration" "legacy_agent_facade" {
+  count = local.legacy_facade_enabled ? 1 : 0
+
   api_id                 = aws_apigatewayv2_api.this.id
   integration_type       = "AWS_PROXY"
   integration_method     = "POST"
@@ -33,31 +70,14 @@ resource "aws_apigatewayv2_integration" "agent_facade" {
   payload_format_version = "2.0"
 }
 
-resource "aws_apigatewayv2_route" "agent_invoke" {
+resource "aws_apigatewayv2_route" "legacy_agent_invoke" {
+  count = local.legacy_facade_enabled && !local.gateway_first_enabled ? 1 : 0
+
   api_id             = aws_apigatewayv2_api.this.id
   route_key          = "POST /agent/invoke"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.cognito_jwt.id
-  target             = "integrations/${aws_apigatewayv2_integration.agent_facade.id}"
-}
-
-resource "aws_apigatewayv2_integration" "p0_agentcore_gateway" {
-  count = var.p0_agentcore_gateway_url != "" ? 1 : 0
-
-  api_id             = aws_apigatewayv2_api.this.id
-  integration_type   = "HTTP_PROXY"
-  integration_method = "POST"
-  integration_uri    = var.p0_agentcore_gateway_url
-}
-
-resource "aws_apigatewayv2_route" "p0_agent_invoke" {
-  count = var.p0_agentcore_gateway_url != "" ? 1 : 0
-
-  api_id             = aws_apigatewayv2_api.this.id
-  route_key          = "POST /p0/agent/invoke"
-  authorization_type = "JWT"
-  authorizer_id      = aws_apigatewayv2_authorizer.cognito_jwt.id
-  target             = "integrations/${aws_apigatewayv2_integration.p0_agentcore_gateway[0].id}"
+  target             = "integrations/${aws_apigatewayv2_integration.legacy_agent_facade[0].id}"
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -69,6 +89,8 @@ resource "aws_apigatewayv2_stage" "default" {
 }
 
 resource "aws_lambda_permission" "allow_api_gateway_agent_invoke" {
+  count = local.legacy_facade_enabled ? 1 : 0
+
   statement_id  = "AllowAgentInvokeFromApiGateway"
   action        = "lambda:InvokeFunction"
   function_name = var.facade_lambda_function_name
