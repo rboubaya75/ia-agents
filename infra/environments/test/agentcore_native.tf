@@ -78,13 +78,6 @@ resource "aws_bedrockagentcore_gateway_target" "runtime_http" {
   gateway_identifier = aws_bedrockagentcore_gateway.ingress[0].gateway_id
   description        = "HTTP target from AgentCore ingress gateway to AgentCore Runtime"
 
-  credential_provider_configuration {
-    gateway_iam_role {
-      service = "bedrock-agentcore"
-      region  = var.region
-    }
-  }
-
   target_configuration {
     http {
       agentcore_runtime {
