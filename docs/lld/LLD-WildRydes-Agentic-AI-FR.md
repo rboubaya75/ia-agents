@@ -1,492 +1,428 @@
 # LLD — WildRydes Agentic AI Application Landing Zone
 
-**Version :** 2.0 — Gateway-first avec Amazon API Gateway conservé  
-**Langue :** Français  
-**Branche test par défaut :** `migration/secure-agentcore-v1`  
-**Branche future prod :** `main`  
-**Périmètre :** environnement `test`  
-**IaC :** Terraform  
-**CI/CD :** GitHub Actions avec OIDC  
-**Runtime cible :** `phase_4.py`
+- **Version :** 3.0
+- **Date :** 2026-07-12
+- **Branche par défaut :** `migration/secure-agentcore-v1`
+- **Périmètre :** environnement `test`
+- **IaC :** Terraform
+- **CI/CD :** GitHub Actions avec OIDC AWS
+- **Runtime :** `deploy-agentcore/agents/phase_4.py`
 
----
+## 1. Objet
 
-## 1. Objectif
+Ce document décrit :
 
-Ce LLD remplace le design **Lambda-Facade-first** par un design **Gateway-first avec Amazon API Gateway conservé**.
+- le contrat technique courant ;
+- la cible V1 approuvée ;
+- les écarts entre le code actuel et la cible ;
+- les critères de validation avant clôture V1.
 
-La cible nominale devient :
+Architecture nominale cible :
 
 ```text
 Frontend React
-  -> Amazon API Gateway HTTP API
-  -> Amazon Bedrock AgentCore Gateway
-  -> HTTP Target: AgentCore Runtime
+  -> API Gateway HTTP API
+  -> HTTP_PROXY direct
+  -> AgentCore Runtime JWT
 ```
 
-Et pour les tools :
+Tools :
 
 ```text
 AgentCore Runtime
-  -> AgentCore Gateway MCP endpoint
-  -> MCP Targets: Lambda / API Gateway REST API / OpenAPI tools
-  -> DynamoDB
+  -> AgentCore Gateway MCP
+  -> targets tools
+  -> DynamoDB / APIs métier
 ```
 
-La Lambda Agent Invocation Facade n’est plus une dépendance nominale. Elle peut être conservée temporairement comme fallback uniquement si un ADR explicite démontre qu’un besoin d’identité, d’audit ou de quota n’est pas couvert par les briques natives.
+## 2. Modules et composants existants
 
----
-
-## 2. Structure repository cible
-
-```text
-ia-agents/
-├── README.md
-├── docs/
-│   ├── hld/
-│   ├── lld/
-│   ├── adr/
-│   ├── runbooks/
-│   ├── specifications/
-│   ├── migration/
-│   └── legacy/
-├── infra/
-│   ├── environments/
-│   │   └── test/
-│   └── modules/
-├── lambda/
-│   └── trip_tools/
-├── tests/
-│   ├── integration/
-│   ├── security/
-│   ├── smoke/
-│   └── latency/
-├── scripts/
-├── frontend/
-├── deploy-agentcore/
-└── .github/workflows/
-```
-
-Les dossiers legacy contenant l’ancienne Lambda Facade peuvent être conservés temporairement, mais ne doivent plus être appelés par le chemin nominal.
-
----
-
-## 3. Modules Terraform cibles
-
-```text
-infra/modules/
-├── cognito_web_auth/
-├── frontend_static_site/
-├── api_gateway_web_ingress/
-├── agentcore_gateway/
-├── agentcore_gateway_http_runtime_target/
-├── agentcore_gateway_mcp_tools_target/
-├── ecr_agent/
-├── agentcore_runtime/
-├── agentcore_memory/
-├── lambda_trip_tools/
-├── api_gateway_trip_tools_optional/
-├── dynamodb_trips/
-├── secrets_manager_app/
-├── iam_api_gateway_integration_role/
-├── iam_runtime_role/
-├── iam_gateway_role/
-├── iam_trip_tools_role/
-├── observability/
-├── budgets/
-└── agent_rag_knowledge_base/
-```
-
-| Module | Responsabilité | Statut |
+| Domaine | Implémentation actuelle | Statut |
 |---|---|---|
-| `cognito_web_auth` | User Pool, app client SPA sans secret, groupes | V1 |
-| `frontend_static_site` | S3 privé, CloudFront, OAC, SPA fallback | V1 |
-| `api_gateway_web_ingress` | HTTP API externe, JWT authorizer, CORS, throttling | V1 |
-| `agentcore_gateway` | AgentCore Gateway central | V1 |
-| `agentcore_gateway_http_runtime_target` | HTTP target vers AgentCore Runtime | V1 P0 |
-| `agentcore_gateway_mcp_tools_target` | MCP targets Lambda/OpenAPI/API Gateway REST | V1 |
-| `ecr_agent` | Repository image Runtime | V1 |
-| `agentcore_runtime` | Runtime containerisé `phase_4.py` | V1 |
-| `agentcore_memory` | Memory preferences namespace `travel/{actorId}/preferences` | V1 |
-| `lambda_trip_tools` | Opérations `create/get/update` trips | V1 |
-| `dynamodb_trips` | Table `userId`/`tripId`, PITR, SSE | V1 |
-| `secrets_manager_app` | Secrets Gateway/Runtime sans hardcoding | V1 |
-| `observability` | Logs, metrics, dashboard, alarms | V1 |
-| `lambda_agent_facade` | Ancienne façade | Fallback uniquement |
+| Frontend | `infra/modules/frontend_static_site` | présent |
+| Identity | `infra/modules/cognito_web_auth` | présent |
+| API ingress | `infra/modules/api_gateway_agent_ingress` | présent, route agent inactive |
+| ECR | `infra/modules/ecr_container_repository` | présent |
+| DynamoDB | `infra/modules/dynamodb_trips` | présent |
+| Runtime/Memory/Gateway | ressources natives dans `agentcore_native.tf` | présents |
+| Runtime code | `deploy-agentcore/agents/phase_4.py` | présent |
+| Lambda Facade | `infra/modules/agent_api_facade` | legacy, non nominal |
+| CI Terraform | `test-terraform-stack.yml` | présent |
+| CI application | `test-application-deploy.yml` | présent, frontend sur URL Runtime directe |
 
----
+## 3. Contrat frontend
 
-## 4. Delivery frontend CloudFront -> S3
+### 3.1 Authentification
 
-### 4.1 Objectif
+Le frontend utilise Cognito SRP et récupère un **access token** pour les appels API.
 
-Servir l’application React / TypeScript / Vite depuis un bucket S3 privé via Amazon CloudFront.
+L’ID token peut être utilisé pour l’affichage utilisateur, mais ne doit pas être utilisé comme source d’autorisation backend.
 
-### 4.2 Flux cible
-
-```text
-User Browser
-  -> Amazon CloudFront Distribution
-  -> Origin Access Control
-  -> Amazon S3 private frontend bucket
-  -> React / Vite static assets
-```
-
-### 4.3 Règles de sécurité
-
-- le bucket S3 ne doit pas être public ;
-- `Block Public Access` activé ;
-- accès S3 autorisé uniquement depuis CloudFront ;
-- HTTPS obligatoire côté utilisateur ;
-- pas de secret dans les fichiers buildés ;
-- pas de `VITE_AGENT_ARN` côté frontend ;
-- pas d’AgentCore Gateway URL exposée au navigateur ;
-- seul `VITE_API_BASE_URL` doit pointer vers Amazon API Gateway.
-
----
-
-## 5. Contrat Frontend -> Amazon API Gateway
-
-### 5.1 Endpoint cible
+### 3.2 Endpoint cible
 
 ```http
-POST /agent/invoke
+POST https://<api-gateway-domain>/agent/invoke
 Authorization: Bearer <cognito_access_token>
 Content-Type: application/json
+X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: <uuid-v4>
 ```
 
-### 5.2 Payload accepté
+### 3.3 Payload
 
 ```json
 {
   "prompt": "Plan a trip to Tokyo",
-  "sessionId": "uuid-or-runtime-compatible-session-id"
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-### 5.3 Champs interdits
+### 3.4 Champs interdits
 
-```json
-{
-  "actorId": "forbidden",
-  "userId": "forbidden",
-  "tenantId": "forbidden",
-  "trustedIdentity": "forbidden",
-  "groups": "forbidden"
+```text
+actorId
+actor_id
+userId
+user_id
+tenantId
+tenant_id
+trustedIdentity
+trusted_identity
+groups
+```
+
+Le body ne doit jamais être une source d’identité.
+
+### 3.5 Configuration frontend cible
+
+Variable nominale :
+
+```text
+VITE_AGENT_INVOKE_URL=https://<api-gateway-domain>/agent/invoke
+```
+
+Fallback temporaire de rollback :
+
+```text
+VITE_AGENT_RUNTIME_INVOKE_URL=<runtime-direct-url>
+```
+
+Le fallback Runtime direct ne doit pas être la configuration nominale après remédiation.
+
+## 4. API Gateway HTTP API
+
+### 4.1 État actuel
+
+Le module crée :
+
+- `aws_apigatewayv2_api` ;
+- authorizer JWT Cognito ;
+- stage `$default` ;
+- CORS ;
+- intégration Gateway-first conditionnelle ;
+- intégration Lambda Facade conditionnelle.
+
+Dans l’environnement test :
+
+```hcl
+gateway_first_enabled         = false
+agentcore_gateway_url         = ""
+agentcore_runtime_target_name = ""
+```
+
+Aucune route `/agent/invoke` active n’est donc créée dans l’état actuel.
+
+### 4.2 Modification V1 requise
+
+Ajouter au module :
+
+```hcl
+runtime_direct_enabled       = bool
+agentcore_runtime_invoke_url = string
+```
+
+Créer :
+
+```hcl
+resource "aws_apigatewayv2_integration" "agentcore_runtime_direct" {
+  integration_type   = "HTTP_PROXY"
+  integration_method = "POST"
+  integration_uri    = var.agentcore_runtime_invoke_url
 }
 ```
 
-La présence d’un champ d’identité client-side doit retourner une erreur 400 ou une erreur équivalente normalisée au plus tôt dans la chaîne. Si API Gateway ne peut pas appliquer seul cette validation, elle doit être appliquée dans AgentCore Gateway ou Runtime, mais le test négatif reste obligatoire.
-
----
-
-## 6. Module `api_gateway_web_ingress`
-
-### 6.1 Type
-
-Amazon API Gateway HTTP API.
-
-### 6.2 Routes V1
-
-| Route | Méthode | Intégration nominale | Auth |
-|---|---|---|---|
-| `/agent/invoke` | POST | AgentCore Gateway endpoint / HTTP integration selon capacité validée P0 | Cognito JWT |
-| `/health` | GET | mock ou endpoint statique | optionnel test |
-
-### 6.3 Responsabilités
-
-- valider le JWT Cognito ;
-- transmettre les claims validés ou le contexte requis ;
-- appliquer CORS limité au domaine CloudFront test ;
-- limiter taille payload ;
-- limiter taux d’appel ;
-- journaliser sans données sensibles ;
-- préparer WAF et custom domain pour V2 ;
-- ne pas exposer Runtime ARN ni AgentCore Gateway URL au frontend.
-
-### 6.4 Outputs
-
-- `api_id` ;
-- `api_endpoint` ;
-- `agent_invoke_url` ;
-- `authorizer_id` ;
-- `stage_name` ;
-- `access_log_group_name`.
-
-### 6.5 Critères d’acceptation
-
-- JWT invalide rejeté ;
-- requête sans token rejetée ;
-- route `/agent/invoke` protégée ;
-- CORS limité au frontend CloudFront connu ;
-- aucun Runtime ARN exposé ;
-- aucun AgentCore Gateway secret exposé ;
-- logs sans JWT ni payload sensible.
-
----
-
-## 7. Module `agentcore_gateway`
-
-### 7.1 Objectif
-
-Créer AgentCore Gateway comme brique centrale de médiation agentique.
-
-### 7.2 Configuration cible
-
-| Élément | Cible |
-|---|---|
-| Gateway name | `wildrydes-test-agentcore-gateway` |
-| Inbound auth | À confirmer P0 : OAuth/JWT, IAM SigV4, authenticate-only ou autre mode supporté |
-| Targets | HTTP Runtime target + MCP tool targets |
-| Credentials | AgentCore credential provider / Secrets Manager selon target |
-| Outputs | `gateway_id`, `gateway_arn`, `gateway_url`, `target_ids` |
-
-### 7.3 Règles
-
-- AgentCore Gateway n’est pas Amazon API Gateway ;
-- AgentCore Gateway ne remplace pas CloudFront ;
-- AgentCore Gateway ne doit pas être exposé directement au navigateur si API Gateway reste l’ingress web ;
-- les targets doivent être explicitement déclarés et limités ;
-- les credentials de target doivent être stockés hors Git.
-
----
-
-## 8. HTTP Target vers AgentCore Runtime
-
-### 8.1 Flux
+Créer la route :
 
 ```text
-Amazon API Gateway HTTP API
-  -> AgentCore Gateway
-      -> HTTP Target: AgentCore Runtime endpoint
+POST /agent/invoke
 ```
 
-### 8.2 Décisions
-
-| Décision | Description |
-|---|---|
-| Purpose | Router le trafic utilisateur validé vers Runtime sans Lambda Facade |
-| Protocol | HTTP target / passthrough target selon capacité AgentCore Gateway |
-| Identity | Contrat à valider : transmission claims/sub, token exchange ou contexte vérifié |
-| Fallback | Lambda Facade uniquement si le contrat d’identité est impossible nativement |
-
-### 8.3 Critères d’acceptation
-
-- AgentCore Gateway visible en console ;
-- HTTP Target Runtime visible en console ;
-- invocation API Gateway -> Gateway -> Runtime réussie ;
-- Runtime reçoit ou reconstruit l’identité de confiance ;
-- Runtime rejette les payloads legacy ;
-- logs redacted.
-
----
-
-## 9. MCP Targets vers tools
-
-### 9.1 Flux
+avec :
 
 ```text
-Runtime phase_4.py
-  -> AgentCore Gateway MCP endpoint
-      -> Target A: Lambda Trip Tools
-      -> Target B: API Gateway REST API + OpenAPI specification
-      -> Target C: future enterprise API / Smithy / MCP server
+authorization_type = JWT
 ```
 
-### 9.2 Tools V1
-
-| Tool | Backend V1 | Notes |
-|---|---|---|
-| `create_trip` | Lambda Trip Tools ou REST API Trips | écrit DynamoDB avec `userId = actorId` |
-| `get_trips` | Lambda Trip Tools ou REST API Trips | query partition `userId` |
-| `get_trip` | Lambda Trip Tools ou REST API Trips | get item `userId`/`tripId` |
-| `update_trip` | Lambda Trip Tools ou REST API Trips | update conditionné sur `userId`/`tripId` |
-
-### 9.3 Règles
-
-- le navigateur ne doit jamais appeler les tools ;
-- les tools reçoivent une identité déjà validée ;
-- les tools ne doivent pas accepter un `userId` arbitraire ;
-- les erreurs tools sont normalisées ;
-- chaque target doit avoir un IAM limité.
-
----
-
-## 10. AgentCore Runtime
-
-### 10.1 Cible
+### 4.3 URL Runtime cible
 
 ```text
-phase_4.py
+https://bedrock-agentcore.eu-west-3.amazonaws.com/runtimes/<url-encoded-runtime-arn>/invocations?qualifier=DEFAULT
 ```
 
-### 10.2 Responsabilités
+### 4.4 Règles de proxy
 
-- lire l’identité de confiance selon le contrat P0 ;
-- refuser de faire confiance à `actorId` issu du body client ;
-- orchestrer modèle Bedrock ;
-- appeler AgentCore Memory ;
-- appeler AgentCore Gateway MCP ;
-- exécuter le raisonnement agentique ;
-- retourner une réponse normalisée.
+Ne pas réécrire :
 
-### 10.3 Configuration externe attendue
+```text
+Authorization
+X-Amzn-Bedrock-AgentCore-Runtime-Session-Id
+```
 
-| Variable / secret | Usage | Obligatoire |
-|---|---|---|
-| `AWS_REGION` | Région runtime | Oui |
-| `MODEL_ID` | modèle Bedrock par défaut | Oui |
-| `MEMORY_ID` | AgentCore Memory | Oui quand Memory créée |
-| `GATEWAY_URL` | endpoint MCP Gateway | Oui pour tools |
-| `GATEWAY_AUTH_MODE` | mode auth vers Gateway | Oui |
-| `SECRET_NAME` | secret applicatif | Oui si secrets externes |
-| `LOG_LEVEL` | niveau de logs | Oui |
-| `ENABLE_RAG` | future capability | Non, false par défaut |
+Ces headers doivent être transmis naturellement par le proxy HTTP.
 
-### 10.4 Critères d’acceptation
+### 4.5 CORS
 
-- Runtime exécute bien `phase_4.py` ;
-- `actorId` provient d’un chemin de confiance ;
-- Runtime n’utilise jamais `sessionId` comme `actorId` ;
-- Memory namespace correct ;
-- Gateway tools accessibles ;
-- aucun secret n’est loggé ;
-- modèle configurable ;
-- image agent reproductible.
+Origine autorisée :
 
----
+```text
+https://<cloudfront-domain>
+```
 
-## 11. AgentCore Memory
+Méthodes :
 
-### 11.1 Namespace V1
+```text
+OPTIONS
+POST
+```
+
+Headers :
+
+```text
+authorization
+content-type
+x-amzn-bedrock-agentcore-runtime-session-id
+x-correlation-id
+```
+
+Pas de wildcard d’origine dans la cible V1.
+
+### 4.6 Throttling et logs
+
+À ajouter en V1 :
+
+- throttling stage/route ;
+- logs d’accès structurés ;
+- métriques 4xx, 5xx, 429 et latence ;
+- aucune journalisation du token ou du prompt brut.
+
+## 5. AgentCore Runtime
+
+### 5.1 Terraform
+
+La ressource Runtime configure :
+
+- image ECR ;
+- `MODEL_ID` ;
+- `MEMORY_ID` ;
+- `GATEWAY_URL` ;
+- authorizer JWT Cognito ;
+- claim `token_use = access` ;
+- `request_header_allowlist = ["Authorization"]` ;
+- `network_mode = PUBLIC` ;
+- endpoint Runtime nommé `default`.
+
+### 5.2 Contrat identité
+
+Ordre nominal de résolution :
+
+1. claims du contexte Runtime ;
+2. claims du JWT transmis dans `Authorization` après validation Runtime ;
+3. aucun champ issu du body.
+
+Le fallback `trustedIdentity.actorId` encore présent dans le code est une dette legacy. Il doit être supprimé ou explicitement justifié avant clôture V1.
+
+### 5.3 Session
+
+Le `sessionId` doit faire au moins 33 caractères. Le frontend génère un UUID v4 de 36 caractères.
+
+Le même identifiant est envoyé :
+
+- dans le header Runtime ;
+- dans le body applicatif.
+
+Il ne sert jamais d’identité utilisateur.
+
+### 5.4 Modèle
+
+```text
+MODEL_ID=eu.anthropic.claude-haiku-4-5-20251001-v1:0
+AWS_REGION=eu-west-3
+```
+
+Le modèle a été validé avec `ConverseStream` et `toolConfig`.
+
+### 5.5 Tools
+
+Le Runtime construit actuellement :
+
+```text
+tools = [web_search] + initialize_mcp_tools()
+```
+
+Le tool local `web_search` est disponible.
+
+Le chemin MCP n’est chargé que si les paramètres suivants sont présents :
+
+```text
+GATEWAY_URL
+CLIENT_ID
+CLIENT_SECRET
+TOKEN_URL
+SCOPE_STRING
+```
+
+Terraform n’injecte actuellement que :
+
+```text
+GATEWAY_URL
+GATEWAY_AUTH_MODE=aws_iam
+```
+
+Il faut choisir et implémenter un seul contrat :
+
+- SigV4/IAM de bout en bout ; ou
+- OAuth client credentials avec Secrets Manager.
+
+Le mélange actuel n’est pas valide comme cible finale.
+
+## 6. AgentCore Gateway MCP
+
+### 6.1 Rôle
+
+Exposer les tools à l’agent Runtime.
+
+### 6.2 État actuel
+
+Une Gateway MCP native existe avec :
+
+```text
+authorizer_type = AWS_IAM
+protocol_type   = MCP
+```
+
+Aucun target tool métier n’est encore validé end-to-end.
+
+### 6.3 Cible V1 minimale
+
+- un target tool réel ;
+- IAM limité à ce target ;
+- test Runtime -> MCP Gateway -> tool ;
+- injection serveur de `userId` ;
+- contrôle d’appartenance des données ;
+- erreurs normalisées ;
+- aucun secret dans les logs.
+
+## 7. AgentCore Memory
+
+Namespace :
 
 ```text
 travel/{actorId}/preferences
 ```
 
-### 11.2 Usage
-
-- préférences utilisateur ;
-- contexte durable léger ;
-- informations conversationnelles utiles.
-
-### 11.3 Non-usage
-
-Memory ne doit pas stocker :
-
-- secrets ;
-- données de paiement ;
-- données métier transactionnelles ;
-- données cross-user ;
-- contenu web brut comme vérité fiable.
-
----
-
-## 12. DynamoDB Trips
-
-### 12.1 Modèle V1 simple
-
-| Champ | Rôle |
-|---|---|
-| `userId` | partition key |
-| `tripId` | sort key |
-| `createdAt` | audit fonctionnel |
-| `updatedAt` | audit fonctionnel |
-| `status` | état du trip |
-| `destination` | destination |
-| `startDate` | début |
-| `endDate` | fin |
-
-### 12.2 Sécurité
-
-- table par environnement ;
-- chiffrement activé ;
-- PITR activé ;
-- IAM scoped ;
-- pas de scan global côté tools sauf besoin justifié ;
-- accès cross-user impossible.
-
----
-
-## 13. IAM cible
-
-| Rôle | Permissions positives | Interdictions |
-|---|---|---|
-| `api_gateway_integration_role` | appel vers AgentCore Gateway si intégration IAM/SigV4 retenue | pas de DynamoDB, pas de Bedrock InvokeModel |
-| `agentcore_gateway_role` | invoke Lambda tools, accès credential provider, target auth | pas de wildcard Lambda global, pas d’AdministratorAccess |
-| `runtime_role` | Bedrock InvokeModel, Memory scoped, read app secrets, call Gateway | pas de DynamoDB direct, pas de wildcard Secrets |
-| `trip_tools_role` | DynamoDB Get/Query/Put/Update sur table trips | pas de Memory, pas de Bedrock, pas d’AdministratorAccess |
-| `github_actions_test_role` | déploiement test limité | pas d’accès prod |
-
-Règles communes :
-
-- least privilege ;
-- pas de `AdministratorAccess` ;
-- pas de wildcard large non justifié ;
-- séparation test/prod ;
-- conditions IAM si possible ;
-- CloudTrail pour actions CI/CD.
-
----
-
-## 14. Secrets Manager
-
-Secrets attendus :
-
-- secrets Gateway/targets : `CLIENT_SECRET`, API keys, OAuth credentials si nécessaires ;
-- configuration Runtime sensible ;
-- future configuration RAG si nécessaire.
-
 Règles :
 
-- aucun secret dans Git ;
-- aucun secret dans `variables.txt` commité ;
-- rotation à prévoir si secret exposé ;
-- accès IAM limité par ARN ;
-- aucune valeur de secret dans logs ou outputs.
+- isolation par `actorId` ;
+- pas de secrets ;
+- pas de paiement ;
+- pas de données transactionnelles ;
+- échec Memory non bloquant pour une réponse simple ;
+- tests User A / User B obligatoires.
 
----
+## 8. DynamoDB Trips
 
-## 15. Observabilité
+```text
+PK = userId
+SK = tripId
+billing = PAY_PER_REQUEST
+PITR = enabled
+SSE = enabled
+```
 
-### 15.1 Logs
+Chaque opération tool doit utiliser le `userId` injecté par le Runtime et appliquer des conditions empêchant les accès cross-user.
 
-- CloudFront logs ou métriques selon besoin test ;
-- S3 access posture validation ;
-- API Gateway access logs ;
-- AgentCore Gateway logs/metrics si disponibles ;
-- Runtime logs ;
-- tools logs ;
-- pipeline logs.
+## 9. ECR et image Runtime
 
-### 15.2 Redaction obligatoire
+### 9.1 Repository
 
-Ne jamais logger :
+- tags immuables ;
+- scan on push ;
+- chiffrement AES256 ;
+- lifecycle : suppression des images non taggées après 7 jours ;
+- conservation d’un nombre limité d’images récentes.
 
-- JWT ;
-- Authorization header ;
-- secrets ;
-- prompt complet ;
-- user profile complet ;
-- actorId brut ;
-- sessionId brut ;
-- données sensibles.
+### 9.2 Image
 
-### 15.3 Métriques cibles
+Cible AgentCore :
 
-- CloudFront requests/errors/cache behavior ;
-- API Gateway 4xx/5xx/latency/throttling ;
-- AgentCore Gateway target latency/tool counts/auth failures ;
-- Runtime invocations/errors/latency ;
-- Trip tools errors ;
-- DynamoDB throttles ;
-- coût estimé.
+```text
+linux/arm64
+```
 
----
+Le conteneur s’exécute avec un utilisateur non root.
 
-## 16. CI/CD test corrigée
+Dette détectée : l’image de base actuelle est Python 3.13 alors que la règle de projet cible Python 3.12. Ce point doit être arbitré et aligné avant clôture V1.
 
-### 16.1 Workflow Terraform
+## 10. IAM
+
+### 10.1 Dette actuelle
+
+Plusieurs statements utilisent encore :
+
+```text
+Resource = "*"
+bedrock-agentcore:*
+```
+
+### 10.2 Cible
+
+Runtime :
+
+- pull ECR repository précis ;
+- modèles/inference profiles précis ;
+- Memory précise ;
+- MCP Gateway précise ;
+- log groups précis ;
+- secret précis si utilisé.
+
+Gateway :
+
+- targets Lambda/API précis ;
+- logs précis ;
+- aucune permission Runtime ingress devenue inutile.
+
+## 11. Frontend CloudFront / S3
+
+Contrôles déjà présents :
+
+- S3 Block Public Access ;
+- OAC CloudFront ;
+- HTTPS redirect ;
+- versioning ;
+- SSE ;
+- SPA fallback.
+
+À ajouter ou vérifier :
+
+- security headers policy ;
+- CSP ;
+- HSTS ;
+- `X-Content-Type-Options` ;
+- `Referrer-Policy` ;
+- future WAF si retenu.
+
+## 12. CI/CD
+
+### 12.1 Terraform
 
 Workflow :
 
@@ -494,17 +430,17 @@ Workflow :
 .github/workflows/test-terraform-stack.yml
 ```
 
-Modes :
+Contrôles :
 
-| Mode | Déclencheur | Effet |
-|---|---|---|
-| Validate | push / PR | fmt, validate, scans |
-| Plan | workflow_dispatch | plan Terraform test |
-| Apply | workflow_dispatch | apply test avec reviewer |
-| Destroy Plan | workflow_dispatch | plan de destruction |
-| Destroy | workflow_dispatch | destroy test avec `confirm_destroy=true` |
+- Gitleaks ;
+- lockfile ;
+- fmt ;
+- validate ;
+- plan ;
+- apply manuel ;
+- destroy contrôlé.
 
-### 16.2 Workflow applicatif
+### 12.2 Application
 
 Workflow :
 
@@ -512,124 +448,72 @@ Workflow :
 .github/workflows/test-application-deploy.yml
 ```
 
-Le workflow doit évoluer vers :
+À modifier :
 
-```text
-1. terraform output
-2. build/push image Runtime
-3. deploy/update AgentCore Gateway
-4. deploy/update Gateway HTTP Runtime Target
-5. deploy/update Gateway MCP Tool Targets
-6. deploy/update AgentCore Runtime
-7. inject MEMORY_ID, GATEWAY_URL, SECRET_NAME, MODEL_ID
-8. build frontend with VITE_API_BASE_URL = Amazon API Gateway invoke URL
-9. deploy frontend to S3 and invalidate CloudFront
-10. run gates
+- lire `agent_invoke_url` API Gateway ;
+- ne plus générer uniquement `VITE_AGENT_RUNTIME_INVOKE_URL` ;
+- renommer les mentions `gateway_first` obsolètes ;
+- ajouter un gate API Gateway -> Runtime ;
+- ajouter CORS smoke test ;
+- ajouter tool smoke test.
+
+## 13. Tests V1
+
+### 13.1 Infrastructure
+
+```bash
+terraform fmt -check -recursive
+terraform init -backend=false
+terraform validate
+terraform plan
 ```
 
-L’ancien input `activate_facade` doit être supprimé ou déprécié au profit d’une activation Gateway/targets.
+### 13.2 Frontend
 
----
-
-## 17. Tests obligatoires
-
-### 17.1 Smoke tests
-
-- frontend accessible via CloudFront ;
-- S3 direct public access refusé ;
-- login contrôlé ;
-- appel `/agent/invoke` après API Gateway/Gateway/Runtime ;
-- réponse agent minimale après full redeploy ;
-- health check.
-
-### 17.2 Integration tests
-
-- CloudFront -> S3 privé ;
-- Browser app -> API Gateway ;
-- API Gateway -> AgentCore Gateway ;
-- AgentCore Gateway -> Runtime ;
-- Runtime -> Memory ;
-- Runtime -> Gateway MCP ;
-- Gateway -> Tools ;
-- Tools -> DynamoDB.
-
-### 17.3 Security tests
-
-- S3 frontend non public ;
-- token absent ;
-- token invalide ;
-- token expiré ;
-- mauvais audience ;
-- `actorId` injecté par client ;
-- `userId` injecté par client ;
-- `trustedIdentity` injecté par client ;
-- tentative cross-user ;
-- logs redacted.
-
-### 17.4 Latency tests
-
-- CloudFront response time ;
-- API Gateway latency ;
-- AgentCore Gateway target latency ;
-- Runtime latency ;
-- tool latency ;
-- p50 ;
-- p95 ;
-- p99 ;
-- timeout.
-
----
-
-## 18. Dépendances de déploiement
-
-Ordre cible V1 test :
-
-```text
-0. Lockfile + pipeline Terraform verte
-1. Apply base Terraform : DynamoDB + Cognito + S3 frontend privé + CloudFront/OAC
-2. API Gateway HTTP API + Cognito JWT authorizer
-3. Frontend static deploy via GitHub Actions
-4. ECR agent image
-5. Lambda trip tools + IAM DynamoDB ou API REST tools
-6. AgentCore Gateway
-7. AgentCore Gateway HTTP Target vers Runtime
-8. AgentCore Gateway MCP Targets vers tools
-9. AgentCore Memory
-10. AgentCore Runtime
-11. Runtime configuration update avec MEMORY_ID/GATEWAY_URL/SECRET_NAME/MODEL_ID
-12. Frontend full redeploy avec VITE_API_BASE_URL réel
-13. Post-deploy validation end-to-end
-14. Observability / cost hardening
+```bash
+npm ci
+npm run lint
+npm run build
 ```
 
-Le frontend statique ne doit pas attendre AgentCore Runtime pour être servi par CloudFront. En revanche, le parcours agentique complet doit attendre API Gateway, AgentCore Gateway, Runtime, Memory et targets.
+### 13.3 API et sécurité
 
----
+- `OPTIONS /agent/invoke` depuis CloudFront ;
+- sans JWT : rejet ;
+- JWT invalide : rejet ;
+- mauvais client : rejet ;
+- JWT valide : 2xx ou erreur Runtime métier explicite ;
+- `actorId`, `userId`, `tenantId`, `trustedIdentity`, `groups` dans body : rejet ;
+- session courte : rejet ;
+- User A ne lit pas Memory/trips User B ;
+- aucun token ou prompt brut dans les logs.
 
-## 19. Remédiation du repo actuel
+### 13.4 Bedrock
 
-| Constat | Correction |
-|---|---|
-| Documentation encore Lambda Facade first | Remplacer HLD/LLD/README par Gateway-first avec API Gateway conservé |
-| Terraform test ne câble que frontend, DynamoDB, Cognito | Ajouter modules API Gateway, AgentCore Gateway, Runtime, Memory, tools |
-| Lambda Facade avec InvokeAgentRuntime wildcard | Retirer du chemin nominal ou isoler en fallback avec ADR |
-| Runtime deploy laisse `GATEWAY_URL` et `MEMORY_ID` vides | Injecter outputs Gateway/Memory après création |
-| Pipeline active facade vers runtime | Remplacer par activation Gateway targets + runtime config |
+- Claude Haiku 4.5 accessible ;
+- streaming ;
+- tool use ;
+- erreurs de modèle normalisées.
 
----
+### 13.5 MCP
 
-## 20. Critères d’acceptation LLD
+- Gateway accessible depuis Runtime ;
+- target réel listé ;
+- tool exécuté ;
+- identité injectée ;
+- accès cross-user refusé.
 
-Le LLD est accepté si :
+## 14. Critères de sortie
 
-- Amazon API Gateway reste explicitement dans le chemin utilisateur ;
-- AgentCore Gateway est créé avec au moins un HTTP Target Runtime ;
-- AgentCore Gateway expose au moins un MCP Target tool visible ;
-- Frontend utilise `VITE_API_BASE_URL` vers Amazon API Gateway ;
-- Lambda Facade n’est plus requise pour le chemin nominal ;
-- l’identité `actorId = Cognito sub` est prouvée par test contractuel ;
-- Runtime n’utilise jamais `sessionId` comme identité ;
-- tests négatifs identité, isolation données et logs passent ;
-- le pipeline test est aligné avec la branche par défaut ;
-- la séparation test/prod est claire ;
-- RAG est documenté comme future capability.
+La V1 est clôturable uniquement si :
+
+- le frontend utilise API Gateway ;
+- API Gateway proxyfie Runtime direct ;
+- Runtime valide encore le JWT ;
+- CORS, throttling et logs sont en place ;
+- le modèle fonctionne ;
+- Memory est isolée ;
+- au moins un tool MCP fonctionne ;
+- IAM est réduit ;
+- CI et smoke tests passent ;
+- documentation et code sont alignés.
