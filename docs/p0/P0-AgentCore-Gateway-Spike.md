@@ -1,187 +1,101 @@
 # P0 — Spike API Gateway -> AgentCore Gateway -> Runtime
 
-## Statut
+- **Statut :** terminé — NO-GO pour l’ingress utilisateur
+- **Résultat repris par :** ADR-0004
+- **Valeur historique :** conservation des constats et leçons du spike
 
-GO P0.
+## 1. Hypothèse testée
 
-## Objectif
-
-Prouver ou invalider le remplacement du chemin legacy :
-
-```text
-Amazon API Gateway HTTP API -> Lambda Facade -> AgentCore Runtime
-```
-
-par la cible :
+Remplacer le chemin legacy :
 
 ```text
-Amazon API Gateway HTTP API -> AgentCore Gateway -> HTTP Target AgentCore Runtime
+API Gateway -> Lambda Facade -> AgentCore Runtime
 ```
 
-Le point clef est l'identité : la P0 doit prouver que `actorId = Cognito sub` reste contrôlé côté serveur sans dépendre d'une valeur envoyée par le navigateur.
-
-## Contexte technique
-
-AgentCore Gateway supporte trois familles de targets : MCP, HTTP et inference. Les HTTP targets envoient le trafic directement vers une cible HTTP, par exemple un AgentCore Runtime. Les MCP targets servent à agréger des tools tels que Lambda, OpenAPI, API Gateway REST APIs ou MCP servers.
-
-## Hypothèse P0
-
-La combinaison suivante peut remplacer la Lambda Facade dans le chemin nominal :
+par :
 
 ```text
-Cognito JWT
-  -> API Gateway JWT Authorizer
-  -> AgentCore Gateway inbound authorizer
-  -> AgentCore Gateway HTTP Target Runtime
-  -> Runtime identity contract
+API Gateway -> AgentCore Gateway ingress -> HTTP Target Runtime
 ```
 
-## Non-objectifs P0
-
-- Ne pas basculer la production.
-- Ne pas supprimer immédiatement la Lambda Facade.
-- Ne pas créer toute la stack Terraform définitive avant validation du contrat.
-- Ne pas activer RAG.
-- Ne pas exposer AgentCore Gateway directement au navigateur.
-
-## Pré-requis
-
-- Branche `migration/secure-agentcore-v1` à jour.
-- Stack test Terraform appliquée.
-- Frontend accessible via CloudFront.
-- Cognito User Pool et app client disponibles.
-- Token Cognito valide pour un utilisateur test.
-- Runtime AgentCore déployé avec image `phase_4.py`.
-- Accès AWS permettant de créer ou tester AgentCore Gateway et targets.
-
-## Étapes P0
-
-### 1. Baseline legacy
-
-Valider le chemin existant :
+avec la contrainte :
 
 ```text
-API Gateway -> Lambda Facade -> Runtime
+actorId = Cognito sub
 ```
 
-Critères :
+sans accepter d’identité fournie par le navigateur.
 
-- appel authentifié OK ;
-- appel sans token rejeté ;
-- injection `actorId` rejetée ;
-- injection `userId` rejetée ;
-- injection `trustedIdentity` rejetée.
+## 2. Résultat
 
-### 2. Créer AgentCore Gateway de test
+Le chaînage Gateway-first a permis de valider la création des briques AgentCore, mais n’a pas satisfait le contrat d’identité Runtime.
 
-Créer un Gateway isolé, nommé par exemple :
+AgentCore Gateway validait l’identité inbound puis invoquait Runtime avec son rôle IAM. Le Runtime ne recevait pas l’identité Cognito utilisateur dans le format attendu par `phase_4.py`.
+
+Symptômes observés :
 
 ```text
-wildrydes-test-agentcore-gateway-p0
+Authenticated actor identity is unavailable from Gateway-first context
+trustedIdentity.actorId is required from the server-side facade
 ```
 
-Configurer l'authorizer inbound retenu pour le spike : OAuth/JWT, IAM SigV4 ou authenticate-only selon capacité disponible sur le compte.
+## 3. Décision
 
-### 3. Créer HTTP Target vers Runtime
-
-Créer un HTTP Target pointant vers l'endpoint Runtime AgentCore.
-
-Valider :
+### NO-GO
 
 ```text
-AgentCore Gateway -> Runtime
+API Gateway -> AgentCore Gateway ingress -> Runtime
 ```
 
-### 4. Brancher API Gateway vers AgentCore Gateway
+n’est pas retenu pour l’ingress utilisateur V1.
 
-Tester l'appel :
+### GO
 
 ```text
-API Gateway -> AgentCore Gateway -> Runtime
+API Gateway
+  -> HTTP proxy direct
+  -> AgentCore Runtime JWT
 ```
 
-Cette étape peut se faire avec une route temporaire de test, par exemple :
+est la cible V1 approuvée.
+
+### Conservé
 
 ```text
-POST /p0/agent/invoke
+Runtime -> AgentCore Gateway MCP -> tools
 ```
 
-La route nominale `/agent/invoke` ne doit pas être cassée pendant le spike.
+reste le chemin tools nominal.
 
-### 5. Valider le contrat identité
+## 4. Leçons
 
-Cas à prouver :
+- API Gateway et AgentCore Gateway ont des rôles différents.
+- Abandonner AgentCore Gateway ingress ne justifie pas de retirer API Gateway.
+- Le contrat d’identité doit être testé dans le Runtime réel.
+- Un JWT validé en amont n’est utile au Runtime que si son identité reste disponible.
+- Aucun `actorId`, `userId`, `tenantId`, `trustedIdentity` ou groupe ne doit provenir du body.
+- `sessionId` ne doit jamais être utilisé comme identité.
+- Les logs doivent rester redacted.
 
-- `actorId` dérive du `sub` Cognito validé ;
-- le body client ne peut pas imposer `actorId` ;
-- le body client ne peut pas imposer `userId` ;
-- le body client ne peut pas imposer `tenantId` ;
-- le body client ne peut pas imposer `trustedIdentity` ;
-- `sessionId` n'est jamais utilisé comme identité ;
-- User A ne peut pas lire les données de User B.
+## 5. Artefacts historiques
 
-### 6. Valider Runtime -> Gateway MCP -> tool minimal
-
-Créer ou utiliser un tool minimal pour valider :
+Les éléments suivants sont conservés pour traçabilité mais ne décrivent plus le chemin nominal :
 
 ```text
-Runtime -> AgentCore Gateway MCP endpoint -> tool
+scripts/p0_gateway_contract_check.py
+tests/p0/identity-contract-cases.json
+docs/p0/P0-Execution-Commands.md
 ```
 
-Le tool peut retourner un résultat non sensible :
+Ils doivent être adaptés ou archivés avant réutilisation, notamment parce que :
 
-```json
-{
-  "ok": true,
-  "tool": "p0_echo",
-  "actorIdSource": "server"
-}
-```
+- ils ciblent encore Gateway-first ;
+- certains `sessionId` de test sont trop courts ;
+- le contrat `trustedIdentity` n’est pas aligné avec le fallback legacy encore présent dans le code.
 
-### 7. Valider logs et observabilité
+## 6. Références
 
-Les logs ne doivent jamais contenir :
-
-- JWT ;
-- header Authorization ;
-- prompt brut ;
-- secret ;
-- actorId brut ;
-- sessionId brut ;
-- email complet.
-
-## Go / No-Go
-
-### GO Gateway-first si
-
-- API Gateway peut appeler AgentCore Gateway proprement ;
-- AgentCore Gateway peut appeler Runtime via HTTP Target ;
-- Runtime reçoit ou reconstruit une identité fiable ;
-- `actorId = Cognito sub` est prouvé ;
-- les champs d'identité client-side sont rejetés ;
-- Runtime peut appeler un tool via Gateway MCP ;
-- logs redacted validés.
-
-### NO-GO temporaire si
-
-- l'identité fiable ne peut pas être transmise ou reconstruite ;
-- l'intégration API Gateway -> AgentCore Gateway est instable ;
-- le mode d'authorizer ne correspond pas aux besoins ;
-- les erreurs ou logs exposent des informations sensibles ;
-- Runtime nécessite encore une transformation custom non couverte.
-
-Dans ce cas, conserver temporairement :
-
-```text
-API Gateway -> Lambda Facade -> Runtime
-```
-
-mais uniquement comme fallback documenté par ADR.
-
-## Livrables P0
-
-- Résultat des tests de `scripts/p0_gateway_contract_check.py`.
-- Capture ou export des endpoints Gateway/targets.
-- Décision Go/No-Go.
-- Liste des modules Terraform définitifs à créer ou modifier.
-- Liste des changements pipeline à implémenter.
+- ADR-0002 — historique Gateway-first, superseded ;
+- ADR-0003 — provisioning AgentCore natif Terraform ;
+- ADR-0004 — API Gateway devant AgentCore Runtime JWT ;
+- plan de remédiation V1.
