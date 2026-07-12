@@ -1,73 +1,80 @@
 # ADR-0002 — AgentCore Gateway-first avec Amazon API Gateway conservé
 
-## Statut
+- **Statut :** superseded
+- **Remplacé par :** `ADR-0004-api-gateway-direct-agentcore-runtime-jwt.md`
+- **Périmètre historique :** spike P0 de l’environnement `test`
 
-Proposé pour validation client.
+## Contexte historique
 
-## Contexte
-
-La version précédente du design WildRydes opposait implicitement Lambda Facade et AgentCore Gateway. Une première correction Gateway-first a ensuite trop simplifié la cible en retirant Amazon API Gateway du chemin utilisateur.
-
-Cette suppression est incorrecte pour la V1 : Amazon API Gateway reste utile comme ingress web externe pour le frontend React/Vite, notamment pour Cognito JWT, CORS, throttling, access logs, custom domain futur et WAF futur.
-
-AgentCore Gateway doit être repositionné non pas comme remplaçant d’Amazon API Gateway, mais comme gateway agentique native : HTTP Target vers AgentCore Runtime et MCP Targets vers les tools.
-
-## Décision
-
-Conserver Amazon API Gateway comme ingress web externe et utiliser AgentCore Gateway comme gateway agentique native.
-
-Le chemin nominal devient :
+Cet ADR a corrigé une première dérive qui consistait à retirer Amazon API Gateway du chemin utilisateur. Il a proposé le chemin suivant :
 
 ```text
 Browser / React App
   -> Amazon API Gateway HTTP API
-  -> AgentCore Gateway
+  -> AgentCore Gateway ingress
   -> HTTP Target: AgentCore Runtime
 ```
 
-Le chemin tools devient :
+Le chemin tools prévu était :
 
 ```text
 AgentCore Runtime
-  -> AgentCore Gateway MCP endpoint
+  -> AgentCore Gateway MCP
   -> Lambda / API Gateway REST API / OpenAPI tools
 ```
 
-La Lambda Agent Invocation Facade n’est plus le chemin nominal. Elle ne doit être conservée que comme fallback temporaire si un spike démontre qu’un besoin non couvert par API Gateway + AgentCore Gateway impose une logique custom.
+Amazon API Gateway devait rester l’ingress web externe pour Cognito JWT, CORS, throttling, access logs et future protection edge. AgentCore Gateway devait assurer la médiation agentique vers Runtime et les tools.
 
-## Conséquences positives
+## Résultat du spike
 
-- API Gateway reste visible dans le HLD, le LLD, le README et les pipelines.
-- Le design reste compatible avec WAF, custom domain, throttling et observabilité d’ingress.
-- AgentCore Gateway est utilisé pour ce qu’il apporte nativement : targets HTTP/MCP, intégration tools et médiation agentique.
-- Les API métier peuvent être exposées comme MCP Targets via OpenAPI ou API Gateway REST API.
-- La Lambda Facade cesse d’être une dépendance obligatoire et une source de complexité.
+Le spike Gateway-first a permis de confirmer plusieurs éléments :
 
-## Risques et points à valider
+- Amazon API Gateway est utile et ne doit pas être confondu avec AgentCore Gateway ;
+- AgentCore Gateway MCP reste pertinent pour exposer les tools ;
+- la Lambda Agent Invocation Facade peut rester hors du chemin nominal ;
+- l’identité ne doit jamais provenir du body client.
 
-- Le contrat exact d’intégration API Gateway -> AgentCore Gateway doit être validé en P0.
-- Le modèle d’identité `actorId = Cognito sub` doit être prouvé par test contractuel.
-- Les modes d’authorizer AgentCore Gateway doivent être confirmés sur l’environnement AWS cible.
-- Les logs doivent rester redacted sur API Gateway, Gateway, Runtime et tools.
+En revanche, le chaînage d’ingress suivant n’a pas satisfait le contrat d’identité attendu par `phase_4.py` :
 
-## Décision rejetée
+```text
+API Gateway -> AgentCore Gateway ingress -> Runtime
+```
 
-### Browser -> AgentCore Gateway direct
+AgentCore Gateway validait l’identité inbound puis invoquait le Runtime avec son identité IAM de service. Le Runtime ne recevait donc pas l’identité Cognito utilisateur dans le format requis pour dériver `actorId = sub`.
 
-Rejeté en V1, car cela retirerait API Gateway du rôle d’ingress web public et compliquerait les exigences CORS, throttling, custom domain, WAF futur et access logs.
+## Décision remplacée
 
-### API Gateway -> Lambda Facade -> Runtime comme nominal
+La partie suivante est abandonnée pour l’ingress utilisateur :
 
-Rejeté pour la nouvelle cible, car cette architecture contourne les capacités natives AgentCore Gateway et entretient une façade custom qui doit être justifiée au cas par cas.
+```text
+API Gateway -> AgentCore Gateway ingress -> Runtime
+```
 
-## Gate de validation P0
+La cible V1 est désormais définie par ADR-0004 :
 
-Avant codage massif, valider :
+```text
+Browser
+  -> API Gateway HTTP API
+  -> HTTP proxy direct
+  -> AgentCore Runtime JWT
+```
 
-1. API Gateway HTTP API -> AgentCore Gateway ;
-2. AgentCore Gateway -> HTTP Target Runtime ;
-3. Runtime -> Gateway MCP -> un tool minimal ;
-4. `actorId = Cognito sub` ;
-5. rejet des champs identity client-side ;
-6. logs redacted ;
-7. isolation User A / User B.
+AgentCore Gateway reste utilisé uniquement pour :
+
+```text
+Runtime -> AgentCore Gateway MCP -> tools
+```
+
+## Leçons conservées
+
+- Gateway-first ne signifie pas suppression d’Amazon API Gateway.
+- Amazon API Gateway et AgentCore Gateway répondent à des responsabilités différentes.
+- Toute modification du chemin d’ingress doit faire l’objet d’un ADR et d’une validation explicite.
+- Le contrat d’identité doit être prouvé par des tests négatifs et d’isolation utilisateur.
+- Les logs doivent rester redacted sur chaque hop.
+
+## Références
+
+- ADR-0003 : provisioning AgentCore natif Terraform.
+- ADR-0004 : Amazon API Gateway devant AgentCore Runtime JWT.
+- `docs/p0/P0-AgentCore-Gateway-Spike.md` : historique du spike et décision NO-GO sur Gateway ingress.
