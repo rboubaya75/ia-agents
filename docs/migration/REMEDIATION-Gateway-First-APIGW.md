@@ -1,134 +1,280 @@
-# Remédiation — Gateway-first avec Amazon API Gateway conservé
+# Remédiation V1 — API Gateway devant AgentCore Runtime JWT
 
-## Objectif
+- **Statut :** plan approuvé, implémentation non commencée
+- **Date :** 2026-07-12
+- **Branche :** `migration/secure-agentcore-v1`
+- **Référence :** ADR-0004
 
-Aligner le repo WildRydes sur la cible corrigée :
+## 1. Objectif
 
-```text
-Browser -> Amazon API Gateway HTTP API -> AgentCore Gateway -> HTTP Target Runtime
-Runtime -> AgentCore Gateway MCP -> Lambda/API Gateway REST/OpenAPI tools -> DynamoDB
-```
-
-La Lambda Facade n’est plus le chemin nominal.
-
----
-
-## P0 — Validation d’architecture
-
-1. Valider l’intégration Amazon API Gateway HTTP API vers AgentCore Gateway.
-2. Valider l’authorizer AgentCore Gateway retenu.
-3. Valider la transmission ou reconstruction de `actorId = Cognito sub`.
-4. Valider AgentCore Gateway -> HTTP Target Runtime.
-5. Valider Runtime -> AgentCore Gateway MCP -> tool minimal.
-6. Valider les tests négatifs d’identité.
-7. Valider la redaction logs.
-
-Livrable P0 : un rapport court avec la décision définitive sur le contrat d’identité et d’invocation.
-
----
-
-## P1 — Documentation
-
-- Mettre à jour `README.md`.
-- Mettre à jour `docs/hld/HLD-WildRydes-Agentic-AI-FR.md`.
-- Mettre à jour `docs/lld/LLD-WildRydes-Agentic-AI-FR.md`.
-- Ajouter `docs/adr/ADR-0002-agentcore-gateway-first-with-api-gateway.md`.
-- Conserver les anciens éléments Lambda Facade en legacy/fallback uniquement.
-
----
-
-## P2 — Terraform
-
-Ajouter ou renommer les modules :
-
-- `api_gateway_web_ingress` ;
-- `agentcore_gateway` ;
-- `agentcore_gateway_http_runtime_target` ;
-- `agentcore_gateway_mcp_tools_target` ;
-- `agentcore_memory` ;
-- `agentcore_runtime` ;
-- `lambda_trip_tools` ou `api_gateway_trip_tools_optional` ;
-- `iam_api_gateway_integration_role` si requis ;
-- `iam_gateway_role` ;
-- `iam_runtime_role` ;
-- `iam_trip_tools_role`.
-
-Déprécier ou isoler :
-
-- `lambda_agent_facade` ;
-- `iam_facade_role` ;
-- tout pipeline `activate_facade`.
-
----
-
-## P3 — Runtime
-
-Mettre à jour le déploiement Runtime pour injecter :
+Passer de l’état actuel :
 
 ```text
-AWS_REGION
-MODEL_ID
-MEMORY_ID
-GATEWAY_URL
-GATEWAY_AUTH_MODE
-SECRET_NAME
-LOG_LEVEL
-ENABLE_RAG=false
+Browser -> AgentCore Runtime direct JWT
 ```
 
-Corriger `phase_4.py` pour :
+à la cible V1 :
 
-- supprimer tout fallback `sessionId` comme identité ;
-- rejeter `actorId`, `userId`, `tenantId`, `trustedIdentity` client-side ;
-- utiliser `actorId = Cognito sub` depuis le contrat validé ;
-- utiliser `travel/{actorId}/preferences` pour Memory ;
-- appeler les tools via AgentCore Gateway MCP.
+```text
+Browser
+  -> Amazon API Gateway HTTP API
+  -> HTTP proxy direct
+  -> AgentCore Runtime JWT
+```
 
----
+Le chemin tools reste :
 
-## P4 — Pipeline GitHub Actions
+```text
+Runtime -> AgentCore Gateway MCP -> tools -> DynamoDB / APIs métier
+```
 
-Modifier `.github/workflows/test-application-deploy.yml` :
+Aucune réintroduction d’AgentCore Gateway comme intermédiaire d’ingress utilisateur.
 
-- supprimer ou déprécier `activate_facade` ;
-- ajouter création/mise à jour AgentCore Gateway ;
-- ajouter création/mise à jour HTTP Target Runtime ;
-- ajouter création/mise à jour MCP Targets tools ;
-- injecter `MEMORY_ID` et `GATEWAY_URL` dans Runtime ;
-- garder `VITE_API_BASE_URL` pointant vers Amazon API Gateway ;
-- ajouter gates :
-  - API Gateway -> Gateway -> Runtime ;
-  - Runtime -> Gateway -> tool ;
-  - negative identity tests ;
-  - log redaction tests.
+## 2. État actuel vérifié
 
----
+### Présent
 
-## P5 — Tests d’acceptation
+- S3 privé + CloudFront ;
+- Cognito ;
+- API Gateway HTTP API et JWT authorizer ;
+- Runtime JWT natif ;
+- Authorization allowlist ;
+- AgentCore Memory ;
+- AgentCore Gateway MCP ;
+- Claude Haiku 4.5 ;
+- ECR immutable et scan on push ;
+- DynamoDB SSE/PITR ;
+- CI Terraform et application.
 
-Tests obligatoires :
+### Écarts
 
-- sans JWT => rejet ;
-- JWT invalide => rejet ;
-- mauvais audience => rejet ;
-- `actorId` dans body => rejet ;
-- `userId` dans body => rejet ;
-- `trustedIdentity` dans body => rejet ;
-- Runtime sans identité de confiance => rejet ;
-- User A ne lit pas les trips de User B ;
-- User A ne lit pas la Memory de User B ;
-- aucun JWT, secret, prompt brut, actorId brut ou sessionId brut dans les logs.
+- API Gateway n’a pas de route agentique active ;
+- frontend et pipeline utilisent l’URL Runtime directe ;
+- CORS API Gateway ne contient pas le header de session Runtime ;
+- pas de throttling/access logs finalisés ;
+- auth MCP Terraform/code incohérente ;
+- pas de target MCP validé ;
+- IAM trop large ;
+- tests P0 historiques désalignés ;
+- noms `gateway_first` encore présents ;
+- documentation ancienne Gateway-first remplacée par ADR-0004.
 
----
+## 3. Phase 1 — Front-door API Gateway
 
-## P6 — Critère de sortie
+### Terraform module
 
-La remédiation est terminée quand :
+Fichiers :
 
-- Amazon API Gateway est le seul endpoint public appelé par le frontend ;
-- AgentCore Gateway est visible en console ;
-- AgentCore Gateway a un HTTP Target Runtime ;
-- AgentCore Gateway a au moins un MCP Target tool ;
-- Runtime utilise Memory et Gateway avec des variables non vides ;
-- Lambda Facade n’est plus dans le chemin nominal ;
-- les gates end-to-end et sécurité passent.
+```text
+infra/modules/api_gateway_agent_ingress/main.tf
+infra/modules/api_gateway_agent_ingress/variables.tf
+infra/modules/api_gateway_agent_ingress/outputs.tf
+infra/environments/test/api_gateway.tf
+infra/environments/test/outputs.tf
+```
+
+Actions :
+
+1. ajouter `runtime_direct_enabled` ;
+2. ajouter `agentcore_runtime_invoke_url` ;
+3. créer une intégration `HTTP_PROXY` directe vers Runtime ;
+4. créer `POST /agent/invoke` avec JWT authorizer ;
+5. conserver Gateway-first désactivé ;
+6. conserver Lambda Facade désactivée ;
+7. faire retourner `agent_invoke_url` lorsque le proxy Runtime direct est actif.
+
+### CORS
+
+Autoriser uniquement :
+
+```text
+Origin: domaine CloudFront test
+Methods: OPTIONS, POST
+Headers:
+  authorization
+  content-type
+  x-amzn-bedrock-agentcore-runtime-session-id
+  x-correlation-id
+```
+
+### Sécurité
+
+- ne pas mapper ou réécrire `Authorization` ;
+- ne pas fabriquer de header `x-amzn-*` ;
+- conserver le JWT authorizer Runtime ;
+- ajouter throttling ;
+- ajouter access logs redacted.
+
+### Gate de sortie phase 1
+
+- `terraform fmt` ;
+- `terraform validate` ;
+- plan sans remplacement Runtime inattendu ;
+- route `/agent/invoke` visible ;
+- preflight CORS validé ;
+- appel JWT valide atteint Runtime ;
+- appel sans JWT rejeté.
+
+## 4. Phase 2 — Frontend et pipeline
+
+Fichiers :
+
+```text
+frontend/src/services/chatService.ts
+frontend/.env.example
+.github/workflows/test-application-deploy.yml
+scripts/preflight_application_deploy.py
+scripts/validate_gateway_first_contract.py
+```
+
+Actions :
+
+1. introduire `VITE_AGENT_INVOKE_URL` ;
+2. utiliser l’URL API Gateway comme nominale ;
+3. conserver temporairement le fallback Runtime direct ;
+4. générer l’environnement frontend depuis `agent_invoke_url` ;
+5. renommer les contrôles `gateway_first` devenus obsolètes ;
+6. valider que les headers Runtime restent envoyés ;
+7. ajouter un smoke test navigateur/API Gateway.
+
+Gate de sortie phase 2 :
+
+- `npm ci` ;
+- `npm run lint` ;
+- `npm run build` ;
+- frontend déployé ;
+- Network tab montre API Gateway, pas l’URL Runtime directe ;
+- CORS et JWT passent depuis CloudFront.
+
+## 5. Phase 3 — Identité et tests contractuels
+
+Actions :
+
+- aligner les `sessionId` de test sur 33+ caractères ;
+- rejeter explicitement tous les champs d’identité client-side ;
+- décider la suppression du fallback `trustedIdentity` ;
+- adapter le test contractuel au chemin API Gateway -> Runtime ;
+- tester User A / User B ;
+- vérifier les logs redacted.
+
+Cas obligatoires :
+
+- sans JWT ;
+- JWT invalide ;
+- mauvais client ;
+- session trop courte ;
+- `actorId` client ;
+- `userId` client ;
+- `tenantId` client ;
+- `trustedIdentity` client ;
+- `groups` client ;
+- isolation Memory ;
+- isolation DynamoDB.
+
+## 6. Phase 4 — AgentCore Gateway MCP et tools
+
+Décision préalable : choisir un contrat unique.
+
+### Option recommandée
+
+```text
+Runtime IAM role -> SigV4 -> AgentCore Gateway MCP AWS_IAM
+```
+
+ou, si l’adapter Strands/MCP ne le permet pas proprement :
+
+```text
+Runtime -> OAuth client credentials -> AgentCore Gateway MCP
+```
+
+Dans les deux cas :
+
+- secrets hors Git ;
+- target explicite ;
+- permissions minimales ;
+- test de list tools ;
+- test d’exécution ;
+- `userId` injecté côté serveur ;
+- refus cross-user.
+
+Gate de sortie phase 4 :
+
+```text
+Runtime -> AgentCore Gateway MCP -> tool réel -> DynamoDB/API
+```
+
+fonctionne avec logs redacted.
+
+## 7. Phase 5 — IAM et durcissement
+
+Actions :
+
+- remplacer `bedrock-agentcore:*` ;
+- restreindre les inference profiles ;
+- restreindre Memory et Gateway ;
+- restreindre log groups ;
+- restreindre Secrets Manager ;
+- supprimer les permissions Gateway d’invocation Runtime devenues inutiles ;
+- vérifier trust policies avec `SourceAccount` et `SourceArn` ;
+- documenter chaque wildcard techniquement incompressible.
+
+## 8. Phase 6 — Observabilité et exploitation
+
+Ajouter :
+
+- API Gateway access logs ;
+- métriques 401/403/429/5xx ;
+- alarmes Runtime 5xx ;
+- alarmes Bedrock AccessDenied/ValidationException ;
+- latence ;
+- erreurs tools ;
+- correlation ID non sensible.
+
+Ne jamais logger :
+
+- JWT ;
+- Authorization ;
+- prompt brut ;
+- réponse brute si PII ;
+- actorId brut ;
+- sessionId brut ;
+- secret.
+
+## 9. Phase 7 — Nettoyage documentation et legacy
+
+- renommer `gateway_first_ready` ;
+- renommer `enforce_gateway_first` ;
+- renommer `validate_gateway_first_contract.py` ;
+- archiver les scripts P0 Gateway-first ;
+- identifier clairement le module Lambda Facade comme legacy ;
+- supprimer les commentaires qui décrivent une architecture inactive ;
+- maintenir README, HLD, LLD et ADR alignés.
+
+## 10. Critères de sortie V1
+
+- frontend -> API Gateway -> Runtime JWT ;
+- Runtime direct non nominal ;
+- AgentCore Gateway uniquement MCP/tools ;
+- CORS strict ;
+- throttling et logs ;
+- identité JWT et tests négatifs validés ;
+- Claude Haiku 4.5 streaming/tools validé ;
+- Memory isolée ;
+- tool MCP réel validé ;
+- IAM durci ;
+- Terraform validate/plan passe ;
+- frontend lint/build passe ;
+- smoke test navigateur passe ;
+- documentation alignée.
+
+## 11. Gouvernance des changements
+
+Chaque phase doit suivre :
+
+1. plan présenté ;
+2. fichiers proposés ;
+3. validation explicite ;
+4. modification ;
+5. tests ;
+6. résumé des changements et échecs ;
+7. validation avant la phase suivante.
