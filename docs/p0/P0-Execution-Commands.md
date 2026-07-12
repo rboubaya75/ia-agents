@@ -1,99 +1,121 @@
-# P0 — Commandes d'exécution
+# P0 — Commandes d’exécution Gateway-first
 
-## Objectif
+- **Statut :** historique — ne pas utiliser pour la cible V1
+- **Résultat du spike :** NO-GO pour `API Gateway -> AgentCore Gateway ingress -> Runtime`
+- **Architecture active cible :** ADR-0004
 
-Activer une route temporaire isolée :
+## 1. Avertissement
+
+Les commandes de ce document servaient à activer une route temporaire :
 
 ```text
 POST /p0/agent/invoke
 ```
 
-Cette route pointe vers l'URL AgentCore Gateway fournie via Terraform :
+vers AgentCore Gateway ingress.
+
+Ce chemin n’est plus retenu pour l’ingress utilisateur et ne doit pas être réactivé comme solution nominale.
+
+## 2. Cible V1
 
 ```text
-p0_agentcore_gateway_url
+Browser
+  -> API Gateway HTTP API
+  -> HTTP proxy direct
+  -> AgentCore Runtime JWT
 ```
 
-La route nominale reste inchangée :
+Tools :
 
 ```text
-POST /agent/invoke -> Lambda Facade -> Runtime
+Runtime -> AgentCore Gateway MCP -> tools
 ```
 
-## 1. Préparer la stack
+## 3. Pourquoi les anciennes commandes sont obsolètes
+
+- `p0_agentcore_gateway_url` ne représente plus la cible d’ingress ;
+- la route P0 testait un contrat d’identité qui a échoué ;
+- les tests associés utilisent des sessions qui ne respectent pas toujours la contrainte 33+ caractères ;
+- le workflow et les outputs actuels ont évolué vers Runtime JWT direct ;
+- la prochaine remédiation reconnectera API Gateway directement au Runtime.
+
+## 4. Commandes de validation actuelles
+
+### Terraform
 
 ```bash
-cd infra/environments/test
-terraform init
-terraform validate
+terraform -chdir=infra/environments/test fmt -check -recursive
+terraform -chdir=infra/environments/test init -backend=false
+terraform -chdir=infra/environments/test validate
 ```
 
-## 2. Plan sans activer la route P0
+### Modèle Bedrock
+
+Le modèle validé est :
+
+```text
+eu.anthropic.claude-haiku-4-5-20251001-v1:0
+```
+
+### Runtime direct actuel — diagnostic uniquement
+
+L’URL technique est disponible via :
 
 ```bash
-terraform plan
+terraform -chdir=infra/environments/test output -raw agent_runtime_invoke_url
 ```
 
-La variable `p0_agentcore_gateway_url` est vide par défaut. Dans ce cas, la route `/p0/agent/invoke` n'est pas créée.
+Cette URL sert actuellement au frontend, mais elle deviendra un fallback après la remédiation API Gateway.
 
-## 3. Activer la route P0
+## 5. Validation après remédiation ADR-0004
 
-Quand l'URL AgentCore Gateway est disponible :
+Récupérer :
 
 ```bash
-terraform plan \
-  -var='p0_agentcore_gateway_url=https://<agentcore-gateway-invoke-url>' \
-  -out=tfplan-p0-gateway
+export AGENT_INVOKE_URL="$(terraform -chdir=infra/environments/test output -raw agent_invoke_url)"
 ```
 
-Puis :
+Tester CORS :
 
 ```bash
-terraform apply tfplan-p0-gateway
+curl -i -X OPTIONS "$AGENT_INVOKE_URL" \
+  -H "Origin: https://<cloudfront-domain>" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: authorization,content-type,x-amzn-bedrock-agentcore-runtime-session-id"
 ```
 
-## 4. Récupérer l'URL de test
+Tester l’invocation :
 
 ```bash
-terraform output -raw p0_agent_invoke_url
+curl -i -X POST "$AGENT_INVOKE_URL" \
+  -H "Authorization: Bearer $COGNITO_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -d '{"prompt":"Plan a short trip to Paris.","sessionId":"550e8400-e29b-41d4-a716-446655440000"}'
 ```
 
-Exporter :
+## 6. Tests contractuels à réécrire
 
-```bash
-export P0_AGENT_INVOKE_URL="$(terraform output -raw p0_agent_invoke_url)"
+Le futur test doit cibler :
+
+```text
+API Gateway -> AgentCore Runtime JWT
 ```
 
-## 5. Lancer les tests contractuels
+et vérifier :
 
-```bash
-python3 ../../scripts/p0_gateway_contract_check.py \
-  --api-url "$P0_AGENT_INVOKE_URL" \
-  --token "$COGNITO_ACCESS_TOKEN" \
-  --cases ../../tests/p0/identity-contract-cases.json
-```
+- JWT requis ;
+- session 33+ caractères ;
+- rejet `actorId` ;
+- rejet `userId` ;
+- rejet `tenantId` ;
+- rejet `trustedIdentity` après suppression du fallback legacy ;
+- rejet `groups` ;
+- isolation User A / User B ;
+- logs redacted.
 
-Si la commande est lancée depuis la racine du repo :
+## 7. Références
 
-```bash
-python3 scripts/p0_gateway_contract_check.py \
-  --api-url "$P0_AGENT_INVOKE_URL" \
-  --token "$COGNITO_ACCESS_TOKEN" \
-  --cases tests/p0/identity-contract-cases.json
-```
-
-## 6. Critère de succès immédiat
-
-- Le cas positif retourne 2xx.
-- Les cas avec `actorId`, `userId`, `tenantId`, `trustedIdentity` ou `groups` retournent 400 ou 403.
-- Les logs ne contiennent pas le JWT, le header Authorization, le prompt brut, `actorId` brut ou `sessionId` brut.
-
-## 7. Rollback P0
-
-Pour désactiver la route P0 :
-
-```bash
-terraform apply -var='p0_agentcore_gateway_url='
-```
-
-La route legacy `/agent/invoke` reste intacte pendant tout le spike.
+- `docs/p0/P0-AgentCore-Gateway-Spike.md` ;
+- `docs/adr/ADR-0004-api-gateway-direct-agentcore-runtime-jwt.md` ;
+- `docs/migration/REMEDIATION-Gateway-First-APIGW.md`.
