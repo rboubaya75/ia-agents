@@ -1,119 +1,129 @@
 # ADR-0003 — Provisioning AgentCore natif Terraform
 
-- Statut : accepté
-- Date : 2026-07-08
-- Remplace : contrat manuel `agentcore_gateway_contract` et tfvars P0 manuels
-- Complète : ADR-0002 Gateway-first avec Amazon API Gateway
+- **Statut :** accepté avec amendement ADR-0004
+- **Date initiale :** 2026-07-08
+- **Amendement :** 2026-07-12
+- **Périmètre :** environnement `test`, branche par défaut `migration/secure-agentcore-v1`
 
 ## Contexte
 
-L'architecture cible WildRydes conserve Amazon API Gateway comme ingress web public et utilise Amazon Bedrock AgentCore Gateway pour le trafic agentique.
+Le control plane AgentCore doit être provisionné de manière auditable et reproductible. Le provider AWS Terraform expose les ressources natives nécessaires :
 
-Le blocage CI/CD `enforce_gateway_first=true` est volontaire : il empêche un déploiement `runtime-only` ou `full` si les ressources AgentCore réelles ne sont pas provisionnées. Ce blocage ne doit pas être contourné par des valeurs manuelles ou des placeholders.
+- `aws_bedrockagentcore_memory` ;
+- `aws_bedrockagentcore_gateway` ;
+- `aws_bedrockagentcore_agent_runtime` ;
+- `aws_bedrockagentcore_agent_runtime_endpoint` ;
+- `aws_bedrockagentcore_gateway_target` lorsque des targets sont créés.
 
-La vérification du provider AWS Terraform montre que les ressources natives AgentCore existent :
-
-- `aws_bedrockagentcore_memory`
-- `aws_bedrockagentcore_gateway`
-- `aws_bedrockagentcore_agent_runtime`
-- `aws_bedrockagentcore_agent_runtime_endpoint`
-- `aws_bedrockagentcore_gateway_target`
+La décision de provisioning Terraform reste valide. La décision d’ingress Gateway-first initialement associée à cet ADR a en revanche été remplacée par ADR-0004.
 
 ## Décision
 
-Nous provisionnons le control plane AgentCore avec Terraform natif, pas avec un script Boto3 propriétaire ni avec des variables tfvars manuelles.
+Le control plane AgentCore est provisionné avec Terraform natif, pas avec un script Boto3 propriétaire ni avec des valeurs manuelles servant de source de vérité.
 
-La stack `infra/environments/test` est organisée en deux temps :
+La stack `infra/environments/test` suit deux étapes :
 
-1. **Base Terraform** avec `enable_agentcore_control_plane=false` :
-   - S3 / CloudFront frontend
-   - Cognito web auth
-   - DynamoDB trips
-   - ECR runtime image repository
-   - IAM runtime role
-   - IAM gateway role
-   - Amazon API Gateway HTTP API
+### 1. Socle Terraform
 
-2. **Control plane AgentCore Terraform** avec `enable_agentcore_control_plane=true` après publication de l'image Runtime :
-   - AgentCore Memory
-   - AgentCore Runtime
-   - AgentCore Runtime Endpoint
-   - AgentCore Gateway HTTP ingress
-   - AgentCore Gateway HTTP target vers Runtime
-   - AgentCore Gateway MCP tools
+Avec `enable_agentcore_control_plane=false` :
 
-La pipeline applicative construit et pousse l'image Runtime dans ECR, puis relance Terraform avec :
+- frontend S3 privé et CloudFront ;
+- Cognito web auth ;
+- DynamoDB trips ;
+- ECR Runtime ;
+- IAM ;
+- Amazon API Gateway HTTP API.
 
-```bash
-terraform plan \
-  -var="enable_agentcore_control_plane=true" \
-  -var="agentcore_image_tag=<resolved_tag>" \
-  -var="agent_runtime_endpoint_name=<endpoint>"
+### 2. Control plane AgentCore
+
+Après publication de l’image Runtime, avec `enable_agentcore_control_plane=true` :
+
+- AgentCore Memory ;
+- AgentCore Runtime ;
+- AgentCore Runtime Endpoint ;
+- AgentCore Gateway MCP pour les tools.
+
+La cible V1 d’ingress approuvée est :
+
+```text
+Browser
+  -> Amazon API Gateway HTTP API
+  -> HTTP proxy direct
+  -> AgentCore Runtime JWT
 ```
 
-## Raison du choix
+Le chemin tools est :
 
-Cette approche donne :
+```text
+AgentCore Runtime
+  -> AgentCore Gateway MCP
+  -> targets tools autorisés
+```
 
-- un état Terraform unique pour le control plane AgentCore ;
-- un plan/apply/destroy auditable ;
-- une détection de drift native ;
-- une suppression du provisioning manuel ;
-- une séparation claire entre base infra et runtime image lifecycle ;
-- un maintien du gate `enforce_gateway_first=true` comme garde-fou de qualité.
+AgentCore Gateway ingress et son HTTP target vers Runtime ne sont plus des composants nominaux.
 
-## Décisions structurantes
+## Raisons du choix Terraform natif
 
-### Deux AgentCore Gateways natifs
+- état Terraform unique et auditable ;
+- plan/apply/destroy contrôlés ;
+- détection de drift ;
+- suppression des placeholders manuels ;
+- séparation entre socle infra et cycle de vie de l’image Runtime ;
+- outputs réutilisables par la pipeline applicative ;
+- destruction test contrôlée.
 
-Nous utilisons deux Gateways AgentCore distincts :
+## Pipeline applicative
 
-1. `ingress` sans `protocol_type`, pour le target HTTP vers AgentCore Runtime.
-2. `tools_mcp` avec `protocol_type = "MCP"`, pour les tools MCP appelés par le Runtime.
+Le workflow applicatif doit :
 
-Cette séparation évite de mélanger les contraintes HTTP target et MCP target dans le même gateway.
+1. lire les outputs Terraform du socle ;
+2. construire l’image `linux/arm64` ;
+3. pousser une image immuable vers ECR ;
+4. appliquer le control plane AgentCore ;
+5. relire les outputs Runtime, Memory, MCP Gateway et API Gateway ;
+6. valider le contrat V1 ;
+7. construire le frontend avec l’URL API Gateway `/agent/invoke` ;
+8. publier sur S3 et invalider CloudFront.
 
-### API Gateway reste l'ingress web
+## Outputs attendus
 
-Le navigateur appelle Amazon API Gateway HTTP API. API Gateway conserve :
+Après application complète :
 
-- Cognito JWT authorizer ;
-- CORS limité au domaine CloudFront ;
-- throttling/logging extensibles ;
-- futur WAF/custom domain.
+- `agent_runtime_arn` ;
+- `agent_runtime_invoke_url` — output technique, non nominal pour le frontend ;
+- `agentcore_memory_id` ;
+- `agentcore_gateway_mcp_url` ;
+- `service_url` ;
+- `agent_invoke_url` — URL nominale frontend après remédiation API Gateway.
 
-API Gateway route `/agent/invoke` vers l'AgentCore Gateway ingress quand `gateway_url` existe.
+## Sécurité et garde-fous
 
-### Lambda Facade reste hors chemin nominal
+- Le rôle Runtime doit être restreint aux modèles, logs, Memory, Gateway et secrets nécessaires.
+- Le rôle Gateway doit être restreint aux targets tools explicitement autorisés.
+- Les policies wildcard actuelles sont une dette P0 à supprimer avant clôture V1.
+- ECR doit rester immutable avec scan on push.
+- GitHub Actions utilise OIDC AWS, sans clés d’accès longues durées.
+- Un apply ne doit jamais être exécuté sans revue du plan.
 
-La Lambda Facade n'est pas utilisée par la pipeline nominale. Toute réactivation doit passer par une ADR séparée avec justification sécurité, audit ou compatibilité.
+## Critères d’acceptation
 
-## Conséquences
+- `terraform fmt -check -recursive` passe ;
+- `terraform init -backend=false` passe ;
+- `terraform validate` passe ;
+- le plan ne détruit pas involontairement le control plane existant ;
+- l’image Runtime est disponible dans ECR ;
+- Runtime, Endpoint, Memory et MCP Gateway sont présents ;
+- API Gateway expose `/agent/invoke` vers Runtime direct ;
+- le frontend utilise l’URL API Gateway ;
+- aucun step nominal n’active la Lambda Facade ;
+- aucun step nominal ne recrée AgentCore Gateway comme ingress utilisateur.
 
-- Le workflow Terraform peut appliquer la base sans image Runtime existante.
-- Le workflow applicatif est responsable du build/push image, puis du apply Terraform AgentCore control plane.
-- Le déploiement `runtime-only` exige un tag image existant.
-- Le déploiement `full` génère un tag immutable, pousse l'image, puis applique AgentCore nativement.
-- `enforce_gateway_first=true` reste activé par défaut.
+## Travaux restants V1
 
-## Critères d'acceptation
-
-- `terraform validate` passe sur `infra/environments/test`.
-- Le premier `terraform apply` base crée ECR, IAM, Cognito, API Gateway, S3/CloudFront et DynamoDB.
-- Le workflow applicatif `full` pousse l'image puis crée Runtime, Memory, Gateways et HTTP target.
-- Les outputs suivants sont non vides après control plane apply :
-  - `agentcore_gateway_url`
-  - `agentcore_gateway_mcp_url`
-  - `agentcore_memory_id`
-  - `agent_runtime_arn`
-- `POST /agent/invoke` passe par API Gateway puis AgentCore Gateway HTTP target.
-- Runtime reçoit `MEMORY_ID`, `GATEWAY_URL` et `GATEWAY_AUTH_MODE=aws_iam`.
-- Aucun step nominal ne déploie ou active `Lambda Facade -> Runtime`.
-
-## Travaux restants
-
-- Ajouter les MCP tool targets métiers dès que les Lambda/API tools sont stabilisés.
-- Restreindre les IAM policies wildcard utilisées pendant le P0.
-- Ajouter un smoke test E2E : API Gateway -> AgentCore Gateway -> Runtime.
-- Ajouter un smoke test tools : Runtime -> AgentCore Gateway MCP -> tool.
-- Vérifier la propagation d'identité : `actorId = Cognito sub`, aucun champ identité accepté depuis le body client.
+- implémenter le proxy API Gateway vers Runtime direct ;
+- aligner le mode d’authentification MCP entre Terraform et `phase_4.py` ;
+- créer au moins un target tool réel et le tester ;
+- supprimer les IAM wildcards non nécessaires ;
+- ajouter access logs, throttling et alarmes API Gateway ;
+- exécuter les tests contractuels JWT, identité, CORS et tools ;
+- mettre à jour les noms de scripts et outputs hérités de `gateway_first`.
