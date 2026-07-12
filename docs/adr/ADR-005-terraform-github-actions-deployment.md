@@ -1,59 +1,87 @@
-# ADR-005 — Terraform and GitHub Actions Deployment Strategy
+# ADR-005 — Stratégie de déploiement Terraform et GitHub Actions
 
-## Statut
-
-Accepted.
+- **Statut :** accepté
+- **Périmètre :** environnement `test`
+- **Branche par défaut :** `migration/secure-agentcore-v1`
 
 ## Contexte
 
-Le client a decide de travailler exclusivement sur la branche `migration/secure-agentcore-v1` pendant la phase de test.
-
-Cette branche est devenue la branche par defaut du depot pendant cette phase.
-
-La branche `main` est reservee a la future phase production. Le switch vers `main` sera realise manuellement ulterieurement apres validation client.
-
-## Decision
-
-La cible utilise Terraform et GitHub Actions avec OIDC.
-
-Pendant la phase test :
+Le travail courant, les validations, les plans et les déploiements concernent exclusivement l’environnement `test` porté par la branche par défaut :
 
 ```text
-migration/secure-agentcore-v1 = branche par defaut et environnement test
-main                         = future branche production
+migration/secure-agentcore-v1
 ```
 
-Le workflow test peut executer :
+Aucune autre branche n’entre dans le périmètre opérationnel de cet ADR.
 
-- validation ;
-- scans securite ;
-- plan Terraform ;
-- apply Terraform test ;
-- destroy Terraform test.
+## Décision
 
-`apply` et `destroy` sont autorises uniquement si :
+La cible utilise :
 
-- ils sont lances manuellement via `workflow_dispatch` ;
-- ils ciblent la branche `migration/secure-agentcore-v1` ;
-- ils utilisent l environnement GitHub `test` ;
-- ils passent par les reviewers configures sur l environnement `test` ;
-- le role AWS OIDC est limite a l environnement test ;
-- aucune ressource prod n est accessible.
+- Terraform ;
+- GitHub Actions ;
+- OIDC GitHub vers AWS ;
+- environnement GitHub `test` ;
+- confirmations explicites pour les actions destructives.
 
-## Implications
+Le workflow infrastructure peut exécuter :
 
-- Aucun deploiement test ne depend de `main` pendant la phase actuelle.
-- La branche `main` ne doit pas recevoir automatiquement les changements test.
-- La promotion vers `main` sera une operation manuelle de production readiness.
-- Un role AWS prod separe devra etre cree pour la phase production.
-- Un environnement GitHub prod separe devra etre cree pour la phase production.
+- secret scan ;
+- lockfile check ;
+- `terraform fmt` ;
+- `terraform validate` ;
+- `terraform plan` ;
+- `terraform apply` ;
+- `terraform destroy-plan` ;
+- `terraform destroy`.
 
-## Criteres d acceptation
+Le workflow application peut exécuter :
 
-- Le workflow GitHub Actions est visible depuis la branche par defaut.
-- OIDC fonctionne sans credentials AWS statiques.
-- `terraform plan` fonctionne sur test.
-- `terraform apply` fonctionne uniquement avec approbation environment `test`.
-- `terraform destroy` exige une confirmation explicite.
-- Aucun job ne deploie sur `main` pendant la phase test.
-- Les logs CI/CD ne contiennent aucun secret.
+- `frontend-only` ;
+- `image-only` ;
+- `runtime-only` ;
+- `full`.
+
+## Conditions d’exécution
+
+`apply` et `destroy` sont autorisés uniquement si :
+
+- ils sont déclenchés manuellement via `workflow_dispatch` ;
+- ils ciblent `migration/secure-agentcore-v1` ;
+- ils utilisent l’environnement GitHub `test` ;
+- ils passent par les reviewers configurés sur cet environnement ;
+- le rôle AWS OIDC est limité aux ressources test ;
+- `destroy` reçoit une confirmation explicite.
+
+## Sécurité
+
+- aucune clé AWS statique dans GitHub ;
+- permissions workflow minimales ;
+- rôle OIDC limité au repository, à la branche et à l’environnement test ;
+- aucun secret dans les logs ;
+- plans Terraform conservés comme artifacts à durée courte ;
+- apply exécuté sur le plan produit ;
+- destruction séparée et confirmée.
+
+## Architecture applicative
+
+La pipeline doit suivre ADR-0004 :
+
+```text
+Frontend -> API Gateway -> AgentCore Runtime JWT
+Runtime -> AgentCore Gateway MCP -> tools
+```
+
+Après remédiation, le frontend doit être construit avec l’URL API Gateway nominale, pas avec l’URL Runtime directe.
+
+## Critères d’acceptation
+
+- les workflows sont visibles depuis la branche par défaut ;
+- OIDC fonctionne sans credentials AWS statiques ;
+- Terraform fmt/validate/plan passent ;
+- apply exige l’environnement `test` ;
+- destroy exige `confirm_destroy=true` ;
+- le workflow application déploie une image ECR immuable ;
+- le frontend est publié via S3/CloudFront ;
+- les logs CI/CD ne contiennent aucun secret ;
+- aucune étape nominale n’active la Lambda Facade ou AgentCore Gateway ingress.
