@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 DEFAULT_STACK_PATH = Path("infra/environments/test")
 DEPLOYMENT_MODES = ("frontend-only", "image-only", "runtime-only", "full")
@@ -55,11 +55,15 @@ def is_https_url(value: str) -> bool:
 
 def is_runtime_url(value: str) -> bool:
     parsed = urlparse(value)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    qualifiers = query.get("qualifier", [])
     return (
         is_https_url(value)
         and parsed.netloc.startswith("bedrock-agentcore.")
         and "/runtimes/" in parsed.path
-        and parsed.query == "qualifier=DEFAULT"
+        and set(query) == {"qualifier"}
+        and len(qualifiers) == 1
+        and bool(qualifiers[0].strip())
     )
 
 
