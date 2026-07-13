@@ -94,19 +94,21 @@ jobs:
     needs: deployment-request-gate
     uses: ./.github/workflows/test-application-quality.yml
 
-  test-application-deploy:
-    name: Test Application Deploy Secure Facade
+  application-plan:
+    name: Build and Plan Application Deployment
     needs: application-quality-gate
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/migration/secure-agentcore-v1'
-    environment:
-      name: test
     permissions:
       contents: read
       id-token: write
-
+    outputs:
+      requested_image_tag: ${{ steps.tfout.outputs.requested_image_tag }}
+      resolved_image_tag: ${{ steps.tfout.outputs.resolved_image_tag }}
+      image_uri: ${{ steps.tfout.outputs.image_uri }}
+      agentcore_plan_exit_code: ${{ steps.agentcore_plan.outputs.exitcode }}
     steps:
       - name: Architecture notice
         run: |
@@ -123,21 +125,12 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: test-application-deploy-secure-facade
+          role-session-name: test-application-plan-secure-facade
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         with:
           terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Setup Node.js
-        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
 
       - name: Install Python deployment dependencies
         run: python3 -m pip install "boto3>=1.43.18"
@@ -147,7 +140,8 @@ jobs:
           python3 -m py_compile \
             infra/modules/agent_api_facade/src/lambda_function.py \
             scripts/preflight_application_deploy.py \
-            scripts/validate_secure_facade_contract.py
+            scripts/validate_secure_facade_contract.py \
+            scripts/terraform_plan_guard.py
 
       - name: Resolve stack path
         id: stack
@@ -282,18 +276,160 @@ jobs:
             --push \
             "${{ env.DOCKER_BUILD_CONTEXT }}"
 
-      - name: Apply native AgentCore control plane and facade
+      - name: Terraform plan native AgentCore control plane and facade
+        id: agentcore_plan
         if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
           terraform plan \
+            -detailed-exitcode \
             -lock-timeout=60s \
             -var="enable_agentcore_control_plane=true" \
             -var="agentcore_image_tag=${{ steps.tfout.outputs.resolved_image_tag }}" \
             -var="agent_runtime_endpoint_name=${{ inputs.endpoint_name }}" \
             -out=tfplan-agentcore-control-plane
+        continue-on-error: true
 
-          terraform apply -auto-approve -lock-timeout=120s tfplan-agentcore-control-plane
+      - name: Fail on AgentCore plan error
+        if: steps.agentcore_plan.outputs.exitcode == '1'
+        run: exit 1
+
+      - name: Render AgentCore plan evidence
+        if: steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          terraform show -no-color tfplan-agentcore-control-plane > tfplan-agentcore-control-plane.txt
+          terraform show -json tfplan-agentcore-control-plane > tfplan-agentcore-control-plane.json
+
+      - name: Analyze AgentCore plan safety
+        id: agentcore_plan_guard
+        if: steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py analyze \
+            --plan-json tfplan-agentcore-control-plane.json \
+            --summary-output tfplan-agentcore-control-plane-summary.md \
+            --policy enforce-critical
+        continue-on-error: true
+
+      - name: Record immutable AgentCore plan metadata
+        if: always() && (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py record \
+            --plan tfplan-agentcore-control-plane \
+            --metadata-output tfplan-agentcore-control-plane-metadata.json \
+            --commit-sha "${GITHUB_SHA}" \
+            --stack-path "${{ steps.stack.outputs.path }}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --terraform-version "${TF_VERSION}"
+
+      - name: Publish AgentCore plan summary
+        if: always() && (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: cat tfplan-agentcore-control-plane-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reviewed AgentCore plan artifact
+        if: always() && (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: agentcore-tfplan-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ steps.stack.outputs.path }}/tfplan-agentcore-control-plane
+            ${{ steps.stack.outputs.path }}/tfplan-agentcore-control-plane.txt
+            ${{ steps.stack.outputs.path }}/tfplan-agentcore-control-plane.json
+            ${{ steps.stack.outputs.path }}/tfplan-agentcore-control-plane-summary.md
+            ${{ steps.stack.outputs.path }}/tfplan-agentcore-control-plane-metadata.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Fail on unsafe AgentCore plan
+        if: steps.agentcore_plan_guard.outcome == 'failure'
+        run: |
+          echo "AgentCore Terraform plan contains a blocked deletion or replacement of a critical resource."
+          exit 1
+
+  application-apply-and-publish:
+    name: Apply Reviewed Plan and Publish Application
+    needs: application-plan
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: test-application-apply-secure-facade
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Node.js
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python deployment dependencies
+        run: python3 -m pip install "boto3>=1.43.18"
+
+      - name: Validate deployment Python
+        run: |
+          python3 -m py_compile \
+            infra/modules/agent_api_facade/src/lambda_function.py \
+            scripts/validate_secure_facade_contract.py \
+            scripts/terraform_plan_guard.py
+
+      - name: Resolve stack path
+        id: stack
+        run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform init
+
+      - name: Download reviewed AgentCore plan
+        if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: agentcore-tfplan-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ steps.stack.outputs.path }}
+
+      - name: Verify immutable AgentCore plan artifact
+        if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py verify \
+            --plan tfplan-agentcore-control-plane \
+            --metadata tfplan-agentcore-control-plane-metadata.json \
+            --expected-commit-sha "${GITHUB_SHA}" \
+            --expected-stack-path "${{ steps.stack.outputs.path }}" \
+            --expected-run-id "${GITHUB_RUN_ID}" \
+            --expected-terraform-version "${TF_VERSION}"
+          cat tfplan-agentcore-control-plane-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply exact reviewed AgentCore plan
+        if: |
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          needs.application-plan.outputs.agentcore_plan_exit_code == '2'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: terraform apply -auto-approve -lock-timeout=120s tfplan-agentcore-control-plane
 
       - name: Refresh Terraform outputs
         id: tfout_after
@@ -393,9 +529,9 @@ jobs:
           echo "Mode: ${{ inputs.deploy_mode }}"
           echo "Architecture: Browser -> API Gateway JWT -> Lambda facade -> Runtime IAM"
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools"
-          echo "Requested image tag: ${{ steps.tfout.outputs.requested_image_tag }}"
-          echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
-          echo "Image: ${{ steps.tfout.outputs.image_uri }}"
+          echo "Requested image tag: ${{ needs.application-plan.outputs.requested_image_tag }}"
+          echo "Resolved image tag: ${{ needs.application-plan.outputs.resolved_image_tag }}"
+          echo "Image: ${{ needs.application-plan.outputs.image_uri }}"
           echo "Agent API URL: ${{ steps.tfout_after.outputs.resolved_agent_invoke_url }}"
           echo "Secure facade ready: ${{ steps.tfout_after.outputs.secure_facade_ready }}"
           echo "AgentCore Gateway MCP URL configured: ${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url != '' }}"
