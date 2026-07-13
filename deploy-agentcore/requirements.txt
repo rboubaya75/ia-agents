@@ -1,16 +1,11 @@
-# AgentCore Runtime dependencies
-strands-agents>=0.1.0
-boto3>=1.43.18
-bedrock-agentcore-starter-toolkit>=0.1.0
-bedrock-agentcore[strands-agents]>=0.1.0
-mcp>=1.0.0
-httpx>=0.27.0,<1.0.0
-
-# Runtime dependencies
-fastapi>=0.109.0
-uvicorn>=0.27.0
-pydantic>=2.5.0
-
-# Observability
-opentelemetry-distro>=0.43b0
-opentelemetry-instrumentation>=0.43b0
+# Direct Runtime dependencies validated together for Python 3.12.
+strands-agents==1.47.0
+boto3==1.43.46
+bedrock-agentcore[strands-agents]==1.18.0
+mcp==1.28.1
+httpx==0.28.1
+fastapi==0.139.0
+uvicorn==0.51.0
+pydantic==2.13.4
+opentelemetry-distro==0.60b1
+opentelemetry-instrumentation==0.60b1
