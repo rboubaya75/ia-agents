@@ -88,9 +88,7 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
               }
             }
           }
-        }
 
-        tool_schema {
           inline_payload {
             name        = "get_trips"
             description = "List trips belonging to the authenticated user. userId is injected by Runtime."
@@ -105,9 +103,7 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
               }
             }
           }
-        }
 
-        tool_schema {
           inline_payload {
             name        = "get_trip"
             description = "Retrieve one trip belonging to the authenticated user."
@@ -128,9 +124,7 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
               }
             }
           }
-        }
 
-        tool_schema {
           inline_payload {
             name        = "update_trip"
             description = "Update one trip belonging to the authenticated user."
