@@ -21,6 +21,20 @@ data "aws_iam_policy_document" "agentcore_service_assume_role" {
       type        = "Service"
       identifiers = ["bedrock-agentcore.amazonaws.com"]
     }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values = [
+        "arn:${data.aws_partition.current.partition}:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:*"
+      ]
+    }
   }
 }
 
@@ -88,12 +102,35 @@ data "aws_iam_policy_document" "agentcore_runtime" {
   }
 
   statement {
+    sid = "DescribeRuntimeLogs"
+    actions = [
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid = "WriteRuntimeTraces"
     actions = [
       "xray:PutTraceSegments",
-      "xray:PutTelemetryRecords"
+      "xray:PutTelemetryRecords",
+      "xray:GetSamplingRules",
+      "xray:GetSamplingTargets"
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid       = "WriteAgentCoreMetrics"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = ["bedrock-agentcore"]
+    }
   }
 }
 
