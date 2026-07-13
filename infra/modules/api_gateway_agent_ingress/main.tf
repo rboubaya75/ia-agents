@@ -97,11 +97,11 @@ resource "aws_apigatewayv2_route" "agent_invoke_security_facade" {
 resource "aws_apigatewayv2_integration" "agentcore_gateway" {
   count = local.gateway_first_enabled ? 1 : 0
 
-  api_id                 = aws_apigatewayv2_api.this.id
-  integration_type       = "HTTP_PROXY"
-  integration_method     = "POST"
-  integration_uri        = local.agentcore_runtime_invoke_url
-  timeout_milliseconds   = 29000
+  api_id               = aws_apigatewayv2_api.this.id
+  integration_type     = "HTTP_PROXY"
+  integration_method   = "POST"
+  integration_uri      = local.agentcore_runtime_invoke_url
+  timeout_milliseconds = 29000
 }
 
 resource "aws_apigatewayv2_route" "agent_invoke_gateway_first" {

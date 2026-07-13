@@ -59,9 +59,9 @@ data "aws_iam_policy_document" "runtime_invoke" {
   count = var.runtime_ready ? 1 : 0
 
   statement {
-    sid       = "InvokeOnlyConfiguredAgentRuntime"
-    effect    = "Allow"
-    actions   = ["bedrock-agentcore:InvokeAgentRuntime"]
+    sid     = "InvokeOnlyConfiguredAgentRuntime"
+    effect  = "Allow"
+    actions = ["bedrock-agentcore:InvokeAgentRuntime"]
     resources = [
       var.agent_runtime_arn,
       "${var.agent_runtime_arn}/*"
@@ -69,9 +69,9 @@ data "aws_iam_policy_document" "runtime_invoke" {
   }
 
   statement {
-    sid       = "DenyUnverifiedRuntimeUserDelegation"
-    effect    = "Deny"
-    actions   = ["bedrock-agentcore:InvokeAgentRuntimeForUser"]
+    sid     = "DenyUnverifiedRuntimeUserDelegation"
+    effect  = "Deny"
+    actions = ["bedrock-agentcore:InvokeAgentRuntimeForUser"]
     resources = [
       var.agent_runtime_arn,
       "${var.agent_runtime_arn}/*"
