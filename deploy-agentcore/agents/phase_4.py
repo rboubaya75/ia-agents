@@ -3,7 +3,7 @@
 Inbound requests are accepted only from the Lambda security facade through IAM.
 The facade derives the actor from a validated Cognito access token and injects a
 strict ``trustedIdentity`` object. Runtime rejects every other identity source.
-Outbound MCP calls to AgentCore Gateway are signed with the Runtime IAM role.
+All V1 tools are loaded from AgentCore Gateway and signed with the Runtime role.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -23,13 +24,11 @@ from bedrock_agentcore.memory import MemoryClient
 from bedrock_agentcore.runtime import BedrockAgentCoreApp, RequestContext
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-from ddgs import DDGS
 from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent
 from strands.hooks import AfterInvocationEvent, HookProvider, HookRegistry, MessageAddedEvent
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
-from strands.tools import tool
 from strands.tools.mcp.mcp_client import MCPClient
 
 PHASE4_SYSTEM_PROMPT_BASE = """You are a helpful travel assistant with long-term memory and trip planning capabilities.
@@ -42,6 +41,7 @@ Guidelines:
 - Use trip planning tools to create, view and update trips for users.
 - Never ask for userId, actorId, tenantId or trustedIdentity.
 - Tool identity is injected by the trusted server context.
+- Use only the tools exposed by the governed AgentCore Gateway.
 - Keep answers concise and helpful.
 """
 
@@ -94,6 +94,7 @@ memory_client = MemoryClient(region_name=REGION)
 mcp_client: Optional[MCPClient] = None
 mcp_tools: list[Any] = []
 _mcp_initialized = False
+_mcp_init_lock = threading.Lock()
 
 
 def safe_hash(value: Optional[str]) -> str:
@@ -161,26 +162,6 @@ def log_invocation(session_id: str, actor_id: str, duration_ms: float, status: s
     if error is not None:
         event["error_type"] = type(error).__name__
     logger.info(json.dumps(event))
-
-
-@tool
-def web_search(keywords: str, region: str = "us-en", max_results: int = 5) -> str:
-    """Search public travel information on the web."""
-    try:
-        safe_max = min(max(int(max_results), 1), 5)
-        results = DDGS().text(keywords, region=region, max_results=safe_max)
-        if not results:
-            return "No search results found."
-        formatted = []
-        for index, result in enumerate(results, 1):
-            formatted.append(
-                f"{index}. {result.get('title', 'No title')}\n"
-                f"   {result.get('body', 'No description')}"
-            )
-        return "\n".join(formatted)
-    except Exception:
-        logger.warning("web_search_unavailable")
-        return "Search temporarily unavailable."
 
 
 class UserIdInjectionHook(HookProvider):
@@ -350,40 +331,47 @@ def get_all_mcp_tools(client: MCPClient) -> list[Any]:
 
 def initialize_mcp_tools() -> list[Any]:
     global _mcp_initialized, mcp_client, mcp_tools
-    if _mcp_initialized:
-        return mcp_tools
 
-    if not GATEWAY_URL:
-        if REQUIRE_MCP_TOOLS:
-            raise RuntimeError("GATEWAY_URL is required for V1 MCP tools.")
-        logger.warning("gateway_tools_not_configured")
-        _mcp_initialized = True
-        return []
-    if GATEWAY_AUTH_MODE != "aws_iam":
-        raise RuntimeError("Only aws_iam MCP Gateway authentication is supported in V1.")
+    with _mcp_init_lock:
+        if _mcp_initialized:
+            return mcp_tools
 
-    try:
-        candidate_client = MCPClient(lambda: create_iam_mcp_transport(GATEWAY_URL))
-        candidate_client.__enter__()
-        candidate_tools = get_all_mcp_tools(candidate_client)
-        if REQUIRE_MCP_TOOLS and not candidate_tools:
-            candidate_client.__exit__(None, None, None)
-            raise RuntimeError("AgentCore Gateway returned no MCP tools for V1.")
+        if not GATEWAY_URL:
+            if REQUIRE_MCP_TOOLS:
+                raise RuntimeError("GATEWAY_URL is required for V1 MCP tools.")
+            logger.warning("gateway_tools_not_configured")
+            _mcp_initialized = True
+            return []
+        if GATEWAY_AUTH_MODE != "aws_iam":
+            raise RuntimeError("Only aws_iam MCP Gateway authentication is supported in V1.")
 
-        mcp_client = candidate_client
-        mcp_tools = candidate_tools
-        _mcp_initialized = True
-        logger.info(json.dumps({"event": "gateway_tools_loaded", "count": len(mcp_tools)}))
-        return mcp_tools
-    except Exception as exc:
-        mcp_client = None
-        mcp_tools = []
-        _mcp_initialized = False
-        logger.error(json.dumps({"event": "gateway_tools_load_failed", "error_type": type(exc).__name__}))
-        if REQUIRE_MCP_TOOLS:
-            raise
-        _mcp_initialized = True
-        return []
+        candidate_client: Optional[MCPClient] = None
+        try:
+            candidate_client = MCPClient(lambda: create_iam_mcp_transport(GATEWAY_URL))
+            candidate_client.__enter__()
+            candidate_tools = get_all_mcp_tools(candidate_client)
+            if REQUIRE_MCP_TOOLS and not candidate_tools:
+                raise RuntimeError("AgentCore Gateway returned no MCP tools for V1.")
+
+            mcp_client = candidate_client
+            mcp_tools = candidate_tools
+            _mcp_initialized = True
+            logger.info(json.dumps({"event": "gateway_tools_loaded", "count": len(mcp_tools)}))
+            return mcp_tools
+        except Exception as exc:
+            if candidate_client is not None:
+                try:
+                    candidate_client.__exit__(type(exc), exc, exc.__traceback__)
+                except Exception:
+                    logger.warning("gateway_tools_cleanup_failed")
+            mcp_client = None
+            mcp_tools = []
+            _mcp_initialized = False
+            logger.error(json.dumps({"event": "gateway_tools_load_failed", "error_type": type(exc).__name__}))
+            if REQUIRE_MCP_TOOLS:
+                raise
+            _mcp_initialized = True
+            return []
 
 
 def response_text(response: Any) -> str:
@@ -433,8 +421,7 @@ async def invoke(payload: Dict[str, Any], context: RequestContext = None) -> str
         if MEMORY_ID:
             hooks.append(TravelAgentMemoryHooks(MEMORY_ID, memory_client))
 
-        tools: list[Any] = [web_search]
-        tools.extend(initialize_mcp_tools())
+        tools = initialize_mcp_tools()
         agent = Agent(
             system_prompt=build_system_prompt(),
             model=BedrockModel(**model_config),
