@@ -43,6 +43,8 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
   }
 
   tags = local.common_tags
+
+  depends_on = [aws_iam_role_policy_attachment.agentcore_runtime]
 }
 
 data "aws_iam_policy_document" "agent_runtime_invocation_boundary" {
