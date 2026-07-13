@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import type { Message as MessageType } from '../../types';
 
 interface MessageProps {
@@ -8,7 +9,7 @@ interface MessageProps {
 
 const Message: React.FC<MessageProps> = ({ message }) => {
   const isUser = message.sender === 'user';
-  
+
   const formatTimestamp = (date: Date): string => {
     return date.toLocaleTimeString('en-US', {
       hour: '2-digit',
@@ -16,12 +17,59 @@ const Message: React.FC<MessageProps> = ({ message }) => {
     });
   };
 
-  // Preprocess content to handle escaped characters
   const processContent = (content: string): string => {
     return content
-      .replace(/\\n/g, '\n')    // Convert \n to actual newlines
-      .replace(/\\t/g, '\t')    // Convert \t to actual tabs
-      .replace(/\\r/g, '\r');   // Convert \r to carriage returns
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\r/g, '\r');
+  };
+
+  const components: Components = {
+    h1: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <h1 className={`text-2xl font-bold mb-2 ${isUser ? 'text-white' : 'text-gray-900'}`} {...elementProps} />;
+    },
+    h2: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <h2 className={`text-xl font-bold mb-2 ${isUser ? 'text-white' : 'text-gray-900'}`} {...elementProps} />;
+    },
+    h3: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <h3 className={`text-lg font-bold mb-1 ${isUser ? 'text-white' : 'text-gray-900'}`} {...elementProps} />;
+    },
+    ul: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <ul className="list-disc ml-4 my-2" {...elementProps} />;
+    },
+    ol: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <ol className="list-decimal ml-4 my-2" {...elementProps} />;
+    },
+    li: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <li className="mb-1" {...elementProps} />;
+    },
+    p: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <p className="mb-2 last:mb-0" {...elementProps} />;
+    },
+    strong: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <strong className="font-bold" {...elementProps} />;
+    },
+    code: (props) => {
+      const { node, ...elementProps } = props;
+      void node;
+      return <code className={`px-1 py-0.5 rounded ${isUser ? 'bg-blue-600' : 'bg-gray-300'}`} {...elementProps} />;
+    },
   };
 
   return (
@@ -34,24 +82,7 @@ const Message: React.FC<MessageProps> = ({ message }) => {
         }`}
       >
         <div className="prose prose-sm max-w-none break-words">
-          <ReactMarkdown
-            components={{
-              // Style headings
-              h1: ({node, ...props}) => <h1 className={`text-2xl font-bold mb-2 ${isUser ? 'text-white' : 'text-gray-900'}`} {...props} />,
-              h2: ({node, ...props}) => <h2 className={`text-xl font-bold mb-2 ${isUser ? 'text-white' : 'text-gray-900'}`} {...props} />,
-              h3: ({node, ...props}) => <h3 className={`text-lg font-bold mb-1 ${isUser ? 'text-white' : 'text-gray-900'}`} {...props} />,
-              // Style lists
-              ul: ({node, ...props}) => <ul className="list-disc ml-4 my-2" {...props} />,
-              ol: ({node, ...props}) => <ol className="list-decimal ml-4 my-2" {...props} />,
-              li: ({node, ...props}) => <li className="mb-1" {...props} />,
-              // Style paragraphs
-              p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />,
-              // Style strong/bold
-              strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
-              // Style code
-              code: ({node, ...props}) => <code className={`px-1 py-0.5 rounded ${isUser ? 'bg-blue-600' : 'bg-gray-300'}`} {...props} />,
-            }}
-          >
+          <ReactMarkdown components={components}>
             {processContent(message.content)}
           </ReactMarkdown>
         </div>
