@@ -30,6 +30,8 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
     MEMORY_ID          = aws_bedrockagentcore_memory.agent[0].id
     GATEWAY_URL        = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
     GATEWAY_AUTH_MODE  = "aws_iam"
+    REQUIRE_MCP_TOOLS  = "true"
+    MAX_PROMPT_CHARS   = "4000"
   }
 
   network_configuration {
@@ -129,4 +131,47 @@ resource "aws_bedrockagentcore_gateway" "tools_mcp" {
   }
 
   tags = local.common_tags
+}
+
+data "aws_iam_policy_document" "tools_gateway_invocation_boundary" {
+  count = var.enable_agentcore_control_plane ? 1 : 0
+
+  statement {
+    sid     = "AllowOnlyRuntimeRole"
+    effect  = "Allow"
+    actions = ["bedrock-agentcore:InvokeGateway"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [aws_iam_role.agentcore_runtime.arn]
+    }
+
+    resources = [aws_bedrockagentcore_gateway.tools_mcp[0].gateway_arn]
+  }
+
+  statement {
+    sid     = "DenyOtherGatewayInvokers"
+    effect  = "Deny"
+    actions = ["bedrock-agentcore:InvokeGateway"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    resources = [aws_bedrockagentcore_gateway.tools_mcp[0].gateway_arn]
+
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = [aws_iam_role.agentcore_runtime.arn]
+    }
+  }
+}
+
+resource "aws_bedrockagentcore_resource_policy" "tools_gateway_invocation_boundary" {
+  count = var.enable_agentcore_control_plane ? 1 : 0
+
+  resource_arn = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_arn
+  policy       = data.aws_iam_policy_document.tools_gateway_invocation_boundary[0].json
 }
