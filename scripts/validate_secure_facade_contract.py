@@ -9,11 +9,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DEFAULT_STACK_PATH = Path("infra/environments/test")
+DEPLOYMENT_MODES = ("frontend-only", "image-only", "runtime-only", "full")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate the complete secure AgentCore V1 deployment contract.")
-    parser.add_argument("--mode", required=True, choices=["frontend-only", "image-only", "runtime-only", "full"])
+    parser = argparse.ArgumentParser(description="Validate the secure AgentCore V1 deployment contract for a deployment mode.")
+    parser.add_argument("--mode", required=True, choices=DEPLOYMENT_MODES)
     parser.add_argument("--stack-path", default=str(DEFAULT_STACK_PATH))
     parser.add_argument("--api-base-url", default="")
     parser.add_argument("--agent-invoke-url", default="")
@@ -71,6 +72,59 @@ def is_agent_invoke_url(value: str) -> bool:
     )
 
 
+def validate_public_ingress(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    if not is_https_url(values["api_base_url"]):
+        errors.append("service_url must be a valid HTTPS API Gateway URL")
+    elif "bedrock-agentcore" in urlparse(values["api_base_url"]).netloc:
+        errors.append("service_url must never reference AgentCore Runtime directly")
+
+    if not is_agent_invoke_url(values["agent_invoke_url"]):
+        errors.append("agent_invoke_url must be an HTTPS /agent/invoke application endpoint")
+
+    if values["api_base_url"] and values["agent_invoke_url"]:
+        if urlparse(values["api_base_url"]).netloc != urlparse(values["agent_invoke_url"]).netloc:
+            errors.append("service_url and agent_invoke_url must use the same API host")
+
+    if not values["facade_function_name"]:
+        errors.append("facade_function_name is missing")
+    return errors
+
+
+def validate_runtime_contract(values: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    if not is_runtime_url(values["agent_runtime_invoke_url"]):
+        errors.append("agent_runtime_invoke_url must remain a valid technical IAM Runtime URL")
+    if values["agent_runtime_invoke_url"] == values["agent_invoke_url"]:
+        errors.append("the browser endpoint must not equal the technical Runtime endpoint")
+
+    if not is_https_url(values["agentcore_gateway_mcp_url"]):
+        errors.append("agentcore_gateway_mcp_url is missing or invalid")
+    if not values["agentcore_memory_id"]:
+        errors.append("agentcore_memory_id is missing")
+    if not values["runtime_arn"].startswith("arn:") or ":runtime/" not in values["runtime_arn"]:
+        errors.append("runtime_arn is missing or invalid")
+    if not values["trip_tools_function_name"]:
+        errors.append("trip_tools_function_name is missing")
+    if not values["trip_tools_target_id"]:
+        errors.append("trip_tools_target_id is missing")
+    if values["secure_facade_ready"].lower() != "true":
+        errors.append("secure_facade_ready is not true")
+    return errors
+
+
+def validate_contract(mode: str, values: dict[str, str]) -> list[str]:
+    if mode not in DEPLOYMENT_MODES:
+        return [f"unsupported deployment mode: {mode}"]
+    if mode == "image-only":
+        return []
+
+    errors = validate_public_ingress(values)
+    if mode in {"runtime-only", "full"}:
+        errors.extend(validate_runtime_contract(values))
+    return errors
+
+
 def fail(message: str) -> int:
     print(f"ERROR: {message}", file=sys.stderr)
     return 1
@@ -99,44 +153,16 @@ def main() -> int:
         "secure_facade_ready": resolved(options, "secure_facade_ready", "secure_facade_ready"),
     }
 
-    errors: list[str] = []
-    if not is_https_url(values["api_base_url"]):
-        errors.append("service_url must be a valid HTTPS API Gateway URL")
-    elif "bedrock-agentcore" in urlparse(values["api_base_url"]).netloc:
-        errors.append("service_url must never reference AgentCore Runtime directly")
-
-    if not is_agent_invoke_url(values["agent_invoke_url"]):
-        errors.append("agent_invoke_url must be an HTTPS /agent/invoke application endpoint")
-
-    if values["api_base_url"] and values["agent_invoke_url"]:
-        if urlparse(values["api_base_url"]).netloc != urlparse(values["agent_invoke_url"]).netloc:
-            errors.append("service_url and agent_invoke_url must use the same API host")
-
-    if not is_runtime_url(values["agent_runtime_invoke_url"]):
-        errors.append("agent_runtime_invoke_url must remain a valid technical IAM Runtime URL")
-    if values["agent_runtime_invoke_url"] == values["agent_invoke_url"]:
-        errors.append("the browser endpoint must not equal the technical Runtime endpoint")
-
-    if not is_https_url(values["agentcore_gateway_mcp_url"]):
-        errors.append("agentcore_gateway_mcp_url is missing or invalid")
-    if not values["agentcore_memory_id"]:
-        errors.append("agentcore_memory_id is missing")
-    if not values["runtime_arn"].startswith("arn:") or ":runtime/" not in values["runtime_arn"]:
-        errors.append("runtime_arn is missing or invalid")
-    if not values["facade_function_name"]:
-        errors.append("facade_function_name is missing")
-    if not values["trip_tools_function_name"]:
-        errors.append("trip_tools_function_name is missing")
-    if not values["trip_tools_target_id"]:
-        errors.append("trip_tools_target_id is missing")
-    if values["secure_facade_ready"].lower() != "true":
-        errors.append("secure_facade_ready is not true")
-
+    errors = validate_contract(options.mode, values)
     if errors and options.enforce:
         return fail("Secure V1 contract failed: " + "; ".join(errors))
     for error in errors:
         print(f"WARNING: {error}")
 
+    if options.mode == "frontend-only":
+        print("Frontend-only mode validated the public API facade contract; Runtime readiness is not changed by this deployment.")
+    else:
+        print("Complete secure Runtime contract validated.")
     print(f"Secure V1 contract validation completed with {len(errors)} warning(s).")
     return 0
 
