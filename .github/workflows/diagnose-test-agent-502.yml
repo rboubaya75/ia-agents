@@ -1,0 +1,240 @@
+name: Diagnose Test Agent 502
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_minutes:
+        description: "CloudWatch lookback window"
+        required: true
+        type: choice
+        options:
+          - "15"
+          - "30"
+          - "60"
+          - "120"
+        default: "30"
+      invoke_smoke:
+        description: "Invoke the deployed facade once with a synthetic authenticated event"
+        required: true
+        type: boolean
+        default: true
+      confirm_diagnosis:
+        description: "Required to access the protected test environment"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-test-agent-502
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-3
+  TF_VERSION: "1.9.0"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  STACK_PATH: infra/environments/test
+
+jobs:
+  diagnose:
+    name: Collect Facade and Runtime Evidence
+    if: |
+      github.ref == 'refs/heads/migration/secure-agentcore-v1' &&
+      inputs.confirm_diagnosis == true
+    runs-on: ubuntu-latest
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: diagnose-test-agent-502
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Read deployed contract
+        id: contract
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          mkdir -p diagnostics
+          terraform init -input=false
+          terraform output -json > diagnostics/terraform-outputs.json
+          jq -e 'type == "object" and length > 0' diagnostics/terraform-outputs.json >/dev/null
+
+          tf_output() {
+            jq -r --arg key "$1" '.[$key].value // "" | if type == "string" then . else tostring end' diagnostics/terraform-outputs.json
+          }
+
+          facade_function="$(tf_output agent_api_facade_function_name)"
+          facade_log_group="$(tf_output agent_api_facade_log_group_name)"
+          runtime_id="$(tf_output agent_runtime_id)"
+          runtime_arn="$(tf_output agent_runtime_arn)"
+          cognito_client_id="$(tf_output cognito_web_client_id)"
+          secure_ready="$(tf_output secure_facade_ready)"
+
+          for required in facade_function facade_log_group runtime_id runtime_arn cognito_client_id; do
+            if [ -z "${!required}" ]; then
+              echo "Required deployed output is missing: $required"
+              exit 1
+            fi
+          done
+
+          {
+            echo "facade_function=$facade_function"
+            echo "facade_log_group=$facade_log_group"
+            echo "runtime_id=$runtime_id"
+            echo "runtime_arn=$runtime_arn"
+            echo "cognito_client_id=$cognito_client_id"
+            echo "secure_ready=$secure_ready"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Capture facade configuration
+        id: facade
+        run: |
+          mkdir -p diagnostics
+          aws lambda get-function-configuration \
+            --function-name "${{ steps.contract.outputs.facade_function }}" \
+            --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,LastModified:LastModified,RuntimeReady:Environment.Variables.RUNTIME_READY,RuntimeArn:Environment.Variables.AGENT_RUNTIME_ARN,RuntimeEndpoint:Environment.Variables.AGENT_RUNTIME_ENDPOINT_NAME}' \
+            > diagnostics/facade-configuration.json
+
+          endpoint="$(jq -r '.RuntimeEndpoint // ""' diagnostics/facade-configuration.json)"
+          runtime_ready="$(jq -r '.RuntimeReady // ""' diagnostics/facade-configuration.json)"
+          if [ -z "$endpoint" ]; then
+            echo "Facade Runtime endpoint is missing."
+            exit 1
+          fi
+          {
+            echo "endpoint=$endpoint"
+            echo "runtime_ready=$runtime_ready"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Invoke facade smoke request
+        id: smoke
+        if: inputs.invoke_smoke == true
+        continue-on-error: true
+        run: |
+          mkdir -p diagnostics
+          session_id="sid-v1-$(printf '%s' "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${GITHUB_SHA}" | sha256sum | awk '{print $1}')"
+          jq -nc \
+            --arg client_id "${{ steps.contract.outputs.cognito_client_id }}" \
+            --arg session_id "$session_id" \
+            '{
+              body: ({prompt:"Reply with OK only. Do not call tools.", sessionId:$session_id} | tojson),
+              isBase64Encoded:false,
+              requestContext:{authorizer:{jwt:{claims:{sub:"diagnostic-workflow",client_id:$client_id,token_use:"access"}}}}
+            }' > diagnostics/smoke-event.json
+
+          set +e
+          aws lambda invoke \
+            --function-name "${{ steps.contract.outputs.facade_function }}" \
+            --cli-binary-format raw-in-base64-out \
+            --payload fileb://diagnostics/smoke-event.json \
+            diagnostics/smoke-response.json \
+            > diagnostics/smoke-invoke-metadata.json \
+            2> diagnostics/smoke-invoke.stderr
+          invoke_exit=$?
+          set -e
+          echo "invoke_exit=$invoke_exit" >> "$GITHUB_OUTPUT"
+
+          if [ "$invoke_exit" -ne 0 ]; then
+            cat diagnostics/smoke-invoke.stderr >&2
+            exit "$invoke_exit"
+          fi
+
+          api_status="$(jq -r '.statusCode // 0' diagnostics/smoke-response.json)"
+          body_error="$(jq -r '.body | fromjson? | .error // ""' diagnostics/smoke-response.json)"
+          body_code="$(jq -r '.body | fromjson? | .code // ""' diagnostics/smoke-response.json)"
+          request_id="$(jq -r '.body | fromjson? | .requestId // ""' diagnostics/smoke-response.json)"
+          {
+            echo "api_status=$api_status"
+            echo "body_error=$body_error"
+            echo "body_code=$body_code"
+            echo "request_id=$request_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Collect CloudWatch evidence
+        if: always()
+        run: |
+          mkdir -p diagnostics/runtime-logs
+          start_ms="$(( $(date -u +%s) * 1000 - ${{ inputs.lookback_minutes }} * 60 * 1000 ))"
+
+          aws logs filter-log-events \
+            --log-group-name "${{ steps.contract.outputs.facade_log_group }}" \
+            --start-time "$start_ms" \
+            --limit 200 \
+            > diagnostics/facade-logs.json \
+            2> diagnostics/facade-logs.stderr || true
+
+          runtime_prefix="/aws/bedrock-agentcore/runtimes/${{ steps.contract.outputs.runtime_id }}-${{ steps.facade.outputs.endpoint }}"
+          aws logs describe-log-groups \
+            --log-group-name-prefix "$runtime_prefix" \
+            > diagnostics/runtime-log-groups.json \
+            2> diagnostics/runtime-log-groups.stderr || true
+
+          jq -r '.logGroups[]?.logGroupName' diagnostics/runtime-log-groups.json 2>/dev/null | while IFS= read -r log_group; do
+            [ -n "$log_group" ] || continue
+            safe_name="$(printf '%s' "$log_group" | sha256sum | awk '{print $1}')"
+            printf '%s\n' "$log_group" > "diagnostics/runtime-logs/${safe_name}.name"
+            aws logs filter-log-events \
+              --log-group-name "$log_group" \
+              --start-time "$start_ms" \
+              --limit 300 \
+              > "diagnostics/runtime-logs/${safe_name}.json" \
+              2> "diagnostics/runtime-logs/${safe_name}.stderr" || true
+          done
+
+      - name: Publish safe diagnostic summary
+        if: always()
+        run: |
+          facade_event_count="$(jq '.events | length' diagnostics/facade-logs.json 2>/dev/null || echo 0)"
+          runtime_group_count="$(jq '.logGroups | length' diagnostics/runtime-log-groups.json 2>/dev/null || echo 0)"
+          runtime_event_count="$(find diagnostics/runtime-logs -name '*.json' -print0 | xargs -0 -r jq -s '[.[].events[]?] | length' 2>/dev/null || echo 0)"
+          {
+            echo "## Agent 502 diagnostic"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Secure facade ready: \`${{ steps.contract.outputs.secure_ready }}\`"
+            echo "- Facade Runtime ready: \`${{ steps.facade.outputs.runtime_ready }}\`"
+            echo "- Runtime endpoint: \`${{ steps.facade.outputs.endpoint }}\`"
+            echo "- Smoke HTTP status: \`${{ steps.smoke.outputs.api_status || 'not-run' }}\`"
+            echo "- Facade error category: \`${{ steps.smoke.outputs.body_error || 'none' }}\`"
+            echo "- AWS error code: \`${{ steps.smoke.outputs.body_code || 'none' }}\`"
+            echo "- Correlation reference: \`${{ steps.smoke.outputs.request_id || 'not-available' }}\`"
+            echo "- Facade log events collected: \`${facade_event_count}\`"
+            echo "- Runtime log groups found: \`${runtime_group_count}\`"
+            echo "- Runtime log events collected: \`${runtime_event_count}\`"
+            echo ""
+            echo "Full evidence is available only in the protected diagnostic artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload protected diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: agent-502-diagnostics-${{ github.sha }}-${{ github.run_id }}
+          path: diagnostics
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Conclude smoke diagnosis
+        if: always() && inputs.invoke_smoke == true
+        run: |
+          status="${{ steps.smoke.outputs.api_status }}"
+          if [ -z "$status" ] || [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "The deployed facade smoke request failed. Review the diagnostic summary and artifact."
+            exit 1
+          fi
