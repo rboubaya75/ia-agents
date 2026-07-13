@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
-import uuid
+import re
+import time
 from typing import Any, Dict
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 logger = logging.getLogger("agent-api-facade")
 logger.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
@@ -15,55 +18,99 @@ logger.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging
 RUNTIME_READY = os.getenv("RUNTIME_READY", "false").lower() == "true"
 RUNTIME_ARN = os.getenv("AGENT_RUNTIME_ARN", "")
 RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "default")
-DENIED_KEYS = {"actorId", "actor_id", "userId", "user_id", "tenantId", "tenant_id", "trustedIdentity", "trusted_identity"}
+EXPECTED_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "29"))
+MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "4000"))
+
+ALLOWED_KEYS = {"prompt", "sessionId"}
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{33,128}$")
+
+
+def safe_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12] if value else "unknown"
 
 
 def http(status: int, body: Dict[str, Any]) -> Dict[str, Any]:
-    return {"statusCode": status, "headers": {"content-type": "application/json"}, "body": json.dumps(body)}
+    return {
+        "statusCode": status,
+        "headers": {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+        },
+        "body": json.dumps(body),
+    }
 
 
 def body_from(event: Dict[str, Any]) -> Dict[str, Any]:
-    raw = event.get("body") or "{}"
     if event.get("isBase64Encoded"):
         raise ValueError("Unsupported request encoding.")
-    data = json.loads(raw)
+
+    raw = event.get("body")
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Request body must be valid JSON.") from exc
+    elif isinstance(raw, dict):
+        data = raw
+    else:
+        raise ValueError("Request body must be a JSON object.")
+
     if not isinstance(data, dict):
         raise ValueError("Request body must be a JSON object.")
     return data
 
 
-def subject_from(event: Dict[str, Any]) -> str:
-    ctx = event.get("requestContext") or {}
-    auth = ctx.get("authorizer") or {}
-    jwt = auth.get("jwt") or {}
+def claims_from(event: Dict[str, Any]) -> Dict[str, Any]:
+    request_context = event.get("requestContext") or {}
+    authorizer = request_context.get("authorizer") or {}
+    jwt = authorizer.get("jwt") or {}
     claims = jwt.get("claims") or {}
-    subject = claims.get("sub") if isinstance(claims, dict) else None
+    if not isinstance(claims, dict):
+        raise ValueError("Authenticated JWT claims are missing.")
+    return claims
+
+
+def actor_id_from(event: Dict[str, Any]) -> str:
+    claims = claims_from(event)
+
+    if claims.get("token_use") != "access":
+        raise ValueError("A Cognito access token is required.")
+
+    if EXPECTED_CLIENT_ID and claims.get("client_id") != EXPECTED_CLIENT_ID:
+        raise ValueError("JWT client_id is not authorized.")
+
+    subject = claims.get("sub")
     if not isinstance(subject, str) or not subject.strip():
         raise ValueError("Authenticated subject is missing.")
     return subject.strip()
 
 
-def validate(data: Dict[str, Any]) -> None:
-    if any(key in data for key in DENIED_KEYS):
-        raise ValueError("Identity fields are not accepted from the browser.")
+def validate_payload(data: Dict[str, Any]) -> tuple[str, str]:
+    unexpected = sorted(set(data) - ALLOWED_KEYS)
+    if unexpected:
+        raise ValueError("Unsupported request fields: " + ", ".join(unexpected))
+
     prompt = data.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt is required.")
+    prompt = prompt.strip()
+    if len(prompt) > MAX_PROMPT_CHARS:
+        raise ValueError(f"prompt must be {MAX_PROMPT_CHARS} characters or fewer.")
+
+    session_id = data.get("sessionId")
+    if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
+        raise ValueError("sessionId must contain 33 to 128 safe characters.")
+
+    return prompt, session_id
 
 
-def session_id(event: Dict[str, Any], data: Dict[str, Any]) -> str:
-    provided = data.get("sessionId") or data.get("session_id")
-    if isinstance(provided, str) and len(provided) >= 33:
-        return provided
-    request_id = (event.get("requestContext") or {}).get("requestId") or uuid.uuid4().hex
-    return f"session-{request_id}-{uuid.uuid4().hex}"
-
-
-def runtime_payload(event: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
-    payload = dict(data)
-    payload["sessionId"] = session_id(event, data)
-    payload["trustedIdentity"] = {"actorId": subject_from(event)}
-    return payload
+def runtime_payload(prompt: str, session_id: str, actor_id: str) -> Dict[str, Any]:
+    return {
+        "prompt": prompt,
+        "sessionId": session_id,
+        "trustedIdentity": {"actorId": actor_id},
+    }
 
 
 def read_payload(value: Any) -> Any:
@@ -81,33 +128,87 @@ def read_payload(value: Any) -> Any:
 
 def call_runtime(payload: Dict[str, Any]) -> Any:
     if not RUNTIME_READY or not RUNTIME_ARN:
-        return {"status": "runtime_not_ready", "message": "Agent runtime is not deployed or not activated yet."}
+        raise RuntimeError("Agent Runtime is not ready.")
 
-    agentcore = boto3.client("bedrock-agentcore")
-    encoded = json.dumps(payload).encode("utf-8")
-    common = {"agentRuntimeArn": RUNTIME_ARN, "runtimeSessionId": payload["sessionId"], "payload": encoded}
-
-    try:
-        result = agentcore.invoke_agent_runtime(qualifier=RUNTIME_ENDPOINT, **common)
-    except TypeError:
-        result = agentcore.invoke_agent_runtime(**common)
-
+    client = boto3.client(
+        "bedrock-agentcore",
+        config=Config(
+            connect_timeout=3,
+            read_timeout=max(1, REQUEST_TIMEOUT_SECONDS - 2),
+            retries={"mode": "standard", "max_attempts": 2},
+        ),
+    )
+    result = client.invoke_agent_runtime(
+        agentRuntimeArn=RUNTIME_ARN,
+        qualifier=RUNTIME_ENDPOINT,
+        runtimeSessionId=payload["sessionId"],
+        payload=json.dumps(payload).encode("utf-8"),
+    )
     return read_payload(result.get("payload"))
 
 
+def message_from(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if isinstance(result, dict):
+        for key in ("message", "response", "result"):
+            value = result.get(key)
+            if isinstance(value, str):
+                return value
+    return json.dumps(result)
+
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    started = time.monotonic()
+    request_id = getattr(context, "aws_request_id", "unknown")
+    actor_id = ""
+    session_id = ""
+
     try:
         data = body_from(event)
-        validate(data)
-        result = call_runtime(runtime_payload(event, data))
-        return http(200, {"result": result})
+        prompt, session_id = validate_payload(data)
+        actor_id = actor_id_from(event)
+
+        result = call_runtime(runtime_payload(prompt, session_id, actor_id))
+        duration_ms = round((time.monotonic() - started) * 1000, 2)
+        logger.info(
+            json.dumps(
+                {
+                    "event": "facade_invocation",
+                    "request_id": request_id,
+                    "actor_hash": safe_hash(actor_id),
+                    "session_hash": safe_hash(session_id),
+                    "duration_ms": duration_ms,
+                    "status": "success",
+                }
+            )
+        )
+        return http(200, {"message": message_from(result), "sessionId": session_id})
+
     except ValueError as exc:
-        logger.warning("bad_request: %s", exc)
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "facade_rejected",
+                    "request_id": request_id,
+                    "actor_hash": safe_hash(actor_id),
+                    "session_hash": safe_hash(session_id),
+                    "reason": str(exc),
+                }
+            )
+        )
         return http(400, {"error": "bad_request", "message": str(exc)})
+    except ReadTimeoutError:
+        logger.exception("runtime_timeout")
+        return http(504, {"error": "runtime_timeout", "message": "Agent request timed out."})
     except ClientError as exc:
-        logger.exception("runtime_error")
         code = exc.response.get("Error", {}).get("Code", "ClientError")
-        return http(502, {"error": "runtime_error", "code": code})
+        status = 429 if code in {"ThrottlingException", "TooManyRequestsException"} else 502
+        logger.exception("runtime_client_error code=%s", code)
+        return http(status, {"error": "runtime_error", "code": code})
+    except RuntimeError as exc:
+        logger.error("runtime_unavailable: %s", exc)
+        return http(503, {"error": "runtime_unavailable"})
     except Exception:
         logger.exception("unexpected_error")
         return http(500, {"error": "internal_error"})
