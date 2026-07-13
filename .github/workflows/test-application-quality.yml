@@ -62,6 +62,7 @@ jobs:
             deploy-agentcore/agents/phase_4.py \
             deploy-agentcore/agents/phase_4_robust.py \
             deploy-agentcore/lambda_function_code.py \
+            deploy-agentcore/lambda_function_hardened.py \
             scripts/preflight_application_deploy.py \
             scripts/validate_secure_facade_contract.py \
             scripts/terraform_plan_guard.py
@@ -81,7 +82,18 @@ jobs:
           PY
 
       - name: Run unit security contracts
-        run: python -m unittest discover -s tests/unit -v
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests/unit -v 2>&1 | tee unit-test-results.log
+
+      - name: Upload unit test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unit-test-results-${{ github.sha }}-${{ github.run_id }}
+          path: unit-test-results.log
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Audit Python dependencies
         run: python -m pip_audit --strict
