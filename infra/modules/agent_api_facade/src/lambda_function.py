@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError, ReadTimeoutError
+from botocore.exceptions import BotoCoreError, ClientError, ReadTimeoutError
 
 logger = logging.getLogger("agent-api-facade")
 logger.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
@@ -19,11 +19,28 @@ RUNTIME_READY = os.getenv("RUNTIME_READY", "false").lower() == "true"
 RUNTIME_ARN = os.getenv("AGENT_RUNTIME_ARN", "")
 RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "default")
 EXPECTED_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
-REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "29"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "28"))
 MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "4000"))
 
 ALLOWED_KEYS = {"prompt", "sessionId"}
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{33,128}$")
+
+_agentcore = boto3.client(
+    "bedrock-agentcore",
+    config=Config(
+        connect_timeout=3,
+        read_timeout=max(1, REQUEST_TIMEOUT_SECONDS - 3),
+        retries={"mode": "standard", "total_max_attempts": 1},
+    ),
+)
+
+
+class RuntimeUnavailableError(RuntimeError):
+    pass
+
+
+class RuntimeResponseError(RuntimeError):
+    pass
 
 
 def safe_hash(value: str) -> str:
@@ -37,7 +54,7 @@ def http(status: int, body: Dict[str, Any]) -> Dict[str, Any]:
             "content-type": "application/json",
             "cache-control": "no-store",
         },
-        "body": json.dumps(body),
+        "body": json.dumps(body, separators=(",", ":")),
     }
 
 
@@ -77,7 +94,7 @@ def actor_id_from(event: Dict[str, Any]) -> str:
     if claims.get("token_use") != "access":
         raise ValueError("A Cognito access token is required.")
 
-    if EXPECTED_CLIENT_ID and claims.get("client_id") != EXPECTED_CLIENT_ID:
+    if not EXPECTED_CLIENT_ID or claims.get("client_id") != EXPECTED_CLIENT_ID:
         raise ValueError("JWT client_id is not authorized.")
 
     subject = claims.get("sub")
@@ -115,7 +132,7 @@ def runtime_payload(prompt: str, session_id: str, actor_id: str) -> Dict[str, An
 
 def read_payload(value: Any) -> Any:
     if value is None:
-        raise RuntimeError("Agent Runtime response body is missing.")
+        raise RuntimeResponseError("Agent Runtime response body is missing.")
     if hasattr(value, "read"):
         value = value.read()
     if isinstance(value, bytes):
@@ -130,17 +147,9 @@ def read_payload(value: Any) -> Any:
 
 def call_runtime(payload: Dict[str, Any]) -> Any:
     if not RUNTIME_READY or not RUNTIME_ARN:
-        raise RuntimeError("Agent Runtime is not ready.")
+        raise RuntimeUnavailableError("Agent Runtime is not ready.")
 
-    client = boto3.client(
-        "bedrock-agentcore",
-        config=Config(
-            connect_timeout=3,
-            read_timeout=max(1, REQUEST_TIMEOUT_SECONDS - 2),
-            retries={"mode": "standard", "max_attempts": 2},
-        ),
-    )
-    result = client.invoke_agent_runtime(
+    result = _agentcore.invoke_agent_runtime(
         agentRuntimeArn=RUNTIME_ARN,
         qualifier=RUNTIME_ENDPOINT,
         runtimeSessionId=payload["sessionId"],
@@ -151,7 +160,7 @@ def call_runtime(payload: Dict[str, Any]) -> Any:
 
     status_code = int(result.get("statusCode", 200))
     if status_code >= 400:
-        raise RuntimeError(f"Agent Runtime returned status {status_code}.")
+        raise RuntimeResponseError(f"Agent Runtime returned status {status_code}.")
 
     return read_payload(result.get("response") or result.get("payload"))
 
@@ -164,7 +173,7 @@ def message_from(result: Any) -> str:
             value = result.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    raise RuntimeError("Agent Runtime response does not contain a message.")
+    raise RuntimeResponseError("Agent Runtime response does not contain a message.")
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -207,17 +216,47 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             )
         )
         return http(400, {"error": "bad_request", "message": str(exc)})
+    except RuntimeUnavailableError:
+        logger.warning(json.dumps({"event": "runtime_unavailable", "request_id": request_id}))
+        return http(503, {"error": "runtime_unavailable"})
+    except RuntimeResponseError as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "runtime_invalid_response",
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                }
+            )
+        )
+        return http(502, {"error": "runtime_invalid_response"})
     except ReadTimeoutError:
-        logger.exception("runtime_timeout")
+        logger.warning(json.dumps({"event": "runtime_timeout", "request_id": request_id}))
         return http(504, {"error": "runtime_timeout", "message": "Agent request timed out."})
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "ClientError")
         status = 429 if code in {"ThrottlingException", "TooManyRequestsException"} else 502
-        logger.exception("runtime_client_error code=%s", code)
+        logger.error(json.dumps({"event": "runtime_client_error", "request_id": request_id, "error_code": code}))
         return http(status, {"error": "runtime_error", "code": code})
-    except RuntimeError as exc:
-        logger.error("runtime_unavailable: %s", exc)
-        return http(503, {"error": "runtime_unavailable"})
-    except Exception:
-        logger.exception("unexpected_error")
+    except BotoCoreError as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "runtime_transport_error",
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                }
+            )
+        )
+        return http(502, {"error": "runtime_transport_error"})
+    except Exception as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "facade_unexpected_error",
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                }
+            )
+        )
         return http(500, {"error": "internal_error"})
