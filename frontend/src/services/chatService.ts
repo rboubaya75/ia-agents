@@ -6,6 +6,12 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.NEXT_P
 const REQUEST_TIMEOUT = 35000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{33,128}$/;
 const MAX_PROMPT_LENGTH = 4000;
+const GENERIC_AGENT_ERROR = 'The agent request could not be completed.';
+
+type AgentErrorPayload = {
+  message?: unknown;
+  requestId?: unknown;
+};
 
 const getAgentInvokeEndpoint = (): string => {
   if (AGENT_INVOKE_URL) {
@@ -22,12 +28,16 @@ const getAgentInvokeEndpoint = (): string => {
 const getErrorMessage = async (response: Response): Promise<string> => {
   const contentType = response.headers.get('content-type');
   if (contentType?.includes('application/json')) {
-    const payload = await response.json().catch(() => null);
-    if (payload && typeof payload.message === 'string') {
-      return payload.message;
+    const payload: AgentErrorPayload | null = await response.json().catch(() => null);
+    if (payload) {
+      const message = typeof payload.message === 'string' ? payload.message : GENERIC_AGENT_ERROR;
+      if (typeof payload.requestId === 'string' && payload.requestId) {
+        return `${message} Reference: ${payload.requestId}.`;
+      }
+      return message;
     }
   }
-  return 'The agent request could not be completed.';
+  return GENERIC_AGENT_ERROR;
 };
 
 export const sendMessage = async (
