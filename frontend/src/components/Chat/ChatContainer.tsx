@@ -1,14 +1,11 @@
 /**
  * ChatContainer Component
  * Main orchestrator for the chat interface
- * Integrates ChatHeader, ChatMessages, and ChatInput components
- * Manages chat state and handles message sending flow
- * Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.3, 3.4, 3.5, 4.4, 5.1, 5.6, 5.7
  */
 
 import React from 'react';
-import { useChatContext } from '../../contexts/ChatContext';
-import { useAuth } from '../../contexts/AuthContext';
+import { useChatContext } from '../../contexts/useChatContext';
+import { useAuth } from '../../contexts/useAuth';
 import { sendMessage } from '../../services/chatService';
 import ChatHeader from './ChatHeader';
 import ChatMessages from './ChatMessages';
@@ -27,15 +24,6 @@ export const ChatContainer: React.FC = () => {
 
   const { jwtToken } = useAuth();
 
-  /**
-   * Handle message sending flow
-   * 1. Add user message to chat
-   * 2. Send message to the application API facade
-   * 3. Add system response to chat
-   * 4. Handle errors appropriately
-   *
-   * @param messageContent - The user's message content
-   */
   const handleSendMessage = async (messageContent: string) => {
     setError(null);
     addMessage(messageContent, 'user');
@@ -54,11 +42,7 @@ export const ChatContainer: React.FC = () => {
         : 'An unexpected error occurred while sending your message';
 
       setError(errorMessage);
-
-      addMessage(
-        `Error: ${errorMessage}. Please try again.`,
-        'system'
-      );
+      addMessage(`Error: ${errorMessage}. Please try again.`, 'system');
     } finally {
       setLoading(false);
     }
@@ -77,11 +61,7 @@ export const ChatContainer: React.FC = () => {
         )}
 
         <ChatMessages messages={messages} isLoading={isLoading} />
-
-        <ChatInput
-          onSendMessage={handleSendMessage}
-          isLoading={isLoading}
-        />
+        <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
       </div>
     </div>
   );
