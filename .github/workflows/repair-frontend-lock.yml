@@ -101,6 +101,12 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Verify deployable frontend artifact
+        working-directory: frontend
+        run: |
+          test -s dist/index.html
+          find dist -maxdepth 2 -type f -print
+
       - name: Commit only the audited lockfile
         run: |
           git status --short
