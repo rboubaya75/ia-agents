@@ -24,6 +24,7 @@ MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "4000"))
 
 ALLOWED_KEYS = {"prompt", "sessionId"}
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{33,128}$")
+INTERNAL_SESSION_PREFIX = "sid-v1-"
 
 _agentcore = boto3.client(
     "bedrock-agentcore",
@@ -49,6 +50,16 @@ class RuntimeResponseError(RuntimeError):
 
 def safe_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12] if value else "unknown"
+
+
+def derive_internal_session_id(actor_id: str, external_session_id: str) -> str:
+    """Create an opaque actor-scoped session identifier for AgentCore Runtime."""
+    material = json.dumps(
+        ["agentcore-session-v1", actor_id, external_session_id],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return INTERNAL_SESSION_PREFIX + hashlib.sha256(material).hexdigest()
 
 
 def http(status: int, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,10 +137,10 @@ def validate_payload(data: Dict[str, Any]) -> tuple[str, str]:
     return prompt, session_id
 
 
-def runtime_payload(prompt: str, session_id: str, actor_id: str) -> Dict[str, Any]:
+def runtime_payload(prompt: str, internal_session_id: str, actor_id: str) -> Dict[str, Any]:
     return {
         "prompt": prompt,
-        "sessionId": session_id,
+        "sessionId": internal_session_id,
         "trustedIdentity": {"actorId": actor_id},
     }
 
@@ -184,14 +195,16 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     started = time.monotonic()
     request_id = getattr(context, "aws_request_id", "unknown")
     actor_id = ""
-    session_id = ""
+    external_session_id = ""
+    internal_session_id = ""
 
     try:
         data = body_from(event)
-        prompt, session_id = validate_payload(data)
+        prompt, external_session_id = validate_payload(data)
         actor_id = actor_id_from(event)
+        internal_session_id = derive_internal_session_id(actor_id, external_session_id)
 
-        result = call_runtime(runtime_payload(prompt, session_id, actor_id))
+        result = call_runtime(runtime_payload(prompt, internal_session_id, actor_id))
         duration_ms = round((time.monotonic() - started) * 1000, 2)
         logger.info(
             json.dumps(
@@ -199,13 +212,14 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     "event": "facade_invocation",
                     "request_id": request_id,
                     "actor_hash": safe_hash(actor_id),
-                    "session_hash": safe_hash(session_id),
+                    "session_hash": safe_hash(external_session_id),
+                    "runtime_session_hash": safe_hash(internal_session_id),
                     "duration_ms": duration_ms,
                     "status": "success",
                 }
             )
         )
-        return http(200, {"message": message_from(result), "sessionId": session_id})
+        return http(200, {"message": message_from(result), "sessionId": external_session_id})
 
     except AuthorizationError as exc:
         logger.warning(
@@ -225,7 +239,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
                     "event": "facade_rejected",
                     "request_id": request_id,
                     "actor_hash": safe_hash(actor_id),
-                    "session_hash": safe_hash(session_id),
+                    "session_hash": safe_hash(external_session_id),
                     "reason": str(exc),
                 }
             )
