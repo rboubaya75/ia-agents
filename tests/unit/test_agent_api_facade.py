@@ -71,7 +71,7 @@ class AgentApiFacadeTests(unittest.TestCase):
     def response_body(response: dict) -> dict:
         return json.loads(response["body"])
 
-    def test_success_injects_server_derived_actor_identity(self) -> None:
+    def test_success_injects_server_derived_actor_identity_and_scoped_session(self) -> None:
         facade._agentcore.invoke_agent_runtime.return_value = {
             "statusCode": 200,
             "response": b'{"message":"ok"}',
@@ -83,14 +83,58 @@ class AgentApiFacadeTests(unittest.TestCase):
         )
 
         self.assertEqual(response["statusCode"], 200)
-        self.assertEqual(self.response_body(response)["message"], "ok")
+        self.assertEqual(self.response_body(response), {"message": "ok", "sessionId": SESSION_ID})
 
         invoke_args = facade._agentcore.invoke_agent_runtime.call_args.kwargs
         runtime_payload = json.loads(invoke_args["payload"])
+        expected_internal_session = facade.derive_internal_session_id("user-1", SESSION_ID)
+
         self.assertEqual(invoke_args["qualifier"], "DEFAULT")
+        self.assertEqual(invoke_args["runtimeSessionId"], expected_internal_session)
         self.assertEqual(runtime_payload["prompt"], "hello")
-        self.assertEqual(runtime_payload["sessionId"], SESSION_ID)
+        self.assertEqual(runtime_payload["sessionId"], expected_internal_session)
         self.assertEqual(runtime_payload["trustedIdentity"]["actorId"], "user-1")
+        self.assertNotIn(SESSION_ID, invoke_args["payload"].decode("utf-8"))
+
+    def test_internal_session_is_deterministic_for_same_actor_and_external_session(self) -> None:
+        first = facade.derive_internal_session_id("user-1", SESSION_ID)
+        second = facade.derive_internal_session_id("user-1", SESSION_ID)
+
+        self.assertEqual(first, second)
+        self.assertRegex(first, r"^sid-v1-[a-f0-9]{64}$")
+        self.assertTrue(facade.SESSION_ID_PATTERN.fullmatch(first))
+        self.assertNotIn("user-1", first)
+        self.assertNotIn(SESSION_ID, first)
+
+    def test_internal_session_isolated_between_actors(self) -> None:
+        user_a = facade.derive_internal_session_id("user-a", SESSION_ID)
+        user_b = facade.derive_internal_session_id("user-b", SESSION_ID)
+
+        self.assertNotEqual(user_a, user_b)
+
+    def test_same_external_session_invokes_distinct_runtime_sessions_for_two_users(self) -> None:
+        facade._agentcore.invoke_agent_runtime.return_value = {
+            "statusCode": 200,
+            "response": b'{"message":"ok"}',
+        }
+
+        for actor_id in ("user-a", "user-b"):
+            response = facade.handler(
+                event(
+                    {"prompt": "hello", "sessionId": SESSION_ID},
+                    {"sub": actor_id, "client_id": "client-123", "token_use": "access"},
+                ),
+                Context(),
+            )
+            self.assertEqual(response["statusCode"], 200)
+
+        first_call, second_call = facade._agentcore.invoke_agent_runtime.call_args_list
+        first_runtime_session = first_call.kwargs["runtimeSessionId"]
+        second_runtime_session = second_call.kwargs["runtimeSessionId"]
+
+        self.assertNotEqual(first_runtime_session, second_runtime_session)
+        self.assertEqual(first_runtime_session, facade.derive_internal_session_id("user-a", SESSION_ID))
+        self.assertEqual(second_runtime_session, facade.derive_internal_session_id("user-b", SESSION_ID))
 
     def test_rejects_client_supplied_identity(self) -> None:
         response = facade.handler(
