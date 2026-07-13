@@ -45,11 +45,28 @@ class FrontendDeliveryContractTests(unittest.TestCase):
         self.assertLess(sync, invalidate)
         self.assertIn('aws s3 sync dist/ "s3://${{ steps.tfout_after.outputs.frontend_bucket_name }}" --delete', content)
 
+    def test_deploy_reads_terraform_outputs_once_as_json(self) -> None:
+        content = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("terraform output -raw", content)
+        self.assertGreaterEqual(content.count("terraform output -json"), 2)
+        self.assertIn("Terraform remote state exposes no outputs", content)
+        self.assertIn("terraform_wrapper: false", content)
+
+    def test_agentcore_plan_exit_code_is_captured_without_wrapper_outputs(self) -> None:
+        content = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+        start = content.index("- name: Terraform plan native AgentCore control plane and facade")
+        end = content.index("- name: Render AgentCore plan evidence", start)
+        plan_step = content[start:end]
+        self.assertIn("set +e", plan_step)
+        self.assertIn("exitcode=$?", plan_step)
+        self.assertIn('echo "exitcode=$exitcode" >> "$GITHUB_OUTPUT"', plan_step)
+        self.assertIn("test -s tfplan-agentcore-control-plane", plan_step)
+        self.assertNotIn("continue-on-error: true", plan_step)
+
     def test_agentcore_plan_evidence_is_runtime_scoped(self) -> None:
         content = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
         runtime_scope = "inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'"
         guarded_steps = (
-            "Fail on AgentCore plan error",
             "Render AgentCore plan evidence",
             "Analyze AgentCore plan safety",
             "Record immutable AgentCore plan metadata",
@@ -57,13 +74,14 @@ class FrontendDeliveryContractTests(unittest.TestCase):
             "Upload reviewed AgentCore plan artifact",
             "Fail on unsafe AgentCore plan",
         )
-        for index, step_name in enumerate(guarded_steps):
+        for step_name in guarded_steps:
             start = content.index(f"- name: {step_name}")
             end = content.find("\n      - name:", start + 1)
             if end == -1:
                 end = len(content)
             step = content[start:end]
             self.assertIn(runtime_scope, step, msg=step_name)
+            self.assertIn("steps.agentcore_plan.conclusion == 'success'", step, msg=step_name)
 
     def test_cloudfront_uses_private_s3_oac_and_index_root(self) -> None:
         content = FRONTEND_MODULE.read_text(encoding="utf-8")
