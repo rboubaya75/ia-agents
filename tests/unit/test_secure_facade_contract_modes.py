@@ -6,6 +6,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_secure_facade_contract.py"
+FACADE_STACK = ROOT / "infra" / "environments" / "test" / "agent_api_facade.tf"
+OUTPUTS_STACK = ROOT / "infra" / "environments" / "test" / "outputs.tf"
 SPEC = importlib.util.spec_from_file_location("secure_facade_contract", SCRIPT)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Unable to load {SCRIPT}")
@@ -34,7 +36,7 @@ def complete_values() -> dict[str, str]:
         {
             "agent_runtime_invoke_url": (
                 "https://bedrock-agentcore.eu-west-3.amazonaws.com/"
-                "runtimes/wildrydes-test/invocations?qualifier=DEFAULT"
+                "runtimes/wildrydes-test/invocations?qualifier=default"
             ),
             "agentcore_gateway_mcp_url": "https://gateway.example.com/mcp",
             "agentcore_memory_id": "memory-test",
@@ -66,6 +68,27 @@ class SecureFacadeContractModeTests(unittest.TestCase):
 
     def test_full_accepts_complete_secure_runtime_contract(self) -> None:
         self.assertEqual(contract.validate_contract("full", complete_values()), [])
+
+    def test_runtime_url_accepts_configured_endpoint_name(self) -> None:
+        self.assertTrue(contract.is_runtime_url(complete_values()["agent_runtime_invoke_url"]))
+        self.assertTrue(
+            contract.is_runtime_url(
+                "https://bedrock-agentcore.eu-west-3.amazonaws.com/runtimes/test/invocations?qualifier=blue-v2"
+            )
+        )
+
+    def test_runtime_url_rejects_empty_or_ambiguous_qualifier(self) -> None:
+        base = "https://bedrock-agentcore.eu-west-3.amazonaws.com/runtimes/test/invocations"
+        self.assertFalse(contract.is_runtime_url(f"{base}?qualifier="))
+        self.assertFalse(contract.is_runtime_url(f"{base}?qualifier=default&other=value"))
+
+    def test_stack_uses_one_endpoint_name_for_resource_facade_and_output(self) -> None:
+        facade = FACADE_STACK.read_text(encoding="utf-8")
+        outputs = OUTPUTS_STACK.read_text(encoding="utf-8")
+        self.assertIn("agent_runtime_endpoint_name = var.agent_runtime_endpoint_name", facade)
+        self.assertNotIn('agent_runtime_endpoint_name = "DEFAULT"', facade)
+        self.assertIn("qualifier=${urlencode(var.agent_runtime_endpoint_name)}", outputs)
+        self.assertNotIn("qualifier=DEFAULT", outputs)
 
     def test_image_only_does_not_require_deployed_outputs(self) -> None:
         self.assertEqual(contract.validate_contract("image-only", {}), [])
