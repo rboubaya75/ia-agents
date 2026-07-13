@@ -46,6 +46,11 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _public_trip(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove the internal partition identity before returning tool results."""
+    return _json_safe({key: value for key, value in item.items() if key != "userId"})
+
+
 def _get_table():
     if not DYNAMODB_TABLE_NAME:
         raise RuntimeError("TRIPS_TABLE_NAME environment variable is required.")
@@ -161,7 +166,7 @@ def get_trips(event: Dict[str, Any]) -> Dict[str, Any]:
     _reject_unexpected(event, {"userId"})
     user_id = _user_id(event)
     result = _get_table().query(KeyConditionExpression=Key("userId").eq(user_id))
-    return {"trips": _json_safe(result.get("Items", []))}
+    return {"trips": [_public_trip(item) for item in result.get("Items", [])]}
 
 
 def get_trip(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -172,13 +177,18 @@ def get_trip(event: Dict[str, Any]) -> Dict[str, Any]:
     item = result.get("Item")
     if not item:
         return {"found": False, "tripId": trip_id, "message": "Trip not found."}
-    return {"found": True, "trip": _json_safe(item)}
+    return {"found": True, "trip": _public_trip(item)}
 
 
 def update_trip(event: Dict[str, Any]) -> Dict[str, Any]:
     _reject_unexpected(event, UPDATE_FIELDS)
     user_id = _user_id(event)
     trip_id = _trip_id(event)
+    table = _get_table()
+
+    existing = table.get_item(Key={"userId": user_id, "tripId": trip_id}).get("Item")
+    if not existing:
+        return {"updated": False, "tripId": trip_id, "message": "Trip not found."}
 
     updates: Dict[str, str] = _validate_optional_fields(event)
     trip_name = _string(event, "tripName", 200)
@@ -190,10 +200,18 @@ def update_trip(event: Dict[str, Any]) -> Dict[str, Any]:
         updates["startDate"] = start_date
     if end_date is not None:
         updates["endDate"] = end_date
-    if start_date and end_date and date.fromisoformat(end_date) < date.fromisoformat(start_date):
-        raise ValidationError("endDate must not be earlier than startDate.")
     if not updates:
         raise ValidationError("At least one updatable trip field is required.")
+
+    effective_start = start_date or existing.get("startDate")
+    effective_end = end_date or existing.get("endDate")
+    if not isinstance(effective_start, str) or not isinstance(effective_end, str):
+        raise ValidationError("The stored trip dates are incomplete.")
+    try:
+        if date.fromisoformat(effective_end) < date.fromisoformat(effective_start):
+            raise ValidationError("endDate must not be earlier than startDate.")
+    except ValueError as exc:
+        raise ValidationError("The effective trip dates must use YYYY-MM-DD format.") from exc
 
     update_names = {"#updatedAt": "updatedAt"}
     update_values: Dict[str, Any] = {":updatedAt": _utc_now()}
@@ -205,17 +223,27 @@ def update_trip(event: Dict[str, Any]) -> Dict[str, Any]:
         update_values[value_key] = value
         update_parts.append(f"{name_key} = {value_key}")
 
+    condition_expression = "attribute_exists(userId) AND attribute_exists(tripId)"
+    expected_updated_at = existing.get("updatedAt")
+    if isinstance(expected_updated_at, str) and expected_updated_at:
+        condition_expression += " AND #updatedAt = :expectedUpdatedAt"
+        update_values[":expectedUpdatedAt"] = expected_updated_at
+
     try:
-        _get_table().update_item(
+        table.update_item(
             Key={"userId": user_id, "tripId": trip_id},
             UpdateExpression="SET " + ", ".join(update_parts),
             ExpressionAttributeNames=update_names,
             ExpressionAttributeValues=update_values,
-            ConditionExpression="attribute_exists(userId) AND attribute_exists(tripId)",
+            ConditionExpression=condition_expression,
         )
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            return {"updated": False, "tripId": trip_id, "message": "Trip not found."}
+            return {
+                "updated": False,
+                "tripId": trip_id,
+                "message": "Trip changed concurrently; retry with fresh data.",
+            }
         raise
 
     return {"updated": True, "tripId": trip_id, "message": "Trip updated successfully."}
