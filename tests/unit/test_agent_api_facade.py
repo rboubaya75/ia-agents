@@ -17,7 +17,7 @@ os.environ.update(
         "AWS_EC2_METADATA_DISABLED": "true",
         "RUNTIME_READY": "true",
         "AGENT_RUNTIME_ARN": "arn:aws:bedrock-agentcore:eu-west-3:123456789012:runtime/test",
-        "AGENT_RUNTIME_ENDPOINT_NAME": "default",
+        "AGENT_RUNTIME_ENDPOINT_NAME": "DEFAULT",
         "COGNITO_CLIENT_ID": "client-123",
         "REQUEST_TIMEOUT_SECONDS": "28",
     }
@@ -87,6 +87,7 @@ class AgentApiFacadeTests(unittest.TestCase):
 
         invoke_args = facade._agentcore.invoke_agent_runtime.call_args.kwargs
         runtime_payload = json.loads(invoke_args["payload"])
+        self.assertEqual(invoke_args["qualifier"], "DEFAULT")
         self.assertEqual(runtime_payload["prompt"], "hello")
         self.assertEqual(runtime_payload["sessionId"], SESSION_ID)
         self.assertEqual(runtime_payload["trustedIdentity"]["actorId"], "user-1")
@@ -107,7 +108,7 @@ class AgentApiFacadeTests(unittest.TestCase):
         self.assertEqual(response["statusCode"], 400)
         facade._agentcore.invoke_agent_runtime.assert_not_called()
 
-    def test_rejects_id_token(self) -> None:
+    def test_rejects_id_token_with_403(self) -> None:
         response = facade.handler(
             event(
                 {"prompt": "hello", "sessionId": SESSION_ID},
@@ -115,9 +116,10 @@ class AgentApiFacadeTests(unittest.TestCase):
             ),
             Context(),
         )
-        self.assertEqual(response["statusCode"], 400)
+        self.assertEqual(response["statusCode"], 403)
+        self.assertEqual(self.response_body(response), {"error": "forbidden"})
 
-    def test_rejects_wrong_cognito_client(self) -> None:
+    def test_rejects_wrong_cognito_client_with_403(self) -> None:
         response = facade.handler(
             event(
                 {"prompt": "hello", "sessionId": SESSION_ID},
@@ -125,7 +127,17 @@ class AgentApiFacadeTests(unittest.TestCase):
             ),
             Context(),
         )
-        self.assertEqual(response["statusCode"], 400)
+        self.assertEqual(response["statusCode"], 403)
+
+    def test_rejects_missing_subject_with_403(self) -> None:
+        response = facade.handler(
+            event(
+                {"prompt": "hello", "sessionId": SESSION_ID},
+                {"client_id": "client-123", "token_use": "access"},
+            ),
+            Context(),
+        )
+        self.assertEqual(response["statusCode"], 403)
 
     def test_rejects_short_session(self) -> None:
         response = facade.handler(
