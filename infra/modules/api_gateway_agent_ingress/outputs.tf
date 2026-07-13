@@ -26,12 +26,20 @@ output "jwt_audience" {
   value = var.jwt_audience
 }
 
+output "security_facade_enabled" {
+  value = local.security_facade_enabled
+}
+
 output "gateway_first_enabled" {
   value = local.gateway_first_enabled
 }
 
 output "agent_invoke_url" {
-  value = local.gateway_first_enabled ? "${aws_apigatewayv2_api.this.api_endpoint}/agent/invoke" : ""
+  value = local.security_facade_enabled || local.gateway_first_enabled ? "${aws_apigatewayv2_api.this.api_endpoint}/agent/invoke" : ""
+}
+
+output "access_log_group_name" {
+  value = aws_cloudwatch_log_group.access_logs.name
 }
 
 output "p0_agentcore_gateway_enabled" {
