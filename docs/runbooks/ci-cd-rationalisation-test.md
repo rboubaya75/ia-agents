@@ -10,19 +10,20 @@
 .github/workflows/test-application-quality.yml
 ```
 
-Déclenchement : push/PR sur le code Runtime, façade, frontend, scripts ou tests.
+Déclenchement : push/PR sur le code Runtime, façade, frontend, scripts, tests ou workflows applicatifs. Ce workflow expose également `workflow_call` afin d’être exécuté comme gate obligatoire par la pipeline de déploiement sur le même commit.
 
 Contrôles :
 
 - Python 3.12 `py_compile` ;
-- tests unitaires façade ;
-- contrat de sécurité Runtime ;
-- tests Trip Tools ;
+- vérification des imports Runtime réels ;
+- tests unitaires façade, Runtime, contrat de déploiement et Trip Tools ;
+- `pip check` et `pip-audit --strict` ;
 - frontend `npm ci` ;
+- `npm audit --omit=dev --audit-level=high` ;
 - frontend lint ;
 - frontend build.
 
-Aucune promotion ne doit être effectuée si cette pipeline est rouge.
+Aucune promotion ne doit être effectuée si cette pipeline est rouge. La pipeline application ne peut pas atteindre le job de déploiement tant que le workflow qualité réutilisable n’est pas vert sur le même SHA.
 
 ## 2. Pipeline Terraform
 
@@ -89,18 +90,22 @@ Pour clôturer la V1 :
 deploy_mode = full
 image_tag = test
 endpoint_name = default
-enforce_secure_facade = true
 confirm_deploy = true
 ```
 
+Le contrôle du contrat sécurisé est obligatoire et non désactivable. L’ancien input `enforce_secure_facade` et le wrapper Gateway-first ont été supprimés.
+
 La pipeline doit :
 
-1. valider Terraform ;
-2. construire l’image ARM64 immutable ;
-3. appliquer Runtime, resource policies, Gateway et target ;
-4. vérifier le contrat sécurisé ;
-5. construire le frontend avec `VITE_AGENT_INVOKE_URL` ;
-6. publier S3 et invalider CloudFront.
+1. valider la demande de déploiement et ses inputs ;
+2. exécuter la pipeline qualité réutilisable sur le même SHA ;
+3. valider Terraform ;
+4. construire l’image ARM64 immutable ;
+5. appliquer Runtime, resource policies, Gateway et target ;
+6. relire tous les outputs du chemin V1 ;
+7. exécuter `validate_secure_facade_contract.py --enforce` ;
+8. construire le frontend avec `VITE_AGENT_INVOKE_URL` ;
+9. publier S3 et invalider CloudFront.
 
 ## 4. Outputs à contrôler
 
