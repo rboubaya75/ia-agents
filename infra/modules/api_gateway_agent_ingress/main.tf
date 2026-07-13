@@ -6,12 +6,10 @@ locals {
     : local.agentcore_gateway_base_url
   )
 
-  security_facade_enabled = (
-    var.security_facade_enabled &&
-    var.facade_lambda_invoke_arn != "" &&
-    var.facade_lambda_function_name != ""
-  )
-  gateway_first_enabled = var.gateway_first_enabled
+  # Resource counts must depend only on values known during planning. Lambda ARNs
+  # may be unknown until apply and are therefore validated separately below.
+  security_facade_enabled = var.security_facade_enabled
+  gateway_first_enabled   = var.gateway_first_enabled
 }
 
 check "security_facade_configuration" {
@@ -21,6 +19,16 @@ check "security_facade_configuration" {
       (var.facade_lambda_invoke_arn != "" && var.facade_lambda_function_name != "")
     )
     error_message = "security_facade_enabled requires the Lambda invoke ARN and function name."
+  }
+}
+
+check "gateway_first_configuration" {
+  assert {
+    condition = (
+      !var.gateway_first_enabled ||
+      local.agentcore_runtime_invoke_url != ""
+    )
+    error_message = "gateway_first_enabled requires a valid historical AgentCore Gateway target URL."
   }
 }
 
@@ -89,11 +97,11 @@ resource "aws_apigatewayv2_route" "agent_invoke_security_facade" {
 resource "aws_apigatewayv2_integration" "agentcore_gateway" {
   count = local.gateway_first_enabled ? 1 : 0
 
-  api_id             = aws_apigatewayv2_api.this.id
-  integration_type   = "HTTP_PROXY"
-  integration_method = "POST"
-  integration_uri    = local.agentcore_runtime_invoke_url
-  timeout_milliseconds = 29000
+  api_id                 = aws_apigatewayv2_api.this.id
+  integration_type       = "HTTP_PROXY"
+  integration_method     = "POST"
+  integration_uri        = local.agentcore_runtime_invoke_url
+  timeout_milliseconds   = 29000
 }
 
 resource "aws_apigatewayv2_route" "agent_invoke_gateway_first" {
