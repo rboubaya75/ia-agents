@@ -58,6 +58,7 @@ jobs:
           python -m py_compile \
             infra/modules/agent_api_facade/src/lambda_function.py \
             deploy-agentcore/agents/phase_4.py \
+            deploy-agentcore/agents/phase_4_robust.py \
             deploy-agentcore/lambda_function_code.py \
             scripts/preflight_application_deploy.py \
             scripts/validate_secure_facade_contract.py \

@@ -20,23 +20,41 @@ RUNTIME_ARN = os.getenv("AGENT_RUNTIME_ARN", "")
 RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "DEFAULT")
 EXPECTED_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "28"))
+RUNTIME_CONNECT_TIMEOUT_SECONDS = int(os.getenv("RUNTIME_CONNECT_TIMEOUT_SECONDS", "2"))
+RUNTIME_READ_TIMEOUT_SECONDS = int(os.getenv("RUNTIME_READ_TIMEOUT_SECONDS", "23"))
+MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", "16384"))
 MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "4000"))
+
+if REQUEST_TIMEOUT_SECONDS < 8:
+    raise RuntimeError("REQUEST_TIMEOUT_SECONDS must be at least 8 seconds.")
+if RUNTIME_CONNECT_TIMEOUT_SECONDS < 1 or RUNTIME_READ_TIMEOUT_SECONDS < 1:
+    raise RuntimeError("Runtime transport timeouts must be positive.")
+if RUNTIME_CONNECT_TIMEOUT_SECONDS + RUNTIME_READ_TIMEOUT_SECONDS > REQUEST_TIMEOUT_SECONDS - 2:
+    raise RuntimeError("Runtime transport budget must leave at least two seconds for facade processing.")
+if MAX_BODY_BYTES < 1024:
+    raise RuntimeError("MAX_BODY_BYTES must be at least 1024 bytes.")
 
 ALLOWED_KEYS = {"prompt", "sessionId"}
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{33,128}$")
 INTERNAL_SESSION_PREFIX = "sid-v1-"
 
-_agentcore = boto3.client(
-    "bedrock-agentcore",
-    config=Config(
-        connect_timeout=3,
-        read_timeout=max(1, REQUEST_TIMEOUT_SECONDS - 3),
+
+def agentcore_config() -> Config:
+    return Config(
+        connect_timeout=RUNTIME_CONNECT_TIMEOUT_SECONDS,
+        read_timeout=RUNTIME_READ_TIMEOUT_SECONDS,
         retries={"mode": "standard", "total_max_attempts": 1},
-    ),
-)
+    )
+
+
+_agentcore = boto3.client("bedrock-agentcore", config=agentcore_config())
 
 
 class AuthorizationError(ValueError):
+    pass
+
+
+class PayloadTooLargeError(ValueError):
     pass
 
 
@@ -73,11 +91,23 @@ def http(status: int, body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _body_bytes(raw: Any) -> bytes:
+    if isinstance(raw, str):
+        return raw.encode("utf-8")
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return b""
+
+
 def body_from(event: Dict[str, Any]) -> Dict[str, Any]:
     if event.get("isBase64Encoded"):
         raise ValueError("Unsupported request encoding.")
 
     raw = event.get("body")
+    encoded = _body_bytes(raw)
+    if encoded and len(encoded) > MAX_BODY_BYTES:
+        raise PayloadTooLargeError(f"Request body must be {MAX_BODY_BYTES} bytes or fewer.")
+
     if isinstance(raw, str):
         try:
             data = json.loads(raw)
@@ -105,13 +135,10 @@ def claims_from(event: Dict[str, Any]) -> Dict[str, Any]:
 
 def actor_id_from(event: Dict[str, Any]) -> str:
     claims = claims_from(event)
-
     if claims.get("token_use") != "access":
         raise AuthorizationError("A Cognito access token is required.")
-
     if not EXPECTED_CLIENT_ID or claims.get("client_id") != EXPECTED_CLIENT_ID:
         raise AuthorizationError("JWT client_id is not authorized.")
-
     subject = claims.get("sub")
     if not isinstance(subject, str) or not subject.strip():
         raise AuthorizationError("Authenticated subject is missing.")
@@ -133,7 +160,6 @@ def validate_payload(data: Dict[str, Any]) -> tuple[str, str]:
     session_id = data.get("sessionId")
     if not isinstance(session_id, str) or not SESSION_ID_PATTERN.fullmatch(session_id):
         raise ValueError("sessionId must contain 33 to 128 safe characters.")
-
     return prompt, session_id
 
 
@@ -163,7 +189,6 @@ def read_payload(value: Any) -> Any:
 def call_runtime(payload: Dict[str, Any]) -> Any:
     if not RUNTIME_READY or not RUNTIME_ARN:
         raise RuntimeUnavailableError("Agent Runtime is not ready.")
-
     result = _agentcore.invoke_agent_runtime(
         agentRuntimeArn=RUNTIME_ARN,
         qualifier=RUNTIME_ENDPOINT,
@@ -172,11 +197,9 @@ def call_runtime(payload: Dict[str, Any]) -> Any:
         accept="application/json",
         payload=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
     )
-
     status_code = int(result.get("statusCode", 200))
     if status_code >= 400:
         raise RuntimeResponseError(f"Agent Runtime returned status {status_code}.")
-
     return read_payload(result.get("response") or result.get("payload"))
 
 
@@ -197,13 +220,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     actor_id = ""
     external_session_id = ""
     internal_session_id = ""
-
     try:
         data = body_from(event)
         prompt, external_session_id = validate_payload(data)
         actor_id = actor_id_from(event)
         internal_session_id = derive_internal_session_id(actor_id, external_session_id)
-
         result = call_runtime(runtime_payload(prompt, internal_session_id, actor_id))
         duration_ms = round((time.monotonic() - started) * 1000, 2)
         logger.info(
@@ -220,17 +241,11 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             )
         )
         return http(200, {"message": message_from(result), "sessionId": external_session_id})
-
+    except PayloadTooLargeError as exc:
+        logger.warning(json.dumps({"event": "facade_payload_too_large", "request_id": request_id}))
+        return http(413, {"error": "payload_too_large", "message": str(exc)})
     except AuthorizationError as exc:
-        logger.warning(
-            json.dumps(
-                {
-                    "event": "facade_authorization_rejected",
-                    "request_id": request_id,
-                    "reason": str(exc),
-                }
-            )
-        )
+        logger.warning(json.dumps({"event": "facade_authorization_rejected", "request_id": request_id, "reason": str(exc)}))
         return http(403, {"error": "forbidden"})
     except ValueError as exc:
         logger.warning(
@@ -249,15 +264,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.warning(json.dumps({"event": "runtime_unavailable", "request_id": request_id}))
         return http(503, {"error": "runtime_unavailable"})
     except RuntimeResponseError as exc:
-        logger.error(
-            json.dumps(
-                {
-                    "event": "runtime_invalid_response",
-                    "request_id": request_id,
-                    "error_type": type(exc).__name__,
-                }
-            )
-        )
+        logger.error(json.dumps({"event": "runtime_invalid_response", "request_id": request_id, "error_type": type(exc).__name__}))
         return http(502, {"error": "runtime_invalid_response"})
     except ReadTimeoutError:
         logger.warning(json.dumps({"event": "runtime_timeout", "request_id": request_id}))
@@ -268,24 +275,8 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.error(json.dumps({"event": "runtime_client_error", "request_id": request_id, "error_code": code}))
         return http(status, {"error": "runtime_error", "code": code})
     except BotoCoreError as exc:
-        logger.error(
-            json.dumps(
-                {
-                    "event": "runtime_transport_error",
-                    "request_id": request_id,
-                    "error_type": type(exc).__name__,
-                }
-            )
-        )
+        logger.error(json.dumps({"event": "runtime_transport_error", "request_id": request_id, "error_type": type(exc).__name__}))
         return http(502, {"error": "runtime_transport_error"})
     except Exception as exc:
-        logger.error(
-            json.dumps(
-                {
-                    "event": "facade_unexpected_error",
-                    "request_id": request_id,
-                    "error_type": type(exc).__name__,
-                }
-            )
-        )
+        logger.error(json.dumps({"event": "facade_unexpected_error", "request_id": request_id, "error_type": type(exc).__name__}))
         return http(500, {"error": "internal_error"})

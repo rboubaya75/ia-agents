@@ -74,7 +74,7 @@ resource "aws_lambda_function" "this" {
   handler                        = "lambda_function_code.lambda_handler"
   runtime                        = "python3.12"
   architectures                  = ["arm64"]
-  timeout                        = 15
+  timeout                        = 5
   memory_size                    = 256
   reserved_concurrent_executions = var.reserved_concurrent_executions
   filename                       = data.archive_file.this.output_path
@@ -86,8 +86,10 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      TRIPS_TABLE_NAME = var.trips_table_name
-      LOG_LEVEL        = "INFO"
+      TRIPS_TABLE_NAME        = var.trips_table_name
+      TRIPS_DEFAULT_PAGE_SIZE = "20"
+      TRIPS_MAX_PAGE_SIZE     = "50"
+      LOG_LEVEL               = "INFO"
     }
   }
 
