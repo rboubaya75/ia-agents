@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: test-application-quality-${{ github.workflow }}-${{ github.ref }}
@@ -99,13 +99,18 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: Refresh dependency lock once
+        if: github.actor != 'github-actions[bot]'
         working-directory: frontend
-        run: npm ci
+        run: npm install --package-lock-only --ignore-scripts
 
       - name: Audit production dependencies
         working-directory: frontend
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Install exact dependencies
+        working-directory: frontend
+        run: npm ci
 
       - name: Lint
         working-directory: frontend
@@ -114,3 +119,16 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+      - name: Commit refreshed lockfile
+        if: github.actor != 'github-actions[bot]'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "The lockfile already resolves to audited versions."
+            exit 0
+          fi
+          git commit -m "fix: refresh frontend dependency lock"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
