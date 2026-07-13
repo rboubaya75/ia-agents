@@ -40,7 +40,19 @@ destroy-plan
 destroy
 ```
 
-Contrôles : Gitleaks, lockfile, fmt, init, validate, plan et artifacts du plan.
+Contrôles : Gitleaks, lockfile, fmt, init, validate, plan, analyse JSON et artifacts immuables du plan.
+
+Chaque plan publie pendant 14 jours :
+
+```text
+tfplan                         plan binaire appliqué
+tfplan.txt                     représentation lisible
+tfplan.json                    représentation machine
+tfplan-summary.md              compteurs et décision de sécurité
+tfplan-metadata.json           SHA Git, stack, run ID, version Terraform et SHA-256 du plan
+```
+
+Le script `scripts/terraform_plan_guard.py` bloque automatiquement toute suppression ou tout remplacement d’une ressource critique : Cognito, CloudFront, S3, DynamoDB, API Gateway, Lambda, IAM, AgentCore Runtime, Memory, Gateway, target MCP, resource policies, KMS et WAF.
 
 ### Plan
 
@@ -69,7 +81,9 @@ Après revue du plan :
 action = apply
 ```
 
-L’environnement GitHub `test` et ses reviewers restent obligatoires.
+Le job apply télécharge l’artifact nommé avec le SHA Git et l’identifiant d’exécution, vérifie `tfplan-metadata.json`, recalcule le SHA-256 du plan puis applique exactement le binaire publié. Aucun nouveau `terraform plan` n’est exécuté dans le job apply.
+
+L’environnement GitHub `test` et ses reviewers restent obligatoires avant l’apply.
 
 ## 3. Pipeline application
 
@@ -101,11 +115,17 @@ La pipeline doit :
 2. exécuter la pipeline qualité réutilisable sur le même SHA ;
 3. valider Terraform ;
 4. construire l’image ARM64 immutable ;
-5. appliquer Runtime, resource policies, Gateway et target ;
-6. relire tous les outputs du chemin V1 ;
-7. exécuter `validate_secure_facade_contract.py --enforce` ;
-8. construire le frontend avec `VITE_AGENT_INVOKE_URL` ;
-9. publier S3 et invalider CloudFront.
+5. produire le plan AgentCore dans le job `application-plan` ;
+6. publier le plan binaire, texte, JSON, résumé et métadonnées ;
+7. bloquer les destructions ou remplacements critiques ;
+8. demander l’approbation de l’environnement GitHub `test` ;
+9. vérifier puis appliquer exactement le plan publié dans `application-apply-and-publish` ;
+10. relire tous les outputs du chemin V1 ;
+11. exécuter `validate_secure_facade_contract.py --enforce` ;
+12. construire le frontend avec `VITE_AGENT_INVOKE_URL` ;
+13. publier S3 et invalider CloudFront.
+
+Pour `runtime-only` et `full`, aucun `terraform apply` ne peut s’exécuter sans l’artifact `agentcore-tfplan-<git-sha>-<run-id>` produit par le job de plan du même workflow.
 
 ## 4. Outputs à contrôler
 
@@ -184,4 +204,4 @@ action = destroy
 confirm_destroy = true
 ```
 
-Uniquement pour l’environnement `test`, après vérification des données et artifacts nécessaires.
+Uniquement pour l’environnement `test`, après vérification des données et artifacts nécessaires. Le destroy-plan publie les mêmes preuves pendant 14 jours en mode `report-only`; le job destroy vérifie le SHA Git, le run ID, la stack et le SHA-256 du plan avant application.
