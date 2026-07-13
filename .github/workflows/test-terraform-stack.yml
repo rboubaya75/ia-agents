@@ -61,18 +61,19 @@ env:
 
 jobs:
   secret-scan:
-    name: Secret Scan Current Revision
+    name: Secret Scan Pull Request History
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout current revision only
+      - name: Checkout full history for Gitleaks
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Gitleaks current revision scan
-        uses: gitleaks/gitleaks-action@v3.0.0
+      - name: Gitleaks repository scan
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 
   lockfile-check:
     name: Terraform Lockfile Check
