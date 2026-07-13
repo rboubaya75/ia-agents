@@ -29,21 +29,30 @@ resource "aws_cloudwatch_log_group" "this" {
   tags = var.tags
 }
 
-data "aws_iam_policy_document" "logs" {
+data "aws_iam_policy_document" "observability" {
   statement {
+    sid = "WriteFunctionLogs"
     actions = [
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
-
     resources = ["${aws_cloudwatch_log_group.this.arn}:*"]
+  }
+
+  statement {
+    sid = "WriteFunctionTraces"
+    actions = [
+      "xray:PutTraceSegments",
+      "xray:PutTelemetryRecords"
+    ]
+    resources = ["*"]
   }
 }
 
-resource "aws_iam_role_policy" "logs" {
-  name   = "${var.function_name}-logs"
+resource "aws_iam_role_policy" "observability" {
+  name   = "${var.function_name}-observability"
   role   = aws_iam_role.this.id
-  policy = data.aws_iam_policy_document.logs.json
+  policy = data.aws_iam_policy_document.observability.json
 }
 
 data "aws_iam_policy_document" "runtime_invoke" {
@@ -90,6 +99,10 @@ resource "aws_lambda_function" "this" {
   filename                       = data.archive_file.facade.output_path
   source_code_hash               = data.archive_file.facade.output_base64sha256
 
+  tracing_config {
+    mode = "Active"
+  }
+
   environment {
     variables = {
       AGENT_RUNTIME_ARN           = var.agent_runtime_arn
@@ -106,7 +119,7 @@ resource "aws_lambda_function" "this" {
 
   depends_on = [
     aws_cloudwatch_log_group.this,
-    aws_iam_role_policy.logs,
+    aws_iam_role_policy.observability,
     aws_iam_role_policy.runtime_invoke
   ]
 }
