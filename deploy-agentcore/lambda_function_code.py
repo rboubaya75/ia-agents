@@ -1,18 +1,19 @@
 """Trip tools Lambda for AgentCore Gateway.
 
 The Runtime injects the authenticated ``userId`` before every trip tool call.
-The function validates all tool inputs, never logs raw payloads, and scopes every
-DynamoDB operation to the authenticated partition key.
+The function validates all inputs, never logs raw payloads, scopes every
+DynamoDB operation to the authenticated partition key, and returns the native
+object format expected by AgentCore Gateway Lambda targets.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Iterable
 
 import boto3
@@ -35,11 +36,14 @@ class ValidationError(ValueError):
     pass
 
 
-def _response(status_code: int, body: Any) -> Dict[str, Any]:
-    return {
-        "statusCode": status_code,
-        "body": json.dumps(body, default=str, separators=(",", ":")) if not isinstance(body, str) else body,
-    }
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _get_table():
@@ -50,11 +54,9 @@ def _get_table():
 
 def _extract_tool_name(context: Any) -> str:
     custom = getattr(getattr(context, "client_context", None), "custom", {}) or {}
-    tool_name = custom.get("bedrockAgentCoreToolName", "")
+    extended_name = custom.get("bedrockAgentCoreToolName", "")
     delimiter = "___"
-    if delimiter in tool_name:
-        tool_name = tool_name.split(delimiter, 1)[1]
-    return tool_name
+    return extended_name.split(delimiter, 1)[1] if delimiter in extended_name else extended_name
 
 
 def _require(event: Dict[str, Any], fields: Iterable[str]) -> None:
@@ -112,8 +114,7 @@ def _iso_date(event: Dict[str, Any], field: str, *, required: bool = False) -> s
 
 def _validate_optional_fields(event: Dict[str, Any]) -> Dict[str, str]:
     values: Dict[str, str] = {}
-    limits = {"destination": 200, "description": 2000, "status": 50}
-    for field, limit in limits.items():
+    for field, limit in {"destination": 200, "description": 2000, "status": 50}.items():
         value = _string(event, field, limit)
         if value is not None:
             values[field] = value
@@ -153,14 +154,14 @@ def create_trip(event: Dict[str, Any]) -> Dict[str, Any]:
         Item=item,
         ConditionExpression="attribute_not_exists(userId) AND attribute_not_exists(tripId)",
     )
-    return _response(200, {"message": "Trip created successfully.", "tripId": trip_id})
+    return {"created": True, "tripId": trip_id, "message": "Trip created successfully."}
 
 
 def get_trips(event: Dict[str, Any]) -> Dict[str, Any]:
     _reject_unexpected(event, {"userId"})
     user_id = _user_id(event)
     result = _get_table().query(KeyConditionExpression=Key("userId").eq(user_id))
-    return _response(200, result.get("Items", []))
+    return {"trips": _json_safe(result.get("Items", []))}
 
 
 def get_trip(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,8 +171,8 @@ def get_trip(event: Dict[str, Any]) -> Dict[str, Any]:
     result = _get_table().get_item(Key={"userId": user_id, "tripId": trip_id})
     item = result.get("Item")
     if not item:
-        return _response(404, {"message": "Trip not found."})
-    return _response(200, item)
+        return {"found": False, "tripId": trip_id, "message": "Trip not found."}
+    return {"found": True, "trip": _json_safe(item)}
 
 
 def update_trip(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,31 +215,32 @@ def update_trip(event: Dict[str, Any]) -> Dict[str, Any]:
         )
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            return _response(404, {"message": "Trip not found."})
+            return {"updated": False, "tripId": trip_id, "message": "Trip not found."}
         raise
 
-    return _response(200, {"message": "Trip updated successfully.", "tripId": trip_id})
+    return {"updated": True, "tripId": trip_id, "message": "Trip updated successfully."}
 
 
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     tool_name = _extract_tool_name(context)
     logger.info("trip_tool_invocation tool=%s", tool_name or "unknown")
 
+    handlers = {
+        "create_trip": create_trip,
+        "get_trips": get_trips,
+        "get_trip": get_trip,
+        "update_trip": update_trip,
+    }
+    handler = handlers.get(tool_name)
+    if not handler:
+        return {"error": "unsupported_operation", "message": "Unsupported operation."}
+    if not isinstance(event, dict):
+        return {"error": "validation_error", "message": "Tool input must be a JSON object."}
+
     try:
-        handlers = {
-            "create_trip": create_trip,
-            "get_trips": get_trips,
-            "get_trip": get_trip,
-            "update_trip": update_trip,
-        }
-        handler = handlers.get(tool_name)
-        if not handler:
-            return _response(400, {"message": "Unsupported operation."})
-        if not isinstance(event, dict):
-            raise ValidationError("Tool input must be a JSON object.")
         return handler(event)
     except ValidationError as exc:
-        return _response(400, {"message": str(exc)})
+        return {"error": "validation_error", "message": str(exc)}
     except Exception:
         logger.exception("trip_tool_error tool=%s", tool_name or "unknown")
-        return _response(500, {"message": "Internal tool error."})
+        raise
