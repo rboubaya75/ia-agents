@@ -1,11 +1,10 @@
-# Phase 3: Long-term Memory
-# Requirements: 6.1, 6.2
-
-# Core dependencies
+# AgentCore Runtime dependencies
 strands-agents>=0.1.0
-boto3>=1.34.0
+boto3>=1.43.18
 bedrock-agentcore-starter-toolkit>=0.1.0
 bedrock-agentcore[strands-agents]>=0.1.0
+mcp>=1.0.0
+httpx>=0.27.0,<1.0.0
 
 # Runtime dependencies
 fastapi>=0.109.0
@@ -16,5 +15,5 @@ pydantic>=2.5.0
 opentelemetry-distro>=0.43b0
 opentelemetry-instrumentation>=0.43b0
 
-# Web search
+# Public web search tool
 ddgs>=6.0.0
