@@ -1,10 +1,18 @@
-name: Repair Tainted Test Facade
+name: Repair Tainted Test Lambda
 
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "Exact test Lambda whose taint marker must be validated and removed"
+        required: true
+        type: choice
+        options:
+          - facade
+          - trip-tools
+        default: trip-tools
       confirm_repair:
-        description: "Confirm validation and untaint of the exact test facade Lambda"
+        description: "Confirm validation and untaint of the selected test Lambda"
         required: true
         type: boolean
         default: false
@@ -13,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: repair-tainted-test-facade
+  group: repair-tainted-test-lambda
   cancel-in-progress: false
 
 env:
@@ -25,7 +33,7 @@ env:
 
 jobs:
   repair:
-    name: Validate and Untaint Test Facade
+    name: Validate and Untaint Test Lambda
     if: |
       github.ref == 'refs/heads/migration/secure-agentcore-v1' &&
       inputs.confirm_repair == true
@@ -44,7 +52,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: repair-tainted-test-facade
+          role-session-name: repair-tainted-test-lambda
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
@@ -63,8 +71,22 @@ jobs:
         id: recovery_plan
         working-directory: ${{ env.STACK_PATH }}
         run: |
+          agentcore_args=()
+          state_list="$(terraform state list 2>/dev/null || true)"
+          if echo "$state_list" | grep -Eq '^aws_bedrockagentcore_'; then
+            runtime_state="$(terraform state show -no-color 'aws_bedrockagentcore_agent_runtime.agent[0]')"
+            image_uri="$(printf '%s\n' "$runtime_state" | awk -F' = ' '/container_uri/ {gsub(/"/, "", $2); print $2; exit}')"
+            image_tag="${image_uri##*:}"
+            if [ -z "$image_uri" ] || [ -z "$image_tag" ] || [ "$image_tag" = "$image_uri" ]; then
+              echo "Unable to resolve the current AgentCore Runtime image tag from Terraform state."
+              exit 1
+            fi
+            agentcore_args+=("-var=enable_agentcore_control_plane=true")
+            agentcore_args+=("-var=agentcore_image_tag=${image_tag}")
+          fi
+
           set +e
-          terraform plan -detailed-exitcode -lock-timeout=60s -out=tfplan-taint-recovery
+          terraform plan -detailed-exitcode -lock-timeout=60s -out=tfplan-taint-recovery "${agentcore_args[@]}"
           exitcode=$?
           set -e
           echo "exitcode=${exitcode}" >> "$GITHUB_OUTPUT"
@@ -83,6 +105,7 @@ jobs:
         run: |
           python3 ../../../scripts/validate_tainted_facade_recovery.py inspect-plan \
             --plan-json tfplan-taint-recovery.json \
+            --target "${{ inputs.target }}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Read live Lambda configuration
@@ -91,22 +114,37 @@ jobs:
         run: |
           aws lambda get-function-configuration \
             --function-name "${{ steps.contract.outputs.function_name }}" \
-            --output json > lambda-facade-configuration.json
+            --output json > lambda-configuration.json
           python3 ../../../scripts/validate_tainted_facade_recovery.py verify-aws \
-            --configuration-json lambda-facade-configuration.json \
+            --configuration-json lambda-configuration.json \
+            --target "${{ inputs.target }}" \
             --expected-role "${{ steps.contract.outputs.role }}"
 
       - name: Remove only the validated taint marker
         if: steps.recovery_plan.outputs.exitcode == '2'
         working-directory: ${{ env.STACK_PATH }}
-        run: terraform untaint 'module.agent_api_facade.aws_lambda_function.this'
+        run: terraform untaint "${{ steps.contract.outputs.address }}"
 
       - name: Re-plan and enforce normal critical-resource policy
         if: steps.recovery_plan.outputs.exitcode == '2'
         working-directory: ${{ env.STACK_PATH }}
         run: |
+          agentcore_args=()
+          state_list="$(terraform state list 2>/dev/null || true)"
+          if echo "$state_list" | grep -Eq '^aws_bedrockagentcore_'; then
+            runtime_state="$(terraform state show -no-color 'aws_bedrockagentcore_agent_runtime.agent[0]')"
+            image_uri="$(printf '%s\n' "$runtime_state" | awk -F' = ' '/container_uri/ {gsub(/"/, "", $2); print $2; exit}')"
+            image_tag="${image_uri##*:}"
+            if [ -z "$image_uri" ] || [ -z "$image_tag" ] || [ "$image_tag" = "$image_uri" ]; then
+              echo "Unable to resolve the current AgentCore Runtime image tag from Terraform state."
+              exit 1
+            fi
+            agentcore_args+=("-var=enable_agentcore_control_plane=true")
+            agentcore_args+=("-var=agentcore_image_tag=${image_tag}")
+          fi
+
           set +e
-          terraform plan -detailed-exitcode -lock-timeout=60s -out=tfplan-after-untaint
+          terraform plan -detailed-exitcode -lock-timeout=60s -out=tfplan-after-untaint "${agentcore_args[@]}"
           exitcode=$?
           set -e
           if [ "$exitcode" -eq 1 ]; then exit 1; fi
@@ -122,11 +160,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: tainted-facade-recovery-${{ github.sha }}-${{ github.run_id }}
+          name: tainted-${{ inputs.target }}-recovery-${{ github.sha }}-${{ github.run_id }}
           path: |
             ${{ env.STACK_PATH }}/tfplan-taint-recovery.txt
             ${{ env.STACK_PATH }}/tfplan-taint-recovery.json
-            ${{ env.STACK_PATH }}/lambda-facade-configuration.json
+            ${{ env.STACK_PATH }}/lambda-configuration.json
             ${{ env.STACK_PATH }}/tfplan-after-untaint.txt
             ${{ env.STACK_PATH }}/tfplan-after-untaint.json
             ${{ env.STACK_PATH }}/tfplan-after-untaint-summary.md
