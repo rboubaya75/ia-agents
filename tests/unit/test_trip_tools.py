@@ -89,7 +89,7 @@ class TripToolsTests(unittest.TestCase):
         self.assertEqual(response["error"], "validation_error")
         self.table.query.assert_not_called()
 
-    def test_get_trip_uses_user_partition_and_returns_native_object(self) -> None:
+    def test_get_trip_uses_partition_and_redacts_user_identity(self) -> None:
         self.table.get_item.return_value = {
             "Item": {
                 "userId": USER_ID,
@@ -106,12 +106,37 @@ class TripToolsTests(unittest.TestCase):
 
         self.assertTrue(response["found"])
         self.assertEqual(response["trip"]["budget"], 100.5)
+        self.assertNotIn("userId", response["trip"])
         self.assertNotIn("statusCode", response)
         self.table.get_item.assert_called_once_with(
             Key={"userId": USER_ID, "tripId": TRIP_ID}
         )
 
+    def test_get_trips_redacts_user_identity(self) -> None:
+        self.table.query.return_value = {
+            "Items": [
+                {"userId": USER_ID, "tripId": TRIP_ID, "tripName": "Tokyo"}
+            ]
+        }
+
+        response = trip_tools.lambda_handler(
+            {"userId": USER_ID},
+            context("get_trips"),
+        )
+
+        self.assertEqual(response["trips"][0]["tripId"], TRIP_ID)
+        self.assertNotIn("userId", response["trips"][0])
+
     def test_update_trip_requires_an_update(self) -> None:
+        self.table.get_item.return_value = {
+            "Item": {
+                "userId": USER_ID,
+                "tripId": TRIP_ID,
+                "startDate": "2026-09-01",
+                "endDate": "2026-09-10",
+                "updatedAt": "2026-07-13T10:00:00+00:00",
+            }
+        }
         response = trip_tools.lambda_handler(
             {"userId": USER_ID, "tripId": TRIP_ID},
             context("update_trip"),
@@ -119,6 +144,49 @@ class TripToolsTests(unittest.TestCase):
 
         self.assertEqual(response["error"], "validation_error")
         self.table.update_item.assert_not_called()
+
+    def test_partial_date_update_cannot_invert_existing_range(self) -> None:
+        self.table.get_item.return_value = {
+            "Item": {
+                "userId": USER_ID,
+                "tripId": TRIP_ID,
+                "startDate": "2026-09-01",
+                "endDate": "2026-09-10",
+                "updatedAt": "2026-07-13T10:00:00+00:00",
+            }
+        }
+
+        response = trip_tools.lambda_handler(
+            {"userId": USER_ID, "tripId": TRIP_ID, "startDate": "2026-09-20"},
+            context("update_trip"),
+        )
+
+        self.assertEqual(response["error"], "validation_error")
+        self.table.update_item.assert_not_called()
+
+    def test_update_uses_optimistic_concurrency_condition(self) -> None:
+        self.table.get_item.return_value = {
+            "Item": {
+                "userId": USER_ID,
+                "tripId": TRIP_ID,
+                "startDate": "2026-09-01",
+                "endDate": "2026-09-10",
+                "updatedAt": "2026-07-13T10:00:00+00:00",
+            }
+        }
+
+        response = trip_tools.lambda_handler(
+            {"userId": USER_ID, "tripId": TRIP_ID, "status": "confirmed"},
+            context("update_trip"),
+        )
+
+        self.assertTrue(response["updated"])
+        call = self.table.update_item.call_args.kwargs
+        self.assertIn("#updatedAt = :expectedUpdatedAt", call["ConditionExpression"])
+        self.assertEqual(
+            call["ExpressionAttributeValues"][":expectedUpdatedAt"],
+            "2026-07-13T10:00:00+00:00",
+        )
 
     def test_unsupported_tool_is_rejected(self) -> None:
         response = trip_tools.lambda_handler(
