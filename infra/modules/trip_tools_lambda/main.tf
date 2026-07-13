@@ -40,6 +40,16 @@ data "aws_iam_policy_document" "execution" {
   }
 
   statement {
+    sid    = "WriteFunctionTraces"
+    effect = "Allow"
+    actions = [
+      "xray:PutTraceSegments",
+      "xray:PutTelemetryRecords"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
     sid    = "ReadWriteOwnTripsTable"
     effect = "Allow"
     actions = [
@@ -69,6 +79,10 @@ resource "aws_lambda_function" "this" {
   reserved_concurrent_executions = var.reserved_concurrent_executions
   filename                       = data.archive_file.this.output_path
   source_code_hash               = data.archive_file.this.output_base64sha256
+
+  tracing_config {
+    mode = "Active"
+  }
 
   environment {
     variables = {
