@@ -12,6 +12,7 @@ on:
       - "tests/**"
       - ".github/workflows/test-application-quality.yml"
       - ".github/workflows/test-application-deploy.yml"
+      - ".github/workflows/diagnose-test-agent-502.yml"
   pull_request:
     branches: ["migration/secure-agentcore-v1"]
     paths:
@@ -22,6 +23,7 @@ on:
       - "tests/**"
       - ".github/workflows/test-application-quality.yml"
       - ".github/workflows/test-application-deploy.yml"
+      - ".github/workflows/diagnose-test-agent-502.yml"
   workflow_dispatch:
 
 permissions:
@@ -79,14 +81,17 @@ jobs:
           PY
 
       - name: Run unit security contracts
-        run: python -m unittest discover -s tests/unit -p "test_*.py" -v
+        run: python -m unittest discover -s tests/unit -v
 
       - name: Audit Python dependencies
-        run: pip-audit -r deploy-agentcore/requirements.txt --strict
+        run: python -m pip_audit --strict
 
   frontend-quality:
     name: Frontend Lint Build and Audit
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
 
     steps:
       - name: Checkout
@@ -100,17 +105,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        working-directory: frontend
         run: npm ci
 
       - name: Audit production dependencies
-        working-directory: frontend
         run: npm audit --omit=dev --audit-level=high
 
       - name: Lint
-        working-directory: frontend
         run: npm run lint
 
       - name: Build
-        working-directory: frontend
         run: npm run build
