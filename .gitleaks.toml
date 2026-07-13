@@ -2,10 +2,3 @@ title = "Secure AgentCore Gitleaks configuration"
 
 [extend]
 useDefault = true
-
-[[allowlists]]
-description = "Allow Terraform Cognito explicit auth flow constants"
-condition = "AND"
-regexTarget = "line"
-paths = ['''infra/modules/cognito_web_auth/main\.tf''']
-regexes = ['''USER_[A-Z_]+_AUTH''']
