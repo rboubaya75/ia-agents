@@ -120,7 +120,7 @@ output "agent_runtime_endpoint_arn" {
 
 output "agent_runtime_invoke_url" {
   description = "Technical IAM-authenticated Runtime URL. It must not be exposed to the browser."
-  value       = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=DEFAULT", "")
+  value       = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=${urlencode(var.agent_runtime_endpoint_name)}", "")
 }
 
 output "agentcore_gateway_url" {
