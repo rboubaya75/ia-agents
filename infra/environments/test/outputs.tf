@@ -82,6 +82,18 @@ output "agent_api_facade_log_group_name" {
   value = module.agent_api_facade.log_group_name
 }
 
+output "trip_tools_lambda_function_name" {
+  value = module.trip_tools_lambda.function_name
+}
+
+output "trip_tools_lambda_function_arn" {
+  value = module.trip_tools_lambda.function_arn
+}
+
+output "trip_tools_lambda_log_group_name" {
+  value = module.trip_tools_lambda.log_group_name
+}
+
 output "agent_service_name" {
   value = local.agentcore_runtime_name
 }
@@ -112,11 +124,20 @@ output "agent_runtime_invoke_url" {
 }
 
 output "agentcore_gateway_url" {
-  value = ""
+  description = "Deprecated user-ingress Gateway output. AgentCore Gateway is tools-only in V1."
+  value       = ""
 }
 
 output "agentcore_gateway_mcp_url" {
   value = try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "")
+}
+
+output "agentcore_gateway_arn" {
+  value = try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_arn, "")
+}
+
+output "agentcore_trip_tools_target_id" {
+  value = try(aws_bedrockagentcore_gateway_target.trip_tools[0].target_id, "")
 }
 
 output "agentcore_memory_id" {
@@ -137,10 +158,14 @@ output "app_secret_name" {
 
 output "secure_facade_ready" {
   value = (
+    var.enable_agentcore_control_plane &&
     module.api_gateway_agent_ingress.security_facade_enabled &&
     module.api_gateway_agent_ingress.agent_invoke_url != "" &&
     module.agent_api_facade.function_name != "" &&
-    (!var.enable_agentcore_control_plane || try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn, "") != "")
+    try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn, "") != "" &&
+    try(aws_bedrockagentcore_memory.agent[0].id, "") != "" &&
+    try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "") != "" &&
+    try(aws_bedrockagentcore_gateway_target.trip_tools[0].target_id, "") != ""
   )
 }
 
