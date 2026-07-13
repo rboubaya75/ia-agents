@@ -17,7 +17,7 @@ logger.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging
 
 RUNTIME_READY = os.getenv("RUNTIME_READY", "false").lower() == "true"
 RUNTIME_ARN = os.getenv("AGENT_RUNTIME_ARN", "")
-RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "default")
+RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "DEFAULT")
 EXPECTED_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "28"))
 MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "4000"))
@@ -33,6 +33,10 @@ _agentcore = boto3.client(
         retries={"mode": "standard", "total_max_attempts": 1},
     ),
 )
+
+
+class AuthorizationError(ValueError):
+    pass
 
 
 class RuntimeUnavailableError(RuntimeError):
@@ -84,7 +88,7 @@ def claims_from(event: Dict[str, Any]) -> Dict[str, Any]:
     jwt = authorizer.get("jwt") or {}
     claims = jwt.get("claims") or {}
     if not isinstance(claims, dict):
-        raise ValueError("Authenticated JWT claims are missing.")
+        raise AuthorizationError("Authenticated JWT claims are missing.")
     return claims
 
 
@@ -92,14 +96,14 @@ def actor_id_from(event: Dict[str, Any]) -> str:
     claims = claims_from(event)
 
     if claims.get("token_use") != "access":
-        raise ValueError("A Cognito access token is required.")
+        raise AuthorizationError("A Cognito access token is required.")
 
     if not EXPECTED_CLIENT_ID or claims.get("client_id") != EXPECTED_CLIENT_ID:
-        raise ValueError("JWT client_id is not authorized.")
+        raise AuthorizationError("JWT client_id is not authorized.")
 
     subject = claims.get("sub")
     if not isinstance(subject, str) or not subject.strip():
-        raise ValueError("Authenticated subject is missing.")
+        raise AuthorizationError("Authenticated subject is missing.")
     return subject.strip()
 
 
@@ -203,6 +207,17 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         )
         return http(200, {"message": message_from(result), "sessionId": session_id})
 
+    except AuthorizationError as exc:
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "facade_authorization_rejected",
+                    "request_id": request_id,
+                    "reason": str(exc),
+                }
+            )
+        )
+        return http(403, {"error": "forbidden"})
     except ValueError as exc:
         logger.warning(
             json.dumps(
