@@ -8,11 +8,10 @@ module "agent_api_facade" {
   agent_runtime_endpoint_name = "DEFAULT"
   cognito_client_id           = module.cognito_web_auth.client_id
 
-  request_timeout_seconds        = 28
-  max_prompt_chars               = 4000
-  reserved_concurrent_executions = 5
-  log_retention_days             = 30
-  log_level                      = "INFO"
+  request_timeout_seconds = 28
+  max_prompt_chars        = 4000
+  log_retention_days      = 30
+  log_level               = "INFO"
 
   tags = local.common_tags
 }
