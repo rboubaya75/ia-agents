@@ -291,11 +291,15 @@ jobs:
         continue-on-error: true
 
       - name: Fail on AgentCore plan error
-        if: steps.agentcore_plan.outputs.exitcode == '1'
+        if: |
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.outputs.exitcode == '1'
         run: exit 1
 
       - name: Render AgentCore plan evidence
-        if: steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2'
+        if: |
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
           terraform show -no-color tfplan-agentcore-control-plane > tfplan-agentcore-control-plane.txt
@@ -303,7 +307,9 @@ jobs:
 
       - name: Analyze AgentCore plan safety
         id: agentcore_plan_guard
-        if: steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2'
+        if: |
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
           python3 ../../../scripts/terraform_plan_guard.py analyze \
@@ -313,7 +319,10 @@ jobs:
         continue-on-error: true
 
       - name: Record immutable AgentCore plan metadata
-        if: always() && (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
+        if: |
+          always() &&
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
           python3 ../../../scripts/terraform_plan_guard.py record \
@@ -325,12 +334,18 @@ jobs:
             --terraform-version "${TF_VERSION}"
 
       - name: Publish AgentCore plan summary
-        if: always() && (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
+        if: |
+          always() &&
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: cat tfplan-agentcore-control-plane-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload reviewed AgentCore plan artifact
-        if: always() && (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
+        if: |
+          always() &&
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: agentcore-tfplan-${{ github.sha }}-${{ github.run_id }}
@@ -344,7 +359,9 @@ jobs:
           if-no-files-found: error
 
       - name: Fail on unsafe AgentCore plan
-        if: steps.agentcore_plan_guard.outcome == 'failure'
+        if: |
+          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan_guard.outcome == 'failure'
         run: |
           echo "AgentCore Terraform plan contains a blocked deletion or replacement of a critical resource."
           exit 1
