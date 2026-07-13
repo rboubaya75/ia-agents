@@ -1,3 +1,17 @@
+data "aws_partition" "current" {}
+
+locals {
+  agentcore_base_model_id = trimprefix(var.agentcore_model_id, "eu.")
+  agentcore_memory_arn = try(
+    aws_bedrockagentcore_memory.agent[0].arn,
+    "arn:${data.aws_partition.current.partition}:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:memory/not-created"
+  )
+  agentcore_tools_gateway_arn = try(
+    aws_bedrockagentcore_gateway.tools_mcp[0].gateway_arn,
+    "arn:${data.aws_partition.current.partition}:bedrock-agentcore:${var.region}:${data.aws_caller_identity.current.account_id}:gateway/not-created"
+  )
+}
+
 data "aws_iam_policy_document" "agentcore_service_assume_role" {
   statement {
     sid     = "AgentCoreAssumeRole"
@@ -34,20 +48,30 @@ data "aws_iam_policy_document" "agentcore_runtime" {
   }
 
   statement {
-    sid = "InvokeBedrockModels"
+    sid = "InvokeConfiguredBedrockModel"
     actions = [
       "bedrock:InvokeModel",
       "bedrock:InvokeModelWithResponseStream"
     ]
-    resources = ["*"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:bedrock:${var.region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.agentcore_model_id}",
+      "arn:${data.aws_partition.current.partition}:bedrock:eu-*::foundation-model/${local.agentcore_base_model_id}"
+    ]
   }
 
   statement {
-    sid = "UseAgentCoreServices"
+    sid = "UseConfiguredAgentCoreMemory"
     actions = [
-      "bedrock-agentcore:*"
+      "bedrock-agentcore:CreateEvent",
+      "bedrock-agentcore:RetrieveMemoryRecords"
     ]
-    resources = ["*"]
+    resources = [local.agentcore_memory_arn]
+  }
+
+  statement {
+    sid       = "InvokeConfiguredToolsGateway"
+    actions   = ["bedrock-agentcore:InvokeGateway"]
+    resources = [local.agentcore_tools_gateway_arn]
   }
 
   statement {
@@ -57,15 +81,9 @@ data "aws_iam_policy_document" "agentcore_runtime" {
       "logs:CreateLogStream",
       "logs:PutLogEvents"
     ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid = "ReadConfiguredApplicationSecret"
-    actions = [
-      "secretsmanager:GetSecretValue"
+    resources = [
+      "arn:${data.aws_partition.current.partition}:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/bedrock-agentcore/*"
     ]
-    resources = ["*"]
   }
 }
 
@@ -84,45 +102,4 @@ resource "aws_iam_role" "agentcore_gateway" {
   name               = "${local.name_prefix}-agentcore-gateway-role"
   assume_role_policy = data.aws_iam_policy_document.agentcore_service_assume_role.json
   tags               = local.common_tags
-}
-
-data "aws_iam_policy_document" "agentcore_gateway" {
-  statement {
-    sid = "InvokeAgentCoreRuntimeTarget"
-    actions = [
-      "bedrock-agentcore:InvokeAgentRuntime",
-      "bedrock-agentcore:*"
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid = "InvokeMcpToolBackends"
-    actions = [
-      "lambda:InvokeFunction",
-      "execute-api:Invoke"
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid = "WriteGatewayLogs"
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents"
-    ]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_policy" "agentcore_gateway" {
-  name   = "${local.name_prefix}-agentcore-gateway-policy"
-  policy = data.aws_iam_policy_document.agentcore_gateway.json
-  tags   = local.common_tags
-}
-
-resource "aws_iam_role_policy_attachment" "agentcore_gateway" {
-  role       = aws_iam_role.agentcore_gateway.name
-  policy_arn = aws_iam_policy.agentcore_gateway.arn
 }
