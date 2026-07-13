@@ -1,109 +1,56 @@
 # WildRydes — Secure AgentCore V1 Landing Zone
 
-Ce dépôt porte la migration de WildRydes vers une application agentique sécurisée sur AWS, basée sur Amazon Bedrock AgentCore.
-
-- **Branche par défaut et environnement de travail :** `migration/secure-agentcore-v1`
-- **Périmètre :** environnement `test`
+- **Branche et environnement :** `migration/secure-agentcore-v1` / `test`
 - **IaC :** Terraform
 - **CI/CD :** GitHub Actions avec OIDC AWS
-- **Runtime :** `deploy-agentcore/agents/phase_4.py`
-- **Modèle courant :** `eu.anthropic.claude-haiku-4-5-20251001-v1:0`
-- **RAG :** prévu ultérieurement, désactivé par défaut
+- **Runtime :** Python 3.12, `deploy-agentcore/agents/phase_4.py`
+- **Modèle :** `eu.anthropic.claude-haiku-4-5-20251001-v1:0`
+- **RAG :** hors V1, désactivé par défaut
 
-## 1. Objectif V1
-
-Industrialiser l’ancien workshop WildRydes avec :
-
-- frontend React / TypeScript / Vite ;
-- S3 privé et CloudFront ;
-- Cognito pour l’authentification ;
-- API Gateway comme front-door web ;
-- AgentCore Runtime avec JWT natif ;
-- AgentCore Memory ;
-- AgentCore Gateway MCP pour les tools ;
-- DynamoDB pour les trips ;
-- image Runtime ECR `linux/arm64` ;
-- Terraform et pipelines GitHub Actions.
-
-## 2. État actuel de la branche
-
-Le code actuellement présent met en œuvre :
+## Architecture V1 implémentée
 
 ```text
-Browser / React App
-  -> AgentCore Runtime direct HTTPS
-      - Cognito access token Bearer
-      - Runtime custom JWT authorizer
-      - Authorization header allowlist
-  -> Claude Haiku 4.5 EU
-  -> AgentCore Memory
+Browser / React
+  -> CloudFront / S3 privé
+  -> Cognito User Pool
+  -> API Gateway HTTP API
+       - Cognito JWT authorizer
+       - CORS limité au domaine CloudFront
+       - throttling et access logs
+  -> Lambda Agent Invocation Security Facade
+       - payload strict prompt + sessionId
+       - actorId = claims.sub
+       - rejet de toute identité ou configuration client arbitraire
+  -> AgentCore Runtime IAM-only
+       - trustedIdentity produite par la façade
+       - Claude Haiku 4.5 EU
+       - AgentCore Memory
+       - tools Strands
+  -> AgentCore Gateway MCP AWS_IAM
+  -> Lambda Trip Tools
+  -> DynamoDB Trips
 ```
 
-Le frontend utilise actuellement `VITE_AGENT_RUNTIME_INVOKE_URL` en priorité.
+Le navigateur ne connaît et n’utilise jamais l’URL technique AgentCore Runtime.
 
-Amazon API Gateway existe toujours dans Terraform, avec un authorizer JWT Cognito et une configuration CORS, mais il n’expose plus de route agentique active car le mode Gateway-first est désactivé.
+## Contrat d’identité
 
-AgentCore Gateway existe actuellement comme Gateway MCP. Il n’est plus utilisé comme intermédiaire d’ingress utilisateur.
-
-### Écarts connus dans l’état actuel
-
-- le navigateur appelle encore directement AgentCore Runtime ;
-- API Gateway n’est pas encore reconnecté au Runtime direct ;
-- le CORS API Gateway ne contient pas encore le header de session Runtime ;
-- la pipeline frontend injecte encore l’URL Runtime directe ;
-- le code MCP attend des credentials OAuth alors que Terraform configure `GATEWAY_AUTH_MODE=aws_iam` ;
-- aucun target MCP métier réel n’est encore validé end-to-end ;
-- plusieurs permissions IAM sont encore larges ;
-- certains noms de scripts, outputs et variables contiennent encore `gateway_first` ;
-- les tests P0 historiques ne sont pas encore alignés avec le contrat Runtime actuel.
-
-## 3. Cible V1 approuvée
-
-La cible V1 est définie par ADR-0004 :
+La seule source de confiance est :
 
 ```text
-Browser / React App
-  -> Amazon API Gateway HTTP API
-      - Cognito JWT authorizer
-      - CORS strict
-      - throttling
-      - access logs redacted
-  -> HTTP proxy direct
-  -> Amazon Bedrock AgentCore Runtime
-      - custom JWT authorizer Cognito
-      - Authorization allowlist
-      - phase_4.py
-  -> Amazon Bedrock Claude Haiku 4.5
-  -> AgentCore Memory
+actorId = Cognito access-token claim `sub`
 ```
 
-Chemin tools :
+Le frontend envoie uniquement :
 
-```text
-AgentCore Runtime
-  -> AgentCore Gateway MCP
-  -> targets tools autorisés
-  -> DynamoDB / APIs métier
+```json
+{
+  "prompt": "Planifie un voyage à Tokyo",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000"
+}
 ```
 
-### Responsabilités des gateways
-
-| Brique | Rôle V1 |
-|---|---|
-| Amazon API Gateway | Front-door web : JWT, CORS, throttling, logs, URL stable, future protection edge |
-| AgentCore Gateway MCP | Exposition et gouvernance des tools appelés par Runtime |
-| AgentCore Gateway ingress | Non nominal ; abandonné pour l’ingress utilisateur |
-| Lambda Agent Invocation Facade | Legacy/fallback uniquement, non utilisée dans le chemin nominal |
-
-## 4. Modèle d’identité
-
-Règle V1 :
-
-```text
-actorId = Cognito access token claim `sub`
-```
-
-Le navigateur ne doit jamais être source de confiance pour :
+La façade rejette notamment :
 
 ```text
 actorId
@@ -111,39 +58,51 @@ userId
 tenantId
 trustedIdentity
 groups
+modelOverride
+systemPrompt
+toolName
 ```
 
-Le Runtime rejette les champs d’identité client-side et injecte l’identité serveur dans les appels tools.
+Elle construit ensuite `trustedIdentity.actorId` pour l’appel IAM vers Runtime. Runtime écrase toujours `userId` avant un appel aux tools Trips.
 
-## 5. Sécurité déjà en place
+## Contrôles de sécurité
 
-- S3 frontend privé avec Block Public Access ;
-- CloudFront Origin Access Control ;
-- HTTPS côté CloudFront ;
-- versioning et chiffrement S3 ;
-- Cognito en mode utilisateurs invités uniquement ;
-- app client SPA sans secret ;
-- ECR immutable avec scan on push et lifecycle policy ;
-- DynamoDB chiffré avec PITR ;
-- GitHub Actions avec OIDC AWS ;
-- logs Runtime avec hashes d’acteur et de session ;
-- rejet des champs d’identité fournis dans le body ;
-- modèle Claude Haiku 4.5 validé avec `ConverseStream + toolConfig`.
+- S3 Block Public Access et CloudFront OAC ;
+- HTTPS et headers CloudFront : CSP, HSTS, anti-framing, `nosniff`, Referrer-Policy et Permissions-Policy ;
+- Cognito access token vérifié par API Gateway puis contrôlé par la façade (`token_use`, `client_id`, `sub`) ;
+- façade Lambda Python 3.12 ARM64, concurrence réservée et timeout inférieur à API Gateway ;
+- Runtime IAM-only avec resource policy limitée au rôle de la façade ;
+- Gateway MCP IAM avec resource policy limitée au rôle Runtime ;
+- IAM Runtime limité au modèle, à Memory, au Gateway, à ECR et aux logs nécessaires ;
+- Lambda Trip Tools limitée à la table DynamoDB exacte ;
+- ECR immutable et scan on push ;
+- DynamoDB SSE, PITR et partitionnement par `userId` ;
+- logs sans JWT, prompt brut, secret, actorId brut ou sessionId brut.
 
-## 6. Prochaines étapes V1
+## Tools V1
 
-1. implémenter `API Gateway -> Runtime direct JWT` ;
-2. corriger CORS avec `x-amzn-bedrock-agentcore-runtime-session-id` ;
-3. faire utiliser `agent_invoke_url` par le frontend et la pipeline ;
-4. ajouter throttling et access logs API Gateway ;
-5. aligner l’authentification AgentCore Gateway MCP ;
-6. créer et valider au moins un target tool réel ;
-7. réduire les IAM wildcards ;
-8. aligner les tests contractuels d’identité ;
-9. exécuter Terraform validate/plan, build frontend et smoke tests navigateur ;
-10. clôturer la V1 uniquement après validation CORS, JWT, Runtime, Memory et tools.
+AgentCore Gateway expose un target Lambda réel :
 
-## 7. CI/CD
+```text
+create_trip
+get_trips
+get_trip
+update_trip
+```
+
+Les entrées sont validées : formats d’identifiants, tailles, dates ISO, ordre des dates et rejet des champs inconnus. Toutes les opérations DynamoDB sont contraintes à la partition `userId` injectée par Runtime.
+
+## CI/CD
+
+### Qualité automatique
+
+```text
+.github/workflows/test-application-quality.yml
+```
+
+- compilation Python 3.12 ;
+- tests unitaires de la façade, du contrat Runtime et des tools ;
+- frontend `npm ci`, lint et build.
 
 ### Infrastructure
 
@@ -151,47 +110,50 @@ Le Runtime rejette les champs d’identité client-side et injecte l’identité
 .github/workflows/test-terraform-stack.yml
 ```
 
-Responsabilités :
-
-- secret scan ;
-- lockfile check ;
-- Terraform fmt/validate ;
+- Gitleaks ;
+- lockfile ;
+- Terraform fmt/init/validate ;
 - plan ;
-- apply contrôlé ;
-- destroy-plan et destroy avec confirmation.
+- apply et destroy contrôlés.
 
-### Application
+### Déploiement applicatif
 
 ```text
 .github/workflows/test-application-deploy.yml
 ```
 
-Modes :
+Modes : `frontend-only`, `image-only`, `runtime-only`, `full`.
 
-- `frontend-only` ;
-- `image-only` ;
-- `runtime-only` ;
-- `full`.
+Le frontend reçoit :
 
-Le workflow doit être réaligné pour injecter l’URL API Gateway comme endpoint nominal frontend.
+```text
+VITE_AGENT_INVOKE_URL=<API Gateway /agent/invoke>
+```
 
-## 8. Documentation de référence
+L’output `agent_runtime_invoke_url` reste technique et ne doit jamais être injecté dans le navigateur.
 
-| Document | Rôle |
-|---|---|
-| `docs/adr/ADR-0002-agentcore-gateway-first-with-api-gateway.md` | Historique du design Gateway-first, désormais superseded |
-| `docs/adr/ADR-0003-native-agentcore-terraform-provisioning.md` | Provisioning AgentCore natif Terraform |
-| `docs/adr/ADR-0004-api-gateway-direct-agentcore-runtime-jwt.md` | Architecture V1 approuvée |
-| `docs/hld/HLD-WildRydes-Agentic-AI-FR.md` | Architecture de haut niveau AS-IS et cible V1 |
-| `docs/lld/LLD-WildRydes-Agentic-AI-FR.md` | Design détaillé et contrats techniques |
-| `docs/migration/REMEDIATION-Gateway-First-APIGW.md` | Plan de remédiation V1 |
-| `docs/runbooks/ci-cd-rationalisation-test.md` | Exploitation des workflows test |
+## État de la V1
 
-## 9. Règle de gouvernance
+L’implémentation du code et de l’IaC V1 est présente sur la branche. La V1 ne doit être déclarée **validée** qu’après les preuves suivantes :
 
-Toute modification structurante du chemin d’ingress, de l’identité, du Runtime, des tools ou du modèle doit :
+1. pipeline qualité verte ;
+2. Terraform fmt/validate/plan vert et plan revu ;
+3. déploiement `full` réussi ;
+4. tests navigateur CORS/JWT ;
+5. refus d’invocation Runtime directe ;
+6. isolation Memory User A/User B ;
+7. exécution end-to-end des quatre tools MCP ;
+8. vérification des logs redacted et de la latence inférieure à 28 secondes.
 
-1. être décrite dans un ADR ou un amendement ;
-2. être présentée avec ses tradeoffs ;
-3. recevoir une validation explicite avant modification du code ou de Terraform ;
-4. être suivie d’un plan, de tests et d’un résumé des fichiers changés.
+## Documentation
+
+- `docs/adr/ADR-0004-api-gateway-direct-agentcore-runtime-jwt.md` — historique, superseded ;
+- `docs/adr/ADR-0005-lambda-security-facade-agentcore-runtime-iam.md` — décision active ;
+- `docs/hld/HLD-WildRydes-Agentic-AI-FR.md` ;
+- `docs/lld/LLD-WildRydes-Agentic-AI-FR.md` ;
+- `docs/migration/REMEDIATION-Gateway-First-APIGW.md` ;
+- `docs/runbooks/ci-cd-rationalisation-test.md`.
+
+## Gouvernance
+
+Toute modification du chemin d’ingress, de l’identité, du modèle, de Memory ou des tools doit être présentée avec ses tradeoffs, documentée dans un ADR et validée explicitement avant application.
