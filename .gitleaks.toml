@@ -3,9 +3,11 @@ title = "Secure AgentCore Gitleaks configuration"
 [extend]
 useDefault = true
 
-[[allowlists]]
+# Gitleaks 8.24.x uses the singular global [allowlist] table.
+# Keep this scoped to Cognito explicit-auth-flow enum constants only.
+[allowlist]
 description = "Allow Terraform Cognito explicit auth flow constants"
 condition = "AND"
 regexTarget = "line"
 paths = ['''infra/modules/cognito_web_auth/main\.tf''']
-regexes = ['''USER_[A-Z_]+_AUTH''']
+regexes = ['''ALLOW_(USER_PASSWORD|USER_SRP|ADMIN_USER_PASSWORD|REFRESH_TOKEN)_AUTH''']
