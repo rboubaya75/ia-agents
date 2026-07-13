@@ -34,6 +34,12 @@ class RuntimeSecurityContractTests(unittest.TestCase):
         self.assertIn('SigV4Auth(credentials.get_frozen_credentials(), "bedrock-agentcore", self.region)', SOURCE)
         self.assertIn('GATEWAY_AUTH_MODE != "aws_iam"', SOURCE)
 
+    def test_mcp_initialization_is_fail_closed_and_retryable(self) -> None:
+        section = SOURCE.split("def initialize_mcp_tools", 1)[1].split("def response_text", 1)[0]
+        self.assertIn("if REQUIRE_MCP_TOOLS and not candidate_tools", section)
+        self.assertIn("_mcp_initialized = False", section)
+        self.assertLess(section.index("candidate_tools ="), section.index("_mcp_initialized = True"))
+
     def test_tool_identity_is_overwritten_by_runtime(self) -> None:
         self.assertIn('tool_input["userId"] = self.actor_id', SOURCE)
 
