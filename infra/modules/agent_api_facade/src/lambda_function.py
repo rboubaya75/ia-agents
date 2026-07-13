@@ -114,6 +114,8 @@ def runtime_payload(prompt: str, session_id: str, actor_id: str) -> Dict[str, An
 
 
 def read_payload(value: Any) -> Any:
+    if value is None:
+        raise RuntimeError("Agent Runtime response body is missing.")
     if hasattr(value, "read"):
         value = value.read()
     if isinstance(value, bytes):
@@ -142,20 +144,27 @@ def call_runtime(payload: Dict[str, Any]) -> Any:
         agentRuntimeArn=RUNTIME_ARN,
         qualifier=RUNTIME_ENDPOINT,
         runtimeSessionId=payload["sessionId"],
-        payload=json.dumps(payload).encode("utf-8"),
+        contentType="application/json",
+        accept="application/json",
+        payload=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
     )
-    return read_payload(result.get("payload"))
+
+    status_code = int(result.get("statusCode", 200))
+    if status_code >= 400:
+        raise RuntimeError(f"Agent Runtime returned status {status_code}.")
+
+    return read_payload(result.get("response") or result.get("payload"))
 
 
 def message_from(result: Any) -> str:
-    if isinstance(result, str):
-        return result
+    if isinstance(result, str) and result.strip():
+        return result.strip()
     if isinstance(result, dict):
         for key in ("message", "response", "result"):
             value = result.get(key)
-            if isinstance(value, str):
-                return value
-    return json.dumps(result)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    raise RuntimeError("Agent Runtime response does not contain a message.")
 
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
