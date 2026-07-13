@@ -14,6 +14,3 @@ pydantic>=2.5.0
 # Observability
 opentelemetry-distro>=0.43b0
 opentelemetry-instrumentation>=0.43b0
-
-# Public web search tool
-ddgs>=6.0.0
