@@ -1,7 +1,8 @@
-data "archive_file" "this" {
-  type        = "zip"
-  source_file = var.source_file
-  output_path = "${path.module}/trip_tools.zip"
+resource "archive_file" "this" {
+  type             = "zip"
+  source_file      = var.source_file
+  output_path      = "${path.module}/trip_tools.zip"
+  output_file_mode = "0666"
 }
 
 data "aws_iam_policy_document" "assume_role" {
@@ -77,8 +78,8 @@ resource "aws_lambda_function" "this" {
   timeout                        = 5
   memory_size                    = 256
   reserved_concurrent_executions = var.reserved_concurrent_executions
-  filename                       = data.archive_file.this.output_path
-  source_code_hash               = data.archive_file.this.output_base64sha256
+  filename                       = archive_file.this.output_path
+  source_code_hash               = archive_file.this.output_base64sha256
 
   tracing_config {
     mode = "Active"
