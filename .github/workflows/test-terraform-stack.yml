@@ -6,6 +6,8 @@ on:
     paths:
       - "infra/environments/test/**"
       - "infra/modules/**"
+      - "scripts/terraform_plan_guard.py"
+      - "tests/unit/test_terraform_plan_guard.py"
       - ".github/workflows/test-terraform-stack.yml"
       - ".gitleaksignore"
   pull_request:
@@ -13,6 +15,8 @@ on:
     paths:
       - "infra/environments/test/**"
       - "infra/modules/**"
+      - "scripts/terraform_plan_guard.py"
+      - "tests/unit/test_terraform_plan_guard.py"
       - ".github/workflows/test-terraform-stack.yml"
       - ".gitleaksignore"
   workflow_dispatch:
@@ -53,6 +57,7 @@ env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   AWS_REGION: eu-west-3
+  PLAN_RETENTION_DAYS: "14"
 
 jobs:
   secret-scan:
@@ -137,7 +142,7 @@ jobs:
         run: terraform validate
 
   terraform-plan:
-    name: Terraform Plan
+    name: Terraform Plan and Safety Review
     runs-on: ubuntu-latest
     needs: terraform-validate
     if: |
@@ -212,16 +217,63 @@ jobs:
         if: steps.plan.outputs.exitcode == '1'
         run: exit 1
 
-      - name: Upload plan
+      - name: Render Terraform plan evidence
         if: steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+
+      - name: Analyze Terraform plan safety
+        id: plan_guard
+        if: steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py analyze \
+            --plan-json tfplan.json \
+            --summary-output tfplan-summary.md \
+            --policy enforce-critical
+        continue-on-error: true
+
+      - name: Record immutable plan metadata
+        if: always() && (steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2')
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py record \
+            --plan tfplan \
+            --metadata-output tfplan-metadata.json \
+            --commit-sha "${GITHUB_SHA}" \
+            --stack-path "${{ steps.stack.outputs.path }}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --terraform-version "${TF_VERSION}"
+
+      - name: Publish plan summary
+        if: always() && (steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2')
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: cat tfplan-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reviewed plan artifact
+        if: always() && (steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: tfplan-${{ github.run_id }}
-          path: ${{ steps.stack.outputs.path }}/tfplan
-          retention-days: 1
+          name: tfplan-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ steps.stack.outputs.path }}/tfplan
+            ${{ steps.stack.outputs.path }}/tfplan.txt
+            ${{ steps.stack.outputs.path }}/tfplan.json
+            ${{ steps.stack.outputs.path }}/tfplan-summary.md
+            ${{ steps.stack.outputs.path }}/tfplan-metadata.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Fail on unsafe critical changes
+        if: steps.plan_guard.outcome == 'failure'
+        run: |
+          echo "Terraform plan contains a blocked deletion or replacement of a critical resource."
+          exit 1
 
   terraform-apply:
-    name: Terraform Apply
+    name: Terraform Apply Reviewed Plan
     runs-on: ubuntu-latest
     needs: terraform-plan
     if: |
@@ -254,17 +306,29 @@ jobs:
         id: stack
         run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
 
-      - name: Download plan
+      - name: Download reviewed plan
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: tfplan-${{ github.run_id }}
+          name: tfplan-${{ github.sha }}-${{ github.run_id }}
           path: ${{ steps.stack.outputs.path }}
+
+      - name: Verify immutable plan artifact
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py verify \
+            --plan tfplan \
+            --metadata tfplan-metadata.json \
+            --expected-commit-sha "${GITHUB_SHA}" \
+            --expected-stack-path "${{ steps.stack.outputs.path }}" \
+            --expected-run-id "${GITHUB_RUN_ID}" \
+            --expected-terraform-version "${TF_VERSION}"
+          cat tfplan-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform init
 
-      - name: Terraform apply
+      - name: Terraform apply exact reviewed plan
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform apply -auto-approve -lock-timeout=120s tfplan
 
@@ -272,13 +336,13 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: errored-tfstate-${{ github.run_id }}
+          name: errored-tfstate-${{ github.sha }}-${{ github.run_id }}
           path: ${{ steps.stack.outputs.path }}/errored.tfstate
           retention-days: 7
           if-no-files-found: ignore
 
   terraform-destroy-plan:
-    name: Terraform Destroy Plan
+    name: Terraform Explicit Destroy Plan
     runs-on: ubuntu-latest
     needs: terraform-validate
     if: |
@@ -327,16 +391,41 @@ jobs:
         if: steps.destroy_plan.outputs.exitcode == '1'
         run: exit 1
 
-      - name: Upload destroy plan
+      - name: Render destroy plan evidence
+        if: steps.destroy_plan.outputs.exitcode == '0' || steps.destroy_plan.outputs.exitcode == '2'
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          terraform show -no-color tfdestroyplan > tfdestroyplan.txt
+          terraform show -json tfdestroyplan > tfdestroyplan.json
+          python3 ../../../scripts/terraform_plan_guard.py analyze \
+            --plan-json tfdestroyplan.json \
+            --summary-output tfdestroyplan-summary.md \
+            --policy report-only
+          python3 ../../../scripts/terraform_plan_guard.py record \
+            --plan tfdestroyplan \
+            --metadata-output tfdestroyplan-metadata.json \
+            --commit-sha "${GITHUB_SHA}" \
+            --stack-path "${{ steps.stack.outputs.path }}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --terraform-version "${TF_VERSION}"
+          cat tfdestroyplan-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload explicit destroy plan artifact
         if: steps.destroy_plan.outputs.exitcode == '0' || steps.destroy_plan.outputs.exitcode == '2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: tfdestroyplan-${{ github.run_id }}
-          path: ${{ steps.stack.outputs.path }}/tfdestroyplan
-          retention-days: 1
+          name: tfdestroyplan-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ steps.stack.outputs.path }}/tfdestroyplan
+            ${{ steps.stack.outputs.path }}/tfdestroyplan.txt
+            ${{ steps.stack.outputs.path }}/tfdestroyplan.json
+            ${{ steps.stack.outputs.path }}/tfdestroyplan-summary.md
+            ${{ steps.stack.outputs.path }}/tfdestroyplan-metadata.json
+          retention-days: 14
+          if-no-files-found: error
 
   terraform-destroy:
-    name: Terraform Destroy
+    name: Terraform Destroy Reviewed Plan
     runs-on: ubuntu-latest
     needs: terraform-destroy-plan
     if: |
@@ -370,16 +459,28 @@ jobs:
         id: stack
         run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
 
-      - name: Download destroy plan
+      - name: Download reviewed destroy plan
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: tfdestroyplan-${{ github.run_id }}
+          name: tfdestroyplan-${{ github.sha }}-${{ github.run_id }}
           path: ${{ steps.stack.outputs.path }}
+
+      - name: Verify immutable destroy plan artifact
+        working-directory: ${{ steps.stack.outputs.path }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py verify \
+            --plan tfdestroyplan \
+            --metadata tfdestroyplan-metadata.json \
+            --expected-commit-sha "${GITHUB_SHA}" \
+            --expected-stack-path "${{ steps.stack.outputs.path }}" \
+            --expected-run-id "${GITHUB_RUN_ID}" \
+            --expected-terraform-version "${TF_VERSION}"
+          cat tfdestroyplan-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Terraform init
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform init
 
-      - name: Terraform destroy apply
+      - name: Terraform destroy exact reviewed plan
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform apply -auto-approve -lock-timeout=120s tfdestroyplan
