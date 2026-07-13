@@ -31,12 +31,12 @@ on:
         type: string
         default: default
       api_base_url:
-        description: "Optional AgentCore Runtime invoke URL override for frontend deploy. Leave empty to use Terraform agent_runtime_invoke_url."
+        description: "Optional API Gateway base URL override. Leave empty to use Terraform service_url."
         required: false
         type: string
         default: ""
-      enforce_gateway_first:
-        description: "Fail runtime/full deploy unless native Runtime JWT, AgentCore Memory and MCP Gateway outputs exist."
+      enforce_secure_facade:
+        description: "Fail unless API Gateway, Lambda facade, Runtime, Memory and MCP Gateway outputs are present."
         required: true
         type: boolean
         default: true
@@ -66,7 +66,7 @@ env:
 
 jobs:
   test-application-deploy:
-    name: Test Application Deploy Native Runtime JWT
+    name: Test Application Deploy Secure Facade
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' &&
@@ -76,6 +76,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+
     steps:
       - name: Confirm deployment
         run: |
@@ -84,23 +85,24 @@ jobs:
             exit 1
           fi
 
-      - name: Native Runtime JWT architecture notice
+      - name: Architecture notice
         run: |
-          echo "Target: Browser -> AgentCore Runtime direct HTTPS invoke with Cognito Bearer token."
+          echo "Ingress: Browser -> API Gateway JWT -> Lambda security facade -> AgentCore Runtime IAM."
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools."
-          echo "AgentCore Gateway is no longer used as the user ingress proxy."
+          echo "Direct browser invocation of AgentCore Runtime is not supported."
 
-      - name: Validate image tag
+      - name: Validate inputs
         run: |
           if ! echo "${{ inputs.image_tag }}" | grep -Eq '^[A-Za-z0-9_.-]{1,128}$'; then
-            echo "Invalid image_tag. Use only letters, numbers, underscore, dot, and dash."
+            echo "Invalid image_tag."
             exit 1
           fi
-
-      - name: Validate endpoint name
-        run: |
           if ! echo "${{ inputs.endpoint_name }}" | grep -Eq '^[A-Za-z0-9_.-]{1,64}$'; then
-            echo "Invalid endpoint_name. Use only letters, numbers, underscore, dot, and dash."
+            echo "Invalid endpoint_name."
+            exit 1
+          fi
+          if [ -n "${{ inputs.api_base_url }}" ] && ! echo "${{ inputs.api_base_url }}" | grep -Eq '^https://[^[:space:]]+$'; then
+            echo "api_base_url must be an HTTPS URL."
             exit 1
           fi
 
@@ -112,7 +114,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: test-application-deploy-runtime-jwt
+          role-session-name: test-application-deploy-secure-facade
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
@@ -131,13 +133,19 @@ jobs:
       - name: Install Python deployment dependencies
         run: python3 -m pip install "boto3>=1.43.18"
 
+      - name: Validate facade Python
+        run: python3 -m py_compile infra/modules/agent_api_facade/src/lambda_function.py
+
       - name: Resolve stack path
         id: stack
         run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
 
-      - name: Terraform init
+      - name: Terraform init and validate
         working-directory: ${{ steps.stack.outputs.path }}
-        run: terraform init
+        run: |
+          terraform init
+          terraform fmt -check -recursive
+          terraform validate
 
       - name: Read Terraform base outputs
         id: tfout
@@ -151,15 +159,16 @@ jobs:
           cognito_user_pool_id="$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)"
           cognito_web_client_id="$(terraform output -raw cognito_web_client_id 2>/dev/null || true)"
           service_url="$(terraform output -raw service_url 2>/dev/null || true)"
+          agent_invoke_url="$(terraform output -raw agent_invoke_url 2>/dev/null || true)"
           agent_runtime_invoke_url="$(terraform output -raw agent_runtime_invoke_url 2>/dev/null || true)"
           ecr_repository_url="$(terraform output -raw agentcore_ecr_repository_url 2>/dev/null || true)"
           agent_service_name="$(terraform output -raw agent_service_name 2>/dev/null || true)"
           agent_service_role_arn="$(terraform output -raw agent_service_role_arn 2>/dev/null || true)"
           agent_service_model_id="$(terraform output -raw agent_service_model_id 2>/dev/null || true)"
 
-          resolved_runtime_invoke_url="${{ inputs.api_base_url }}"
-          if [ -z "$resolved_runtime_invoke_url" ]; then
-            resolved_runtime_invoke_url="$agent_runtime_invoke_url"
+          resolved_api_base_url="${{ inputs.api_base_url }}"
+          if [ -z "$resolved_api_base_url" ]; then
+            resolved_api_base_url="$service_url"
           fi
 
           if [ "$mode" = "frontend-only" ] || [ "$mode" = "full" ]; then
@@ -167,8 +176,8 @@ jobs:
               echo "Frontend outputs are missing. Run the Terraform test stack apply first."
               exit 1
             fi
-            if [ "$mode" = "frontend-only" ] && [ -z "$resolved_runtime_invoke_url" ]; then
-              echo "AgentCore Runtime invoke URL is missing. Run full deploy first or provide api_base_url override."
+            if [ -z "$resolved_api_base_url" ]; then
+              echo "API Gateway base URL is missing."
               exit 1
             fi
           fi
@@ -182,7 +191,7 @@ jobs:
 
           if [ "$mode" = "runtime-only" ] || [ "$mode" = "full" ]; then
             if [ -z "$agent_service_name" ] || [ -z "$agent_service_role_arn" ] || [ -z "$agent_service_model_id" ]; then
-              echo "Runtime deployment outputs are missing. Run the Terraform test stack apply first."
+              echo "Runtime deployment outputs are missing."
               exit 1
             fi
           fi
@@ -197,22 +206,25 @@ jobs:
           sha_tag="sha-${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           image_uri="${ecr_repository_url}:${resolved_image_tag}"
 
-          echo "frontend_bucket_name=$frontend_bucket_name" >> "$GITHUB_OUTPUT"
-          echo "cloudfront_distribution_id=$cloudfront_distribution_id" >> "$GITHUB_OUTPUT"
-          echo "cloudfront_domain_name=$cloudfront_domain_name" >> "$GITHUB_OUTPUT"
-          echo "cognito_user_pool_id=$cognito_user_pool_id" >> "$GITHUB_OUTPUT"
-          echo "cognito_web_client_id=$cognito_web_client_id" >> "$GITHUB_OUTPUT"
-          echo "resolved_api_base_url=$resolved_runtime_invoke_url" >> "$GITHUB_OUTPUT"
-          echo "resolved_runtime_invoke_url=$resolved_runtime_invoke_url" >> "$GITHUB_OUTPUT"
-          echo "ecr_repository_url=$ecr_repository_url" >> "$GITHUB_OUTPUT"
-          echo "ecr_registry=$ecr_registry" >> "$GITHUB_OUTPUT"
-          echo "requested_image_tag=$requested_image_tag" >> "$GITHUB_OUTPUT"
-          echo "resolved_image_tag=$resolved_image_tag" >> "$GITHUB_OUTPUT"
-          echo "image_uri=$image_uri" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=$sha_tag" >> "$GITHUB_OUTPUT"
-          echo "agent_service_name=$agent_service_name" >> "$GITHUB_OUTPUT"
-          echo "agent_service_role_arn=$agent_service_role_arn" >> "$GITHUB_OUTPUT"
-          echo "agent_service_model_id=$agent_service_model_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "frontend_bucket_name=$frontend_bucket_name"
+            echo "cloudfront_distribution_id=$cloudfront_distribution_id"
+            echo "cloudfront_domain_name=$cloudfront_domain_name"
+            echo "cognito_user_pool_id=$cognito_user_pool_id"
+            echo "cognito_web_client_id=$cognito_web_client_id"
+            echo "resolved_api_base_url=$resolved_api_base_url"
+            echo "agent_invoke_url=$agent_invoke_url"
+            echo "agent_runtime_invoke_url=$agent_runtime_invoke_url"
+            echo "ecr_repository_url=$ecr_repository_url"
+            echo "ecr_registry=$ecr_registry"
+            echo "requested_image_tag=$requested_image_tag"
+            echo "resolved_image_tag=$resolved_image_tag"
+            echo "image_uri=$image_uri"
+            echo "sha_tag=$sha_tag"
+            echo "agent_service_name=$agent_service_name"
+            echo "agent_service_role_arn=$agent_service_role_arn"
+            echo "agent_service_model_id=$agent_service_model_id"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Application deployment preflight
         run: |
@@ -257,7 +269,7 @@ jobs:
             --push \
             "${{ env.DOCKER_BUILD_CONTEXT }}"
 
-      - name: Apply native AgentCore control plane
+      - name: Apply native AgentCore control plane and facade
         if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
@@ -275,42 +287,48 @@ jobs:
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
           service_url="$(terraform output -raw service_url 2>/dev/null || true)"
+          agent_invoke_url="$(terraform output -raw agent_invoke_url 2>/dev/null || true)"
           agent_runtime_invoke_url="$(terraform output -raw agent_runtime_invoke_url 2>/dev/null || true)"
-          resolved_runtime_invoke_url="${{ inputs.api_base_url }}"
-          if [ -z "$resolved_runtime_invoke_url" ]; then
-            resolved_runtime_invoke_url="$agent_runtime_invoke_url"
+          resolved_api_base_url="${{ inputs.api_base_url }}"
+          if [ -z "$resolved_api_base_url" ]; then
+            resolved_api_base_url="$service_url"
+          fi
+          resolved_agent_invoke_url="$agent_invoke_url"
+          if [ -n "${{ inputs.api_base_url }}" ]; then
+            resolved_agent_invoke_url="${resolved_api_base_url%/}/agent/invoke"
           fi
 
-          echo "resolved_api_base_url=$resolved_runtime_invoke_url" >> "$GITHUB_OUTPUT"
-          echo "resolved_runtime_invoke_url=$resolved_runtime_invoke_url" >> "$GITHUB_OUTPUT"
-          echo "service_url=$service_url" >> "$GITHUB_OUTPUT"
-          echo "cloudfront_domain_name=$(terraform output -raw cloudfront_domain_name 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "frontend_bucket_name=$(terraform output -raw frontend_bucket_name 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "cloudfront_distribution_id=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "cognito_web_client_id=$(terraform output -raw cognito_web_client_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "agentcore_gateway_url=$(terraform output -raw agentcore_gateway_url 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "agentcore_gateway_mcp_url=$(terraform output -raw agentcore_gateway_mcp_url 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "agentcore_memory_id=$(terraform output -raw agentcore_memory_id 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "agent_runtime_arn=$(terraform output -raw agent_runtime_arn 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "agent_runtime_endpoint_arn=$(terraform output -raw agent_runtime_endpoint_arn 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "agent_runtime_invoke_url=$agent_runtime_invoke_url" >> "$GITHUB_OUTPUT"
+          {
+            echo "resolved_api_base_url=$resolved_api_base_url"
+            echo "resolved_agent_invoke_url=$resolved_agent_invoke_url"
+            echo "agent_runtime_invoke_url=$agent_runtime_invoke_url"
+            echo "service_url=$service_url"
+            echo "cloudfront_domain_name=$(terraform output -raw cloudfront_domain_name 2>/dev/null || true)"
+            echo "frontend_bucket_name=$(terraform output -raw frontend_bucket_name 2>/dev/null || true)"
+            echo "cloudfront_distribution_id=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || true)"
+            echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)"
+            echo "cognito_web_client_id=$(terraform output -raw cognito_web_client_id 2>/dev/null || true)"
+            echo "agentcore_gateway_mcp_url=$(terraform output -raw agentcore_gateway_mcp_url 2>/dev/null || true)"
+            echo "agentcore_memory_id=$(terraform output -raw agentcore_memory_id 2>/dev/null || true)"
+            echo "agent_runtime_arn=$(terraform output -raw agent_runtime_arn 2>/dev/null || true)"
+            echo "facade_function_name=$(terraform output -raw agent_api_facade_function_name 2>/dev/null || true)"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Native Runtime JWT contract gate
+      - name: Secure facade contract gate
         if: inputs.deploy_mode != 'image-only'
         run: |
           enforce_flag=""
-          if [ "${{ inputs.enforce_gateway_first }}" = "true" ]; then
+          if [ "${{ inputs.enforce_secure_facade }}" = "true" ]; then
             enforce_flag="--enforce"
           fi
           python3 scripts/validate_gateway_first_contract.py \
             --mode "${{ inputs.deploy_mode }}" \
             --api-base-url "${{ steps.tfout_after.outputs.resolved_api_base_url }}" \
-            --agent-runtime-invoke-url "${{ steps.tfout_after.outputs.resolved_runtime_invoke_url }}" \
-            --agentcore-gateway-url "${{ steps.tfout_after.outputs.agentcore_gateway_url }}" \
+            --agent-runtime-invoke-url "${{ steps.tfout_after.outputs.agent_runtime_invoke_url }}" \
             --agentcore-gateway-mcp-url "${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url }}" \
             --agentcore-memory-id "${{ steps.tfout_after.outputs.agentcore_memory_id }}" \
             --runtime-arn "${{ steps.tfout_after.outputs.agent_runtime_arn }}" \
+            --facade-function-name "${{ steps.tfout_after.outputs.facade_function_name }}" \
             $enforce_flag
 
       - name: Generate frontend production environment
@@ -321,13 +339,19 @@ jobs:
             echo "VITE_COGNITO_USER_POOL_ID=${{ steps.tfout_after.outputs.cognito_user_pool_id }}"
             echo "VITE_COGNITO_CLIENT_ID=${{ steps.tfout_after.outputs.cognito_web_client_id }}"
             echo "VITE_COGNITO_REGION=${{ env.AWS_REGION }}"
-            echo "VITE_AGENT_RUNTIME_INVOKE_URL=${{ steps.tfout_after.outputs.resolved_runtime_invoke_url }}"
+            echo "VITE_AGENT_INVOKE_URL=${{ steps.tfout_after.outputs.resolved_agent_invoke_url }}"
+            echo "VITE_API_BASE_URL=${{ steps.tfout_after.outputs.resolved_api_base_url }}"
           } > .env.production
 
       - name: Install frontend dependencies
         if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
         working-directory: frontend
         run: npm ci
+
+      - name: Lint frontend
+        if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
+        working-directory: frontend
+        run: npm run lint
 
       - name: Build frontend
         if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
@@ -350,14 +374,12 @@ jobs:
         run: |
           echo "Application deployment completed."
           echo "Mode: ${{ inputs.deploy_mode }}"
-          echo "Architecture: Browser -> AgentCore Runtime direct HTTPS invoke with Cognito Bearer token"
+          echo "Architecture: Browser -> API Gateway JWT -> Lambda facade -> Runtime IAM"
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools"
           echo "Requested image tag: ${{ steps.tfout.outputs.requested_image_tag }}"
           echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
           echo "Image: ${{ steps.tfout.outputs.image_uri }}"
-          echo "Runtime Invoke URL: ${{ steps.tfout_after.outputs.resolved_runtime_invoke_url }}"
-          echo "Legacy API URL: ${{ steps.tfout_after.outputs.service_url }}"
-          echo "AgentCore Gateway MCP URL: ${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url }}"
-          echo "AgentCore Memory ID present: ${{ steps.tfout_after.outputs.agentcore_memory_id != '' }}"
-          echo "AgentCore Runtime ARN: ${{ steps.tfout_after.outputs.agent_runtime_arn }}"
+          echo "Agent API URL: ${{ steps.tfout_after.outputs.resolved_agent_invoke_url }}"
+          echo "AgentCore Gateway MCP URL configured: ${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url != '' }}"
+          echo "AgentCore Memory ID configured: ${{ steps.tfout_after.outputs.agentcore_memory_id != '' }}"
           echo "CloudFront: https://${{ steps.tfout_after.outputs.cloudfront_domain_name }}"
