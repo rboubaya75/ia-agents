@@ -60,7 +60,8 @@ jobs:
             deploy-agentcore/agents/phase_4.py \
             deploy-agentcore/lambda_function_code.py \
             scripts/preflight_application_deploy.py \
-            scripts/validate_secure_facade_contract.py
+            scripts/validate_secure_facade_contract.py \
+            scripts/terraform_plan_guard.py
 
       - name: Verify Runtime imports
         run: |
