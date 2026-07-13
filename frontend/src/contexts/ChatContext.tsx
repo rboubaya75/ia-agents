@@ -1,15 +1,10 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import type { ReactNode } from 'react';
+import React, { createContext, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import type { Message, ChatState } from '../types';
 import { createNewSession as createSessionId } from '../services/sessionService';
-import { useAuth } from './AuthContext';
+import { useAuth } from './useAuth';
 
-/**
- * ChatContext Interface
- * Provides chat state and methods for managing messages and sessions
- */
-interface ChatContextType {
+export interface ChatContextType {
   messages: Message[];
   sessionId: string;
   isLoading: boolean;
@@ -23,21 +18,12 @@ interface ChatContextType {
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-/**
- * ChatProvider Props
- */
 interface ChatProviderProps {
   children: ReactNode;
 }
 
-/**
- * ChatProvider Component
- * Manages chat state including messages, session ID, loading, and error states
- */
 export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
   const auth = useAuth();
-
-  // Initialize with a new session ID
   const [state, setState] = useState<ChatState>({
     messages: [],
     sessionId: createSessionId(),
@@ -45,11 +31,6 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     error: null,
   });
 
-  /**
-   * Add a new message to the chat
-   * @param content - The message content
-   * @param sender - The message sender ('user' or 'system')
-   */
   const addMessage = useCallback((content: string, sender: 'user' | 'system') => {
     const newMessage: Message = {
       id: uuidv4(),
@@ -64,9 +45,6 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     }));
   }, []);
 
-  /**
-   * Clear all messages from the chat
-   */
   const clearMessages = useCallback(() => {
     setState((prevState) => ({
       ...prevState,
@@ -74,29 +52,19 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     }));
   }, []);
 
-  /**
-   * Create a new chat session
-   * Generates a new session ID and clears all messages
-   */
   const createNewSession = useCallback(() => {
-    const newSessionId = createSessionId();
     setState((prevState) => ({
       ...prevState,
-      sessionId: newSessionId,
+      sessionId: createSessionId(),
       messages: [],
       error: null,
     }));
   }, []);
 
-  // Register cleanup function with AuthContext on mount
   useEffect(() => {
     auth.registerChatCleanup(createNewSession);
   }, [auth, createNewSession]);
 
-  /**
-   * Set loading state
-   * @param loading - The loading state
-   */
   const setLoading = useCallback((loading: boolean) => {
     setState((prevState) => ({
       ...prevState,
@@ -104,10 +72,6 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     }));
   }, []);
 
-  /**
-   * Set error state
-   * @param error - The error message or null to clear error
-   */
   const setError = useCallback((error: string | null) => {
     setState((prevState) => ({
       ...prevState,
@@ -128,18 +92,6 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
-};
-
-/**
- * Custom hook to use ChatContext
- * @throws Error if used outside of ChatProvider
- */
-export const useChatContext = (): ChatContextType => {
-  const context = useContext(ChatContext);
-  if (context === undefined) {
-    throw new Error('useChatContext must be used within a ChatProvider');
-  }
-  return context;
 };
 
 export default ChatContext;
