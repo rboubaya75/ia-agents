@@ -35,7 +35,7 @@ output "gateway_first_enabled" {
 }
 
 output "agent_invoke_url" {
-  value = local.security_facade_enabled || local.gateway_first_enabled ? "${aws_apigatewayv2_api.this.api_endpoint}/agent/invoke" : ""
+  value = local.security_facade_enabled ? "${aws_apigatewayv2_api.this.api_endpoint}/agent/invoke" : ""
 }
 
 output "access_log_group_name" {
