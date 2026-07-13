@@ -35,11 +35,6 @@ on:
         required: false
         type: string
         default: ""
-      enforce_secure_facade:
-        description: "Fail unless API Gateway, Lambda facade, Runtime, Memory and MCP Gateway outputs are present."
-        required: true
-        type: boolean
-        default: true
       confirm_deploy:
         description: "Required to run the selected application deployment mode"
         required: true
@@ -65,18 +60,12 @@ env:
   IMAGE_PLATFORM: linux/arm64
 
 jobs:
-  test-application-deploy:
-    name: Test Application Deploy Secure Facade
+  deployment-request-gate:
+    name: Deployment Request Gate
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/migration/secure-agentcore-v1'
-    environment:
-      name: test
-    permissions:
-      contents: read
-      id-token: write
-
     steps:
       - name: Confirm deployment
         run: |
@@ -84,12 +73,6 @@ jobs:
             echo "Application deployment requires confirm_deploy=true."
             exit 1
           fi
-
-      - name: Architecture notice
-        run: |
-          echo "Ingress: Browser -> API Gateway JWT -> Lambda security facade -> AgentCore Runtime IAM."
-          echo "Tools: Runtime -> AgentCore Gateway MCP -> tools."
-          echo "Direct browser invocation of AgentCore Runtime is not supported."
 
       - name: Validate inputs
         run: |
@@ -105,6 +88,32 @@ jobs:
             echo "api_base_url must be an HTTPS URL."
             exit 1
           fi
+
+  application-quality-gate:
+    name: Application Quality Gate
+    needs: deployment-request-gate
+    uses: ./.github/workflows/test-application-quality.yml
+
+  test-application-deploy:
+    name: Test Application Deploy Secure Facade
+    needs: application-quality-gate
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Architecture notice
+        run: |
+          echo "Ingress: Browser -> API Gateway JWT -> Lambda security facade -> AgentCore Runtime IAM."
+          echo "Tools: Runtime -> AgentCore Gateway MCP -> tools."
+          echo "Direct browser invocation of AgentCore Runtime is not supported."
+          echo "Application quality gate passed for commit ${GITHUB_SHA}."
 
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -133,8 +142,12 @@ jobs:
       - name: Install Python deployment dependencies
         run: python3 -m pip install "boto3>=1.43.18"
 
-      - name: Validate facade Python
-        run: python3 -m py_compile infra/modules/agent_api_facade/src/lambda_function.py
+      - name: Validate deployment Python
+        run: |
+          python3 -m py_compile \
+            infra/modules/agent_api_facade/src/lambda_function.py \
+            scripts/preflight_application_deploy.py \
+            scripts/validate_secure_facade_contract.py
 
       - name: Resolve stack path
         id: stack
@@ -312,24 +325,27 @@ jobs:
             echo "agentcore_memory_id=$(terraform output -raw agentcore_memory_id 2>/dev/null || true)"
             echo "agent_runtime_arn=$(terraform output -raw agent_runtime_arn 2>/dev/null || true)"
             echo "facade_function_name=$(terraform output -raw agent_api_facade_function_name 2>/dev/null || true)"
+            echo "trip_tools_function_name=$(terraform output -raw trip_tools_lambda_function_name 2>/dev/null || true)"
+            echo "trip_tools_target_id=$(terraform output -raw agentcore_trip_tools_target_id 2>/dev/null || true)"
+            echo "secure_facade_ready=$(terraform output -raw secure_facade_ready 2>/dev/null || true)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Secure facade contract gate
+      - name: Secure V1 deployment contract gate
         if: inputs.deploy_mode != 'image-only'
         run: |
-          enforce_flag=""
-          if [ "${{ inputs.enforce_secure_facade }}" = "true" ]; then
-            enforce_flag="--enforce"
-          fi
-          python3 scripts/validate_gateway_first_contract.py \
+          python3 scripts/validate_secure_facade_contract.py \
             --mode "${{ inputs.deploy_mode }}" \
             --api-base-url "${{ steps.tfout_after.outputs.resolved_api_base_url }}" \
+            --agent-invoke-url "${{ steps.tfout_after.outputs.resolved_agent_invoke_url }}" \
             --agent-runtime-invoke-url "${{ steps.tfout_after.outputs.agent_runtime_invoke_url }}" \
             --agentcore-gateway-mcp-url "${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url }}" \
             --agentcore-memory-id "${{ steps.tfout_after.outputs.agentcore_memory_id }}" \
             --runtime-arn "${{ steps.tfout_after.outputs.agent_runtime_arn }}" \
             --facade-function-name "${{ steps.tfout_after.outputs.facade_function_name }}" \
-            $enforce_flag
+            --trip-tools-function-name "${{ steps.tfout_after.outputs.trip_tools_function_name }}" \
+            --trip-tools-target-id "${{ steps.tfout_after.outputs.trip_tools_target_id }}" \
+            --secure-facade-ready "${{ steps.tfout_after.outputs.secure_facade_ready }}" \
+            --enforce
 
       - name: Generate frontend production environment
         if: inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full'
@@ -373,6 +389,7 @@ jobs:
       - name: Deployment summary
         run: |
           echo "Application deployment completed."
+          echo "Commit: ${GITHUB_SHA}"
           echo "Mode: ${{ inputs.deploy_mode }}"
           echo "Architecture: Browser -> API Gateway JWT -> Lambda facade -> Runtime IAM"
           echo "Tools: Runtime -> AgentCore Gateway MCP -> tools"
@@ -380,6 +397,8 @@ jobs:
           echo "Resolved image tag: ${{ steps.tfout.outputs.resolved_image_tag }}"
           echo "Image: ${{ steps.tfout.outputs.image_uri }}"
           echo "Agent API URL: ${{ steps.tfout_after.outputs.resolved_agent_invoke_url }}"
+          echo "Secure facade ready: ${{ steps.tfout_after.outputs.secure_facade_ready }}"
           echo "AgentCore Gateway MCP URL configured: ${{ steps.tfout_after.outputs.agentcore_gateway_mcp_url != '' }}"
           echo "AgentCore Memory ID configured: ${{ steps.tfout_after.outputs.agentcore_memory_id != '' }}"
+          echo "Trip Tools target configured: ${{ steps.tfout_after.outputs.trip_tools_target_id != '' }}"
           echo "CloudFront: https://${{ steps.tfout_after.outputs.cloudfront_domain_name }}"
