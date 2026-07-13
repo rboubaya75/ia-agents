@@ -17,8 +17,13 @@ variable "agent_runtime_arn" {
 
 variable "agent_runtime_endpoint_name" {
   type        = string
-  description = "AgentCore Runtime endpoint name used as invocation qualifier."
-  default     = "default"
+  description = "AgentCore Runtime invocation qualifier. V1 uses the reserved DEFAULT qualifier."
+  default     = "DEFAULT"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]{1,64}$", var.agent_runtime_endpoint_name))
+    error_message = "agent_runtime_endpoint_name must be a valid AgentCore qualifier."
+  }
 }
 
 variable "cognito_client_id" {
