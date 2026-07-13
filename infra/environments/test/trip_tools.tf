@@ -7,9 +7,8 @@ module "trip_tools_lambda" {
   trips_table_name = module.dynamodb_trips.table_name
   trips_table_arn  = module.dynamodb_trips.table_arn
 
-  reserved_concurrent_executions = 5
-  log_retention_days             = 30
-  tags                           = local.common_tags
+  log_retention_days = 30
+  tags               = local.common_tags
 }
 
 data "aws_iam_policy_document" "gateway_trip_tools" {
