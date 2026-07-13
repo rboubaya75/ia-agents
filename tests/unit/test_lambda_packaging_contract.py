@@ -8,6 +8,8 @@ FACADE_MAIN = ROOT / "infra" / "modules" / "agent_api_facade" / "main.tf"
 FACADE_VARIABLES = ROOT / "infra" / "modules" / "agent_api_facade" / "variables.tf"
 TRIP_TOOLS_MAIN = ROOT / "infra" / "modules" / "trip_tools_lambda" / "main.tf"
 TRIP_TOOLS_VARIABLES = ROOT / "infra" / "modules" / "trip_tools_lambda" / "variables.tf"
+TEST_FACADE = ROOT / "infra" / "environments" / "test" / "agent_api_facade.tf"
+TEST_TRIP_TOOLS = ROOT / "infra" / "environments" / "test" / "trip_tools.tf"
 
 
 class LambdaPackagingContractTests(unittest.TestCase):
@@ -33,6 +35,12 @@ class LambdaPackagingContractTests(unittest.TestCase):
                 self.assertIn("default     = null", section)
                 self.assertIn("var.reserved_concurrent_executions == null ? true", section)
                 self.assertIn("between 1 and 100", section)
+
+    def test_test_environment_does_not_force_reserved_concurrency(self) -> None:
+        for path in (TEST_FACADE, TEST_TRIP_TOOLS):
+            with self.subTest(path=path):
+                content = path.read_text(encoding="utf-8")
+                self.assertNotIn("reserved_concurrent_executions", content)
 
 
 if __name__ == "__main__":
