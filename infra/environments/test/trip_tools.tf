@@ -1,11 +1,13 @@
 module "trip_tools_lambda" {
   source = "../../modules/trip_tools_lambda"
 
-  function_name = "${local.name_prefix}-trip-tools"
-  source_file   = "${path.root}/../../../deploy-agentcore/lambda_function_code.py"
+  function_name        = "${local.name_prefix}-trip-tools"
+  source_file          = "${path.root}/../../../deploy-agentcore/lambda_function_code.py"
+  hardened_source_file = "${path.root}/../../../deploy-agentcore/lambda_function_hardened.py"
 
-  trips_table_name = module.dynamodb_trips.table_name
-  trips_table_arn  = module.dynamodb_trips.table_arn
+  trips_table_name        = module.dynamodb_trips.table_name
+  trips_table_arn         = module.dynamodb_trips.table_arn
+  idempotency_ttl_seconds = 604800
 
   log_retention_days = 30
   tags               = local.common_tags
@@ -44,7 +46,7 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
         tool_schema {
           inline_payload {
             name        = "create_trip"
-            description = "Create a trip after explicit user confirmation. Identity, operation and deadline fields are injected by Runtime."
+            description = "Create a trip after explicit user confirmation. Identity, per-mutation operation and deadline fields are injected by Runtime."
             input_schema {
               type = "object"
               property {
@@ -55,7 +57,12 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
               property {
                 name        = "operationId"
                 type        = "string"
-                description = "Server-injected idempotency key."
+                description = "Server-derived idempotency key for this specific mutation."
+              }
+              property {
+                name        = "confirmationVerified"
+                type        = "boolean"
+                description = "Server-verified current-turn confirmation flag."
               }
               property {
                 name        = "requestId"
@@ -164,7 +171,7 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
 
           inline_payload {
             name        = "update_trip"
-            description = "Update one trip after explicit user confirmation. Runtime injects identity, operation and deadline fields."
+            description = "Update one trip after explicit user confirmation. Runtime injects identity, per-mutation operation and deadline fields."
             input_schema {
               type = "object"
               property {
@@ -175,7 +182,12 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
               property {
                 name        = "operationId"
                 type        = "string"
-                description = "Server-injected idempotency key."
+                description = "Server-derived idempotency key for this specific mutation."
+              }
+              property {
+                name        = "confirmationVerified"
+                type        = "boolean"
+                description = "Server-verified current-turn confirmation flag."
               }
               property {
                 name        = "requestId"
