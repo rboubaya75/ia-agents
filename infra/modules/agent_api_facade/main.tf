@@ -1,7 +1,8 @@
-data "archive_file" "facade" {
-  type        = "zip"
-  source_file = "${path.module}/src/lambda_function.py"
-  output_path = "${path.module}/lambda_facade.zip"
+resource "archive_file" "facade" {
+  type             = "zip"
+  source_file      = "${path.module}/src/lambda_function.py"
+  output_path      = "${path.module}/lambda_facade.zip"
+  output_file_mode = "0666"
 }
 
 data "aws_iam_policy_document" "assume_role" {
@@ -96,8 +97,8 @@ resource "aws_lambda_function" "this" {
   timeout                        = var.request_timeout_seconds
   memory_size                    = 256
   reserved_concurrent_executions = var.reserved_concurrent_executions
-  filename                       = data.archive_file.facade.output_path
-  source_code_hash               = data.archive_file.facade.output_base64sha256
+  filename                       = archive_file.facade.output_path
+  source_code_hash               = archive_file.facade.output_base64sha256
 
   tracing_config {
     mode = "Active"
