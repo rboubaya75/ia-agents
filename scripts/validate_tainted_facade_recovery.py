@@ -7,13 +7,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
-ADDRESS = "module.agent_api_facade.aws_lambda_function.this"
-RESOURCE_TYPE = "aws_lambda_function"
-FUNCTION_NAME = "wildrydes-test-agent-invocation-facade"
-RUNTIME = "python3.12"
-HANDLER = "lambda_function.handler"
-ARCHITECTURES = ["arm64"]
-STABLE_FIELDS = ("function_name", "role", "handler", "runtime", "architectures")
+TARGETS: dict[str, dict[str, Any]] = {
+    "facade": {
+        "address": "module.agent_api_facade.aws_lambda_function.this",
+        "resource_type": "aws_lambda_function",
+        "function_name": "wildrydes-test-agent-invocation-facade",
+        "runtime": "python3.12",
+        "handler": "lambda_function.handler",
+        "architectures": ["arm64"],
+        "stable_fields": ("function_name", "role", "handler", "runtime", "architectures"),
+    },
+    "trip-tools": {
+        "address": "module.trip_tools_lambda.aws_lambda_function.this",
+        "resource_type": "aws_lambda_function",
+        "function_name": "wildrydes-test-trip-tools",
+        "runtime": "python3.12",
+        "handler": "lambda_function_code.lambda_handler",
+        "architectures": ["arm64"],
+        "stable_fields": ("function_name", "role", "handler", "runtime", "architectures"),
+    },
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -30,7 +43,15 @@ def is_destructive(actions: Any) -> bool:
     return isinstance(actions, list) and "delete" in actions
 
 
-def inspect_plan(plan: dict[str, Any]) -> dict[str, str]:
+def target_contract(target: str) -> dict[str, Any]:
+    try:
+        return TARGETS[target]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported recovery target: {target!r}.") from exc
+
+
+def inspect_plan(plan: dict[str, Any], target: str) -> dict[str, str]:
+    contract = target_contract(target)
     changes = plan.get("resource_changes")
     if not isinstance(changes, list):
         raise ValueError("Terraform resource_changes must be a list.")
@@ -47,8 +68,12 @@ def inspect_plan(plan: dict[str, Any]) -> dict[str, str]:
         raise ValueError(f"Expected exactly one destructive change, found {len(destructive)}.")
 
     item = destructive[0]
-    if item.get("address") != ADDRESS or item.get("type") != RESOURCE_TYPE:
-        raise ValueError(f"Only the exact test facade may be recovered; got {item.get('address')} ({item.get('type')}).")
+    if item.get("address") != contract["address"] or item.get("type") != contract["resource_type"]:
+        raise ValueError(
+            "Only the selected test Lambda may be recovered; "
+            f"expected {contract['address']} ({contract['resource_type']}), "
+            f"got {item.get('address')} ({item.get('type')})."
+        )
     if item.get("action_reason") != "replace_because_tainted":
         raise ValueError(f"Replacement reason must be replace_because_tainted, got {item.get('action_reason')!r}.")
 
@@ -63,38 +88,40 @@ def inspect_plan(plan: dict[str, Any]) -> dict[str, str]:
     after = change.get("after")
     if not isinstance(before, dict) or not isinstance(after, dict):
         raise ValueError("Terraform before/after values are required.")
-    for field in STABLE_FIELDS:
+    for field in contract["stable_fields"]:
         if before.get(field) in (None, "", []) or after.get(field) in (None, "", []):
             raise ValueError(f"Stable field {field} is missing.")
         if before.get(field) != after.get(field):
             raise ValueError(f"Stable field {field} changes during replacement.")
 
     expected = {
-        "function_name": FUNCTION_NAME,
-        "runtime": RUNTIME,
-        "handler": HANDLER,
-        "architectures": ARCHITECTURES,
+        "function_name": contract["function_name"],
+        "runtime": contract["runtime"],
+        "handler": contract["handler"],
+        "architectures": contract["architectures"],
     }
     for field, expected_value in expected.items():
         if after.get(field) != expected_value:
-            raise ValueError(f"Field {field} does not match the approved facade contract.")
+            raise ValueError(f"Field {field} does not match the approved {target} contract.")
 
     return {
-        "address": ADDRESS,
-        "function_name": FUNCTION_NAME,
+        "target": target,
+        "address": str(contract["address"]),
+        "function_name": str(contract["function_name"]),
         "role": str(after["role"]),
-        "runtime": RUNTIME,
-        "handler": HANDLER,
-        "architectures": ",".join(ARCHITECTURES),
+        "runtime": str(contract["runtime"]),
+        "handler": str(contract["handler"]),
+        "architectures": ",".join(contract["architectures"]),
     }
 
 
-def verify_aws(configuration: dict[str, Any], expected_role: str) -> None:
+def verify_aws(configuration: dict[str, Any], target: str, expected_role: str) -> None:
+    contract = target_contract(target)
     expected = {
-        "FunctionName": FUNCTION_NAME,
-        "Runtime": RUNTIME,
-        "Handler": HANDLER,
-        "Architectures": ARCHITECTURES,
+        "FunctionName": contract["function_name"],
+        "Runtime": contract["runtime"],
+        "Handler": contract["handler"],
+        "Architectures": contract["architectures"],
         "Role": expected_role,
         "State": "Active",
         "LastUpdateStatus": "Successful",
@@ -109,13 +136,15 @@ def verify_aws(configuration: dict[str, Any], expected_role: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate the one-time test facade taint recovery contract.")
+    parser = argparse.ArgumentParser(description="Validate a controlled test Lambda taint recovery contract.")
     sub = parser.add_subparsers(dest="command", required=True)
     inspect = sub.add_parser("inspect-plan")
     inspect.add_argument("--plan-json", required=True)
+    inspect.add_argument("--target", required=True, choices=tuple(TARGETS))
     inspect.add_argument("--github-output")
     verify = sub.add_parser("verify-aws")
     verify.add_argument("--configuration-json", required=True)
+    verify.add_argument("--target", required=True, choices=tuple(TARGETS))
     verify.add_argument("--expected-role", required=True)
     return parser.parse_args()
 
@@ -124,7 +153,7 @@ def main() -> int:
     options = parse_args()
     try:
         if options.command == "inspect-plan":
-            result = inspect_plan(load_json(Path(options.plan_json)))
+            result = inspect_plan(load_json(Path(options.plan_json)), options.target)
             print(json.dumps(result, indent=2, sort_keys=True))
             if options.github_output:
                 output = Path(options.github_output)
@@ -133,8 +162,8 @@ def main() -> int:
                         handle.write(f"{key}={value}\n")
             return 0
         if options.command == "verify-aws":
-            verify_aws(load_json(Path(options.configuration_json)), options.expected_role)
-            print("AWS Lambda facade configuration is active and matches the taint recovery contract.")
+            verify_aws(load_json(Path(options.configuration_json)), options.target, options.expected_role)
+            print(f"AWS Lambda {options.target} configuration is active and matches the taint recovery contract.")
             return 0
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
