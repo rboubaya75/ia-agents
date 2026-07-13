@@ -11,7 +11,7 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
   count = var.enable_agentcore_control_plane ? 1 : 0
 
   agent_runtime_name = local.agentcore_runtime_name
-  description        = "WildRydes ${var.environment} AgentCore Runtime with native Cognito JWT inbound auth"
+  description        = "WildRydes ${var.environment} AgentCore Runtime with IAM-only inbound invocation"
   role_arn           = aws_iam_role.agentcore_runtime.arn
 
   agent_runtime_artifact {
@@ -30,30 +30,6 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
     MEMORY_ID          = aws_bedrockagentcore_memory.agent[0].id
     GATEWAY_URL        = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
     GATEWAY_AUTH_MODE  = "aws_iam"
-  }
-
-  authorizer_configuration {
-    custom_jwt_authorizer {
-      discovery_url   = "https://cognito-idp.${var.region}.amazonaws.com/${module.cognito_web_auth.user_pool_id}/.well-known/openid-configuration"
-      allowed_clients = [module.cognito_web_auth.client_id]
-
-      custom_claim {
-        inbound_token_claim_name       = "token_use"
-        inbound_token_claim_value_type = "STRING"
-
-        authorizing_claim_match_value {
-          claim_match_operator = "EQUALS"
-
-          claim_match_value {
-            match_value_string = "access"
-          }
-        }
-      }
-    }
-  }
-
-  request_header_configuration {
-    request_header_allowlist = ["Authorization"]
   }
 
   network_configuration {
