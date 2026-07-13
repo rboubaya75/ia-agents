@@ -28,6 +28,14 @@ class FrontendDeliveryContractTests(unittest.TestCase):
         self.assertIn("git diff --exit-code -- frontend/package.json", content)
         self.assertIn('git push origin HEAD:migration/secure-agentcore-v1', content)
 
+    def test_audited_lock_is_persisted_before_application_checks(self) -> None:
+        content = REPAIR_WORKFLOW.read_text(encoding="utf-8")
+        commit = content.index("- name: Commit audited lockfile")
+        lint = content.index("- name: Lint frontend")
+        build = content.index("- name: Build frontend")
+        self.assertLess(commit, lint)
+        self.assertLess(commit, build)
+
     def test_deploy_builds_and_publishes_before_invalidation(self) -> None:
         content = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
         build = content.index("- name: Build frontend")
