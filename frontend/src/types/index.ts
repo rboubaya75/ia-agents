@@ -62,6 +62,8 @@ export interface AgentCoreResponse {
 export interface ChatResponse {
   message: string;
   timestamp?: string;
+  operationId: string;
+  requestId?: string;
 }
 
 export interface ChatService {
@@ -69,6 +71,7 @@ export interface ChatService {
     message: string,
     sessionId: string,
     getAccessToken: () => Promise<string>,
+    existingOperationId?: string,
   ): Promise<ChatResponse>;
 }
 
