@@ -1,10 +1,10 @@
-import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import React, { createContext, useEffect, useState, type ReactNode } from 'react';
 import type { AuthState } from '../types';
 import * as authService from '../services/authService';
 import { NewPasswordRequiredError } from '../services/authService';
 import { extractUserId } from '../utils/jwtDecoder';
 
-interface AuthContextType extends AuthState {
+export interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<void>;
   completeNewPassword: (newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -161,16 +161,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-};
-
-export const useAuth = (): AuthContextType => {
-  const context = useContext(AuthContext);
-
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-
-  return context;
 };
 
 export default AuthContext;
