@@ -3,9 +3,23 @@ data "aws_caller_identity" "current" {}
 module "frontend_static_site" {
   source = "../../modules/frontend_static_site"
 
-  name_prefix   = local.name_prefix
-  bucket_name   = "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}-${var.region}"
-  price_class   = "PriceClass_100"
+  name_prefix = local.name_prefix
+  bucket_name = "${local.name_prefix}-frontend-${data.aws_caller_identity.current.account_id}-${var.region}"
+  price_class = "PriceClass_100"
+  content_security_policy = join("; ", [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://cognito-idp.${var.region}.amazonaws.com https://*.execute-api.${var.region}.amazonaws.com",
+    "manifest-src 'self'",
+    "upgrade-insecure-requests"
+  ])
   common_tags   = local.common_tags
   force_destroy = true
 }
