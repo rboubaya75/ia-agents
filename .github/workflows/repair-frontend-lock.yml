@@ -1,0 +1,121 @@
+name: Repair Frontend Dependency Lock
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_repair:
+        description: "Regenerate, audit, test, and commit the frontend lockfile"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-frontend-dependency-lock
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  repair-lock:
+    name: Repair Audited Frontend Lock
+    if: |
+      github.ref == 'refs/heads/migration/secure-agentcore-v1' &&
+      inputs.confirm_repair == true
+    runs-on: ubuntu-latest
+    environment:
+      name: test
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: migration/secure-agentcore-v1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Repair lockfile with npm
+        working-directory: frontend
+        run: npm audit fix --package-lock-only --ignore-scripts
+
+      - name: Ensure manifest is unchanged
+        run: git diff --exit-code -- frontend/package.json
+
+      - name: Install exact repaired dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Require zero moderate-or-higher production advisories
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Verify patched dependency contract
+        working-directory: frontend
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs'
+
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const packages = lock.packages ?? {}
+          const expected = {
+            'node_modules/amazon-cognito-identity-js': '6.3.18',
+            'node_modules/js-cookie': '3.0.7',
+            'node_modules/mdast-util-to-hast': '13.2.1',
+            'node_modules/uuid': '13.0.1',
+          }
+
+          const parse = (value) => value.split('.').map((part) => Number.parseInt(part, 10))
+          const atLeast = (actual, minimum) => {
+            const left = parse(actual)
+            const right = parse(minimum)
+            for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+              const delta = (left[index] ?? 0) - (right[index] ?? 0)
+              if (delta !== 0) return delta > 0
+            }
+            return true
+          }
+
+          for (const [path, minimum] of Object.entries(expected)) {
+            const actual = packages[path]?.version
+            if (!actual || !atLeast(actual, minimum)) {
+              throw new Error(`${path}: expected >= ${minimum}, got ${actual ?? 'missing'}`)
+            }
+            console.log(`${path}: ${actual}`)
+          }
+          NODE
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Commit only the audited lockfile
+        run: |
+          git status --short
+          unexpected="$(git status --short | awk '$2 != "frontend/package-lock.json" {print}')"
+          if [ -n "$unexpected" ]; then
+            echo "Unexpected files changed:"
+            echo "$unexpected"
+            exit 1
+          fi
+          if git diff --quiet -- frontend/package-lock.json; then
+            echo "The lockfile already satisfies the audited dependency contract."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          git commit -m "fix: refresh audited frontend dependency lock"
+          git push origin HEAD:migration/secure-agentcore-v1
