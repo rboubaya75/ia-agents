@@ -1,6 +1,6 @@
 # LLD — WildRydes Secure AgentCore V1
 
-- **Version :** 4.0
+- **Version :** 4.1
 - **Date :** 2026-07-13
 - **Branche :** `migration/secure-agentcore-v1`
 - **Environnement :** `test`
@@ -32,6 +32,8 @@ Contraintes :
 - aucun autre champ accepté ;
 - endpoint configuré par `VITE_AGENT_INVOKE_URL` ;
 - aucune URL AgentCore Runtime dans le bundle navigateur.
+
+Le `sessionId` frontend est un identifiant fonctionnel externe. Il est conservé dans la réponse HTTP mais n’est jamais utilisé directement comme clé de session Runtime.
 
 ## 2. API Gateway
 
@@ -75,15 +77,57 @@ client_id = Cognito web client ID
 sub présent
 ```
 
+### Session externe et session technique
+
+Après validation du payload et des claims :
+
+```text
+externalSessionId = payload.sessionId
+actorId = claims.sub
+internalSessionId = "sid-v1-" + SHA-256(
+  JSON(["agentcore-session-v1", actorId, externalSessionId])
+)
+```
+
+La sérialisation JSON est canonique, encodée en UTF-8 et utilise les séparateurs compacts. Le résultat a le format :
+
+```text
+sid-v1-[a-f0-9]{64}
+```
+
+Propriétés attendues :
+
+- déterministe pour un même `actorId` et un même `externalSessionId` ;
+- distinct pour deux acteurs utilisant le même `externalSessionId` ;
+- compatible avec la contrainte Runtime de 33 à 128 caractères sûrs ;
+- ne contient ni `actorId` brut ni `externalSessionId` brut ;
+- versionné par le préfixe `sid-v1-`.
+
 ### Payload interne
 
 ```json
 {
   "prompt": "...",
-  "sessionId": "...",
+  "sessionId": "sid-v1-<sha256>",
   "trustedIdentity": {
     "actorId": "<claims.sub>"
   }
+}
+```
+
+La façade utilise `internalSessionId` à deux endroits :
+
+```text
+InvokeAgentRuntime.runtimeSessionId
+payload.sessionId
+```
+
+Elle retourne au navigateur :
+
+```json
+{
+  "message": "...",
+  "sessionId": "<externalSessionId>"
 }
 ```
 
@@ -127,11 +171,19 @@ Runtime accepte exactement :
 
 ```text
 prompt
-sessionId
+sessionId technique
 trustedIdentity.actorId
 ```
 
 Il ne décode plus de JWT et ne lit plus de header d’identité. Sa resource policy autorise uniquement le rôle de la façade.
+
+Le `sessionId` technique reçu est utilisé par :
+
+```python
+FileSessionManager(session_id=session_id, session_dir=SESSION_DIR)
+```
+
+Le Runtime ne connaît jamais le `sessionId` externe. Deux acteurs utilisant la même valeur externe ont donc des sessions Strands locales distinctes sur une instance Runtime chaude.
 
 ## 5. Bedrock
 
@@ -163,6 +215,14 @@ travel/{actorId}/preferences
 ```
 
 Les erreurs Memory sont journalisées de manière redacted. L’isolation User A/User B doit être prouvée end-to-end.
+
+L’isolation Memory par `actorId` est indépendante de l’isolation de session technique. Les deux contrôles sont nécessaires :
+
+```text
+Memory durable      -> namespace actorId
+Session Strands      -> internalSessionId actor-scoped
+Runtime invocation   -> runtimeSessionId actor-scoped
+```
 
 ## 7. Client MCP IAM
 
@@ -259,13 +319,33 @@ X-Ray PutTraceSegments / PutTelemetryRecords
 
 Les logs applicatifs contiennent uniquement des identifiants hashés, types d’erreur, statuts et durées.
 
+La façade journalise :
+
+```text
+actor_hash
+session_hash
+runtime_session_hash
+```
+
+Ces valeurs sont des empreintes tronquées. Aucun token, prompt, `actorId`, `externalSessionId` ou `internalSessionId` brut ne doit être journalisé.
+
 ## 13. Tests automatisés
 
 ```text
 tests/unit/test_agent_api_facade.py
+tests/unit/test_runtime_behavior.py
 tests/unit/test_runtime_security_contract.py
 tests/unit/test_trip_tools.py
 ```
+
+Les tests façade couvrent notamment :
+
+- même acteur + même session externe = même session technique ;
+- acteurs différents + même session externe = sessions techniques différentes ;
+- format `sid-v1-<64 hex>` ;
+- absence de l’identifiant externe dans le payload Runtime ;
+- `runtimeSessionId` identique au `payload.sessionId` technique ;
+- réponse HTTP conservant le `sessionId` externe.
 
 Pipeline :
 
@@ -312,6 +392,8 @@ Puis :
 - déploiement `full` ;
 - CORS/JWT navigateur ;
 - invocation Runtime directe refusée ;
+- User A et User B utilisant le même `sessionId` externe obtiennent des sessions Runtime distinctes ;
+- même utilisateur et même `sessionId` externe conservent la continuité de session ;
 - Memory A/B isolée ;
 - quatre tools MCP validés ;
 - absence de données sensibles dans les logs ;
