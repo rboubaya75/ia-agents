@@ -1,228 +1,140 @@
 # Spécifications modules — WildRydes Secure AgentCore V1
 
-- **Version :** 2.0
-- **Date :** 2026-07-12
+- **Version :** 3.0
+- **Date :** 2026-07-13
 - **Périmètre :** environnement `test`
-- **Branche par défaut :** `migration/secure-agentcore-v1`
-- **Architecture de référence :** ADR-0004
+- **Branche :** `migration/secure-agentcore-v1`
+- **Architecture :** ADR-0005
 
-## 1. Architecture cible
+## 1. Architecture
 
 ```text
 Browser
-  -> API Gateway HTTP API
-  -> HTTP proxy direct
-  -> AgentCore Runtime JWT
+  -> API Gateway JWT
+  -> Lambda Security Facade
+  -> AgentCore Runtime IAM-only
+  -> AgentCore Gateway MCP AWS_IAM
+  -> Trip Tools Lambda
+  -> DynamoDB
 ```
+
+## 2. Catalogue
+
+| Domaine | Module / ressource | Statut V1 |
+|---|---|---|
+| Identity | `cognito_web_auth` | implémenté |
+| Frontend | `frontend_static_site` | implémenté et durci |
+| Ingress | `api_gateway_agent_ingress` | implémenté |
+| Security boundary | `agent_api_facade` | implémenté |
+| ECR | `ecr_container_repository` | implémenté |
+| Runtime | `aws_bedrockagentcore_agent_runtime` | IAM-only implémenté |
+| Runtime policy | `aws_bedrockagentcore_resource_policy.agent_runtime_invocation_boundary` | implémenté |
+| Memory | `aws_bedrockagentcore_memory` | implémenté |
+| MCP Gateway | `aws_bedrockagentcore_gateway.tools_mcp` | implémenté |
+| MCP policy | `tools_gateway_invocation_boundary` | implémenté |
+| Tool target | `aws_bedrockagentcore_gateway_target.trip_tools` | implémenté |
+| Tool backend | `trip_tools_lambda` | implémenté |
+| Data | `dynamodb_trips` | implémenté |
+| Tests | `tests/unit` | implémenté |
+| CI qualité | `test-application-quality.yml` | implémenté |
+
+## 3. API Gateway
+
+- route : `POST /agent/invoke` ;
+- authorizer : JWT Cognito ;
+- intégration : Lambda AWS proxy payload 2.0 ;
+- CORS : domaine CloudFront uniquement ;
+- throttling : 5 req/s, burst 10 ;
+- access logs : structurés et sans données sensibles.
+
+## 4. Lambda Security Facade
+
+Inputs acceptés :
+
+```text
+prompt
+sessionId
+```
+
+Claims requis :
+
+```text
+token_use=access
+client_id=<web-client-id>
+sub=<actor-id>
+```
+
+Output interne :
+
+```text
+prompt
+sessionId
+trustedIdentity.actorId
+```
+
+Configuration : Python 3.12 ARM64, 256 MiB, timeout 28 s, concurrence 5.
+
+## 5. Runtime
+
+- image `linux/arm64` Python 3.12 ;
+- modèle Claude Haiku 4.5 EU ;
+- IAM-only ;
+- resource policy limitée au rôle façade ;
+- Memory isolée ;
+- client MCP SigV4 ;
+- tools MCP obligatoires en V1 ;
+- logs hashés.
+
+## 6. Gateway MCP
+
+- authorizer `AWS_IAM` ;
+- principal autorisé : rôle Runtime ;
+- protocol MCP ;
+- target Lambda avec `gateway_iam_role {}` ;
+- rôle Gateway autorisé uniquement à invoquer la Lambda Trips.
+
+## 7. Trip Tools Lambda
 
 Tools :
 
 ```text
-Runtime
-  -> AgentCore Gateway MCP
-  -> targets tools
-  -> DynamoDB / APIs métier
+create_trip
+get_trips
+get_trip
+update_trip
 ```
 
-AgentCore Gateway ingress et Lambda Facade ne sont pas des composants nominaux.
+IAM : `GetItem`, `PutItem`, `Query`, `UpdateItem` sur la table exacte.
 
-## 2. Catalogue V1
+Validation : identifiants, tailles, dates ISO, ordre des dates, champs allowlistés et conditions d’existence.
 
-| Domaine | Module / ressource | Statut | Responsabilité |
-|---|---|---|---|
-| Identity | `cognito_web_auth` | présent | User Pool, app client SPA, utilisateurs invités |
-| Frontend | `frontend_static_site` | présent | S3 privé, CloudFront, OAC, SPA fallback |
-| Web ingress | `api_gateway_agent_ingress` | à remédier | JWT, CORS, throttling, logs, proxy direct Runtime |
-| ECR | `ecr_container_repository` | présent | image immutable, scan on push, lifecycle |
-| Runtime | `aws_bedrockagentcore_agent_runtime` | présent | exécution `phase_4.py`, JWT natif |
-| Runtime endpoint | `aws_bedrockagentcore_agent_runtime_endpoint` | présent | endpoint `default` |
-| Memory | `aws_bedrockagentcore_memory` | présent | préférences utilisateur |
-| Tools gateway | `aws_bedrockagentcore_gateway.tools_mcp` | présent, incomplet | endpoint MCP pour tools |
-| MCP targets | `aws_bedrockagentcore_gateway_target` | à implémenter | target tool réel |
-| Data | `dynamodb_trips` | présent | table trips SSE/PITR |
-| IAM Runtime | `iam_agentcore_runtime.tf` / module historique | à durcir | permissions Runtime |
-| IAM Gateway | `iam_agentcore_runtime.tf` | à durcir | permissions tools Gateway |
-| Legacy | `agent_api_facade` | legacy | fallback uniquement avec ADR |
-| Observability | ressources à compléter | à implémenter | logs, metrics, dashboards, alarms |
-| RAG | aucune ressource nominale | hors V1 | future capability |
+## 8. Frontend
 
-## 3. Spécification `api_gateway_agent_ingress`
+- S3 privé ;
+- CloudFront OAC ;
+- CSP ;
+- HSTS ;
+- anti-framing ;
+- nosniff ;
+- Referrer-Policy ;
+- Permissions-Policy ;
+- variable nominale `VITE_AGENT_INVOKE_URL`.
 
-### Inputs requis après remédiation
+## 9. Outputs obligatoires
 
 ```text
-name
-jwt_issuer
-jwt_audience
-allowed_origins
-runtime_direct_enabled
-agentcore_runtime_invoke_url
-tags
-```
-
-### Route
-
-```text
-POST /agent/invoke
-```
-
-### Auth
-
-```text
-JWT authorizer Cognito
-```
-
-### Intégration
-
-```text
-HTTP_PROXY -> AgentCore Runtime invoke URL
-```
-
-### CORS
-
-```text
-Origin: domaine CloudFront test
-Methods: OPTIONS, POST
-Headers:
-  authorization
-  content-type
-  x-amzn-bedrock-agentcore-runtime-session-id
-  x-correlation-id
-```
-
-### Outputs
-
-```text
-api_id
-api_endpoint
-execution_arn
-stage_name
-jwt_authorizer_id
+service_url
 agent_invoke_url
+agent_api_facade_function_name
+agent_api_facade_role_arn
+agent_runtime_arn
+agentcore_memory_id
+agentcore_gateway_mcp_url
+agentcore_trip_tools_target_id
+trip_tools_lambda_function_name
+secure_facade_ready
 ```
 
-### Critères d’acceptation
+## 10. Validation
 
-- route active ;
-- JWT invalide rejeté ;
-- CORS valide ;
-- headers Runtime transmis ;
-- Runtime atteint ;
-- logs sans token/prompt ;
-- throttling configuré.
-
-## 4. Spécification Runtime
-
-### Variables
-
-```text
-AWS_REGION
-AWS_DEFAULT_REGION
-MODEL_ID
-LOG_LEVEL
-SESSION_DIR
-ENABLE_RAG
-MEMORY_ID
-GATEWAY_URL
-GATEWAY_AUTH_MODE
-```
-
-### Configuration JWT
-
-```text
-discovery_url = Cognito OIDC discovery
-allowed_clients = Cognito web client ID
-token_use = access
-request_header_allowlist = Authorization
-```
-
-### Contrat
-
-- `prompt` obligatoire ;
-- `sessionId` 33+ caractères ;
-- identité dérivée du JWT ;
-- champs identité client-side rejetés ;
-- logs hashés ;
-- modèle configurable ;
-- Memory isolée ;
-- tools allowlistés.
-
-## 5. Spécification AgentCore Gateway MCP
-
-### Configuration actuelle
-
-```text
-authorizer_type = AWS_IAM
-protocol_type = MCP
-```
-
-### Cible
-
-- mode d’auth unique et cohérent avec le client Runtime ;
-- au moins un target tool ;
-- IAM limité ;
-- session timeout contrôlé ;
-- test list tools ;
-- test tool call ;
-- identité serveur injectée ;
-- refus cross-user.
-
-## 6. Spécification ECR
-
-- `image_tag_mutability = IMMUTABLE` ;
-- `scan_on_push = true` ;
-- chiffrement ;
-- lifecycle untagged 7 jours ;
-- conservation des dernières images ;
-- build `linux/arm64` ;
-- utilisateur conteneur non root.
-
-## 7. Spécification DynamoDB
-
-```text
-PK = userId
-SK = tripId
-billing = PAY_PER_REQUEST
-PITR = true
-SSE = true
-```
-
-Chaque tool doit utiliser le `userId` serveur et ne jamais accepter une identité arbitraire.
-
-## 8. Spécification CI/CD
-
-### Infrastructure
-
-- Gitleaks ;
-- lockfile ;
-- fmt ;
-- validate ;
-- plan ;
-- apply manuel ;
-- destroy confirmé.
-
-### Application
-
-- build image unique ;
-- push ECR ;
-- apply control plane ;
-- validation outputs ;
-- build frontend avec `VITE_AGENT_INVOKE_URL` ;
-- publication S3 ;
-- invalidation CloudFront ;
-- smoke tests CORS/JWT/Runtime/tools.
-
-## 9. Critères globaux V1
-
-- API Gateway endpoint nominal ;
-- Runtime JWT final ;
-- AgentCore Gateway uniquement tools ;
-- Claude Haiku 4.5 streaming/tools ;
-- Memory isolée ;
-- tool MCP réel ;
-- IAM least privilege ;
-- logs redacted ;
-- Terraform validate/plan ;
-- frontend lint/build ;
-- smoke test navigateur ;
-- documentation alignée.
+La conformité finale exige : qualité CI verte, Terraform fmt/validate/plan vert, déploiement full, smoke tests JWT/CORS, Runtime direct refusé, Memory A/B isolée, quatre tools MCP et logs redacted.
