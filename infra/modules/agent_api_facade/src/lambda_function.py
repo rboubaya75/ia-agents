@@ -17,7 +17,7 @@ logger.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging
 
 RUNTIME_READY = os.getenv("RUNTIME_READY", "false").lower() == "true"
 RUNTIME_ARN = os.getenv("AGENT_RUNTIME_ARN", "")
-RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "DEFAULT")
+RUNTIME_ENDPOINT = os.getenv("AGENT_RUNTIME_ENDPOINT_NAME", "default")
 EXPECTED_CLIENT_ID = os.getenv("COGNITO_CLIENT_ID", "")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "28"))
 RUNTIME_CONNECT_TIMEOUT_SECONDS = int(os.getenv("RUNTIME_CONNECT_TIMEOUT_SECONDS", "2"))
@@ -37,6 +37,7 @@ if MAX_BODY_BYTES < 1024:
 ALLOWED_KEYS = {"prompt", "sessionId"}
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{33,128}$")
 INTERNAL_SESSION_PREFIX = "sid-v1-"
+GENERIC_AGENT_ERROR = "The agent request could not be completed."
 
 
 def agentcore_config() -> Config:
@@ -89,6 +90,16 @@ def http(status: int, body: Dict[str, Any]) -> Dict[str, Any]:
         },
         "body": json.dumps(body, separators=(",", ":")),
     }
+
+
+def service_error(status: int, error: str, request_id: str, **details: Any) -> Dict[str, Any]:
+    body: Dict[str, Any] = {
+        "error": error,
+        "message": GENERIC_AGENT_ERROR,
+        "requestId": request_id,
+    }
+    body.update({key: value for key, value in details.items() if value not in (None, "")})
+    return http(status, body)
 
 
 def _body_bytes(raw: Any) -> bytes:
@@ -186,7 +197,7 @@ def read_payload(value: Any) -> Any:
     return value
 
 
-def call_runtime(payload: Dict[str, Any]) -> Any:
+def call_runtime(payload: Dict[str, Any], request_id: str) -> Any:
     if not RUNTIME_READY or not RUNTIME_ARN:
         raise RuntimeUnavailableError("Agent Runtime is not ready.")
     result = _agentcore.invoke_agent_runtime(
@@ -198,6 +209,19 @@ def call_runtime(payload: Dict[str, Any]) -> Any:
         payload=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
     )
     status_code = int(result.get("statusCode", 200))
+    content_type = str(result.get("contentType", "unknown"))
+    logger.info(
+        json.dumps(
+            {
+                "event": "runtime_response_metadata",
+                "request_id": request_id,
+                "status_code": status_code,
+                "content_type": content_type,
+                "runtime_endpoint": RUNTIME_ENDPOINT,
+                "runtime_arn_hash": safe_hash(RUNTIME_ARN),
+            }
+        )
+    )
     if status_code >= 400:
         raise RuntimeResponseError(f"Agent Runtime returned status {status_code}.")
     return read_payload(result.get("response") or result.get("payload"))
@@ -225,7 +249,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         prompt, external_session_id = validate_payload(data)
         actor_id = actor_id_from(event)
         internal_session_id = derive_internal_session_id(actor_id, external_session_id)
-        result = call_runtime(runtime_payload(prompt, internal_session_id, actor_id))
+        result = call_runtime(runtime_payload(prompt, internal_session_id, actor_id), request_id)
         duration_ms = round((time.monotonic() - started) * 1000, 2)
         logger.info(
             json.dumps(
@@ -262,21 +286,54 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         return http(400, {"error": "bad_request", "message": str(exc)})
     except RuntimeUnavailableError:
         logger.warning(json.dumps({"event": "runtime_unavailable", "request_id": request_id}))
-        return http(503, {"error": "runtime_unavailable"})
+        return service_error(503, "runtime_unavailable", request_id)
     except RuntimeResponseError as exc:
-        logger.error(json.dumps({"event": "runtime_invalid_response", "request_id": request_id, "error_type": type(exc).__name__}))
-        return http(502, {"error": "runtime_invalid_response"})
+        logger.error(
+            json.dumps(
+                {
+                    "event": "runtime_invalid_response",
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                    "reason": str(exc),
+                    "runtime_endpoint": RUNTIME_ENDPOINT,
+                }
+            )
+        )
+        return service_error(502, "runtime_invalid_response", request_id)
     except ReadTimeoutError:
         logger.warning(json.dumps({"event": "runtime_timeout", "request_id": request_id}))
-        return http(504, {"error": "runtime_timeout", "message": "Agent request timed out."})
+        return http(504, {"error": "runtime_timeout", "message": "Agent request timed out.", "requestId": request_id})
     except ClientError as exc:
-        code = exc.response.get("Error", {}).get("Code", "ClientError")
+        error = exc.response.get("Error", {})
+        metadata = exc.response.get("ResponseMetadata", {})
+        code = error.get("Code", "ClientError")
         status = 429 if code in {"ThrottlingException", "TooManyRequestsException"} else 502
-        logger.error(json.dumps({"event": "runtime_client_error", "request_id": request_id, "error_code": code}))
-        return http(status, {"error": "runtime_error", "code": code})
+        logger.error(
+            json.dumps(
+                {
+                    "event": "runtime_client_error",
+                    "request_id": request_id,
+                    "error_code": code,
+                    "http_status": metadata.get("HTTPStatusCode"),
+                    "aws_request_id": metadata.get("RequestId"),
+                    "runtime_endpoint": RUNTIME_ENDPOINT,
+                    "runtime_arn_hash": safe_hash(RUNTIME_ARN),
+                }
+            )
+        )
+        return service_error(status, "runtime_error", request_id, code=code)
     except BotoCoreError as exc:
-        logger.error(json.dumps({"event": "runtime_transport_error", "request_id": request_id, "error_type": type(exc).__name__}))
-        return http(502, {"error": "runtime_transport_error"})
+        logger.error(
+            json.dumps(
+                {
+                    "event": "runtime_transport_error",
+                    "request_id": request_id,
+                    "error_type": type(exc).__name__,
+                    "runtime_endpoint": RUNTIME_ENDPOINT,
+                }
+            )
+        )
+        return service_error(502, "runtime_transport_error", request_id)
     except Exception as exc:
         logger.error(json.dumps({"event": "facade_unexpected_error", "request_id": request_id, "error_type": type(exc).__name__}))
-        return http(500, {"error": "internal_error"})
+        return service_error(500, "internal_error", request_id)
