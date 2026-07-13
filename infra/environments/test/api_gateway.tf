@@ -6,9 +6,13 @@ module "api_gateway_agent_ingress" {
   jwt_audience    = [module.cognito_web_auth.client_id]
   allowed_origins = ["https://${module.frontend_static_site.cloudfront_domain_name}"]
 
-  # Solution 4: browser invokes AgentCore Runtime directly with Cognito Bearer token.
-  # API Gateway remains available for future non-Runtime application APIs, but it no
-  # longer proxies user agent ingress through AgentCore Gateway.
+  security_facade_enabled      = true
+  facade_lambda_invoke_arn     = module.agent_api_facade.invoke_arn
+  facade_lambda_function_name  = module.agent_api_facade.function_name
+  throttling_rate_limit        = 5
+  throttling_burst_limit       = 10
+  access_log_retention_days    = 30
+
   gateway_first_enabled         = false
   agentcore_gateway_url         = ""
   agentcore_runtime_target_name = ""
