@@ -66,6 +66,22 @@ output "api_gateway_stage_name" {
   value = module.api_gateway_agent_ingress.stage_name
 }
 
+output "api_gateway_access_log_group_name" {
+  value = module.api_gateway_agent_ingress.access_log_group_name
+}
+
+output "agent_api_facade_function_name" {
+  value = module.agent_api_facade.function_name
+}
+
+output "agent_api_facade_role_arn" {
+  value = module.agent_api_facade.role_arn
+}
+
+output "agent_api_facade_log_group_name" {
+  value = module.agent_api_facade.log_group_name
+}
+
 output "agent_service_name" {
   value = local.agentcore_runtime_name
 }
@@ -91,7 +107,8 @@ output "agent_runtime_endpoint_arn" {
 }
 
 output "agent_runtime_invoke_url" {
-  value = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=DEFAULT", "")
+  description = "Technical IAM-authenticated Runtime URL. It must not be exposed to the browser."
+  value       = try("https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn)}/invocations?qualifier=DEFAULT", "")
 }
 
 output "agentcore_gateway_url" {
@@ -118,6 +135,16 @@ output "app_secret_name" {
   value = ""
 }
 
+output "secure_facade_ready" {
+  value = (
+    module.api_gateway_agent_ingress.security_facade_enabled &&
+    module.api_gateway_agent_ingress.agent_invoke_url != "" &&
+    module.agent_api_facade.function_name != "" &&
+    (!var.enable_agentcore_control_plane || try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn, "") != "")
+  )
+}
+
 output "gateway_first_ready" {
-  value = var.enable_agentcore_control_plane && try(aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn, "") != "" && try(aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url, "") != "" && try(aws_bedrockagentcore_memory.agent[0].id, "") != ""
+  description = "Deprecated compatibility alias. Use secure_facade_ready."
+  value       = false
 }
