@@ -16,7 +16,7 @@ os.environ.update({
     "AWS_EC2_METADATA_DISABLED": "true",
     "RUNTIME_READY": "true",
     "AGENT_RUNTIME_ARN": "arn:aws:bedrock-agentcore:eu-west-3:123456789012:runtime/test",
-    "AGENT_RUNTIME_ENDPOINT_NAME": "DEFAULT",
+    "AGENT_RUNTIME_ENDPOINT_NAME": "default",
     "COGNITO_CLIENT_ID": "client-123",
     "REQUEST_TIMEOUT_SECONDS": "28",
     "RUNTIME_CONNECT_TIMEOUT_SECONDS": "2",
@@ -59,14 +59,18 @@ class AgentApiFacadeTests(unittest.TestCase):
         return json.loads(response["body"])
 
     def test_success_injects_server_derived_actor_identity_and_scoped_session(self) -> None:
-        facade._agentcore.invoke_agent_runtime.return_value = {"statusCode": 200, "response": b'{"message":"ok"}'}
+        facade._agentcore.invoke_agent_runtime.return_value = {
+            "statusCode": 200,
+            "contentType": "application/json",
+            "response": b'{"message":"ok"}',
+        }
         response = facade.handler(event({"prompt": " hello ", "sessionId": SESSION_ID}), Context())
         self.assertEqual(response["statusCode"], 200)
         self.assertEqual(self.response_body(response), {"message": "ok", "sessionId": SESSION_ID})
         invoke_args = facade._agentcore.invoke_agent_runtime.call_args.kwargs
         runtime_payload = json.loads(invoke_args["payload"])
         expected = facade.derive_internal_session_id("user-1", SESSION_ID)
-        self.assertEqual(invoke_args["qualifier"], "DEFAULT")
+        self.assertEqual(invoke_args["qualifier"], "default")
         self.assertEqual(invoke_args["runtimeSessionId"], expected)
         self.assertEqual(runtime_payload["prompt"], "hello")
         self.assertEqual(runtime_payload["sessionId"], expected)
@@ -147,7 +151,7 @@ class AgentApiFacadeTests(unittest.TestCase):
         self.assertEqual(config.read_timeout, 23)
         self.assertLessEqual(config.connect_timeout + config.read_timeout, facade.REQUEST_TIMEOUT_SECONDS - 2)
 
-    def test_returns_503_when_runtime_is_not_ready(self) -> None:
+    def test_returns_503_with_safe_correlation_when_runtime_is_not_ready(self) -> None:
         previous = facade.RUNTIME_READY
         facade.RUNTIME_READY = False
         try:
@@ -155,25 +159,52 @@ class AgentApiFacadeTests(unittest.TestCase):
         finally:
             facade.RUNTIME_READY = previous
         self.assertEqual(response["statusCode"], 503)
+        self.assertEqual(self.response_body(response)["requestId"], "request-1")
+        self.assertEqual(self.response_body(response)["message"], facade.GENERIC_AGENT_ERROR)
 
-    def test_maps_runtime_throttling_to_429(self) -> None:
+    def test_maps_runtime_throttling_to_429_with_reference(self) -> None:
         facade._agentcore.invoke_agent_runtime.side_effect = ClientError(
-            {"Error": {"Code": "ThrottlingException", "Message": "throttled"}}, "InvokeAgentRuntime"
+            {
+                "Error": {"Code": "ThrottlingException", "Message": "throttled"},
+                "ResponseMetadata": {"HTTPStatusCode": 429, "RequestId": "aws-request-1"},
+            },
+            "InvokeAgentRuntime",
         )
         response = facade.handler(event({"prompt": "hello", "sessionId": SESSION_ID}), Context())
+        body = self.response_body(response)
         self.assertEqual(response["statusCode"], 429)
+        self.assertEqual(body["code"], "ThrottlingException")
+        self.assertEqual(body["requestId"], "request-1")
+        self.assertNotIn("throttled", response["body"])
 
-    def test_maps_runtime_timeout_to_504(self) -> None:
+    def test_maps_runtime_client_error_to_502_with_safe_code_and_reference(self) -> None:
+        facade._agentcore.invoke_agent_runtime.side_effect = ClientError(
+            {
+                "Error": {"Code": "RuntimeClientError", "Message": "private runtime details"},
+                "ResponseMetadata": {"HTTPStatusCode": 403, "RequestId": "aws-request-2"},
+            },
+            "InvokeAgentRuntime",
+        )
+        response = facade.handler(event({"prompt": "hello", "sessionId": SESSION_ID}), Context())
+        body = self.response_body(response)
+        self.assertEqual(response["statusCode"], 502)
+        self.assertEqual(body["code"], "RuntimeClientError")
+        self.assertEqual(body["requestId"], "request-1")
+        self.assertNotIn("private runtime details", response["body"])
+
+    def test_maps_runtime_timeout_to_504_with_reference(self) -> None:
         facade._agentcore.invoke_agent_runtime.side_effect = ReadTimeoutError(
             endpoint_url="https://bedrock-agentcore.eu-west-3.amazonaws.com"
         )
         response = facade.handler(event({"prompt": "hello", "sessionId": SESSION_ID}), Context())
         self.assertEqual(response["statusCode"], 504)
+        self.assertEqual(self.response_body(response)["requestId"], "request-1")
 
-    def test_rejects_runtime_response_without_message(self) -> None:
+    def test_rejects_runtime_response_without_message_with_reference(self) -> None:
         facade._agentcore.invoke_agent_runtime.return_value = {"statusCode": 200, "response": b'{"unexpected":"value"}'}
         response = facade.handler(event({"prompt": "hello", "sessionId": SESSION_ID}), Context())
         self.assertEqual(response["statusCode"], 502)
+        self.assertEqual(self.response_body(response)["requestId"], "request-1")
 
 
 if __name__ == "__main__":
