@@ -64,7 +64,10 @@ const getErrorDetails = async (response: Response): Promise<AgentErrorDetails> =
       const message = typeof payload.message === 'string' ? payload.message : GENERIC_AGENT_ERROR;
       const requestId =
         typeof payload.requestId === 'string' && payload.requestId ? payload.requestId : undefined;
-      return { message, requestId };
+      const messageWithReference = requestId
+        ? `${message} Reference: ${payload.requestId}.`
+        : message;
+      return { message: messageWithReference, requestId };
     }
   }
   return { message: GENERIC_AGENT_ERROR };
@@ -136,9 +139,8 @@ export const sendMessage = async (
 
     if (!response.ok) {
       const details = await getErrorDetails(response);
-      const reference = details.requestId ? ` Reference: ${details.requestId}.` : '';
       throw new AgentRequestError(
-        `${details.message}${reference} (${response.status})`,
+        `${details.message} (${response.status})`,
         operationId,
         isAmbiguousStatus(response.status),
         { requestId: details.requestId, status: response.status },
