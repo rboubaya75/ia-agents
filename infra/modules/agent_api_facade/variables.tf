@@ -55,12 +55,14 @@ variable "max_prompt_chars" {
 
 variable "reserved_concurrent_executions" {
   type        = number
-  description = "Reserved Lambda concurrency used as an abuse and cost guardrail."
-  default     = 5
+  description = "Optional reserved Lambda concurrency. Null uses the account unreserved concurrency pool."
+  default     = null
 
   validation {
-    condition     = var.reserved_concurrent_executions >= 1 && var.reserved_concurrent_executions <= 100
-    error_message = "reserved_concurrent_executions must be between 1 and 100."
+    condition = var.reserved_concurrent_executions == null ? true : (
+      var.reserved_concurrent_executions >= 1 && var.reserved_concurrent_executions <= 100
+    )
+    error_message = "reserved_concurrent_executions must be null or between 1 and 100."
   }
 }
 
