@@ -43,6 +43,62 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
   tags = local.common_tags
 }
 
+data "aws_iam_policy_document" "agent_runtime_invocation_boundary" {
+  count = var.enable_agentcore_control_plane ? 1 : 0
+
+  statement {
+    sid     = "AllowOnlySecurityFacadeRole"
+    effect  = "Allow"
+    actions = ["bedrock-agentcore:InvokeAgentRuntime"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [module.agent_api_facade.role_arn]
+    }
+
+    resources = [aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn]
+  }
+
+  statement {
+    sid     = "DenyOtherRuntimeInvokers"
+    effect  = "Deny"
+    actions = ["bedrock-agentcore:InvokeAgentRuntime"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    resources = [aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn]
+
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = [module.agent_api_facade.role_arn]
+    }
+  }
+
+  statement {
+    sid     = "DenyUnverifiedRuntimeUserDelegation"
+    effect  = "Deny"
+    actions = ["bedrock-agentcore:InvokeAgentRuntimeForUser"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    resources = [aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn]
+  }
+}
+
+resource "aws_bedrockagentcore_resource_policy" "agent_runtime_invocation_boundary" {
+  count = var.enable_agentcore_control_plane ? 1 : 0
+
+  resource_arn = aws_bedrockagentcore_agent_runtime.agent[0].agent_runtime_arn
+  policy       = data.aws_iam_policy_document.agent_runtime_invocation_boundary[0].json
+}
+
 resource "aws_bedrockagentcore_agent_runtime_endpoint" "default" {
   count = var.enable_agentcore_control_plane ? 1 : 0
 
