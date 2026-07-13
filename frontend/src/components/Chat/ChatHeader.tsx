@@ -1,29 +1,16 @@
 /**
  * ChatHeader Component
- * Displays the Wildrydes branding, User ID, Session ID, and New Chat button
- * Requirements: 2.2, 4.1, 4.2, 4.3, 3.3
+ * Displays the Wildrydes branding, User ID, Session ID, and actions.
  */
 
 import React from 'react';
-import { useAuth } from '../../contexts/AuthContext';
-import { useChatContext } from '../../contexts/ChatContext';
+import { useAuth } from '../../contexts/useAuth';
+import { useChatContext } from '../../contexts/useChatContext';
 
 export const ChatHeader: React.FC = () => {
   const { userId, logout } = useAuth();
   const { sessionId, createNewSession } = useChatContext();
 
-  /**
-   * Handle New Chat button click
-   * Creates a new session and clears messages
-   */
-  const handleNewChat = () => {
-    createNewSession();
-  };
-
-  /**
-   * Handle Sign Out button click
-   * Logs out the user and clears authentication state
-   */
   const handleSignOut = async () => {
     try {
       await logout();
@@ -35,12 +22,10 @@ export const ChatHeader: React.FC = () => {
   return (
     <header className="bg-gray-800 text-white px-6 py-4 shadow-lg">
       <div className="flex items-center justify-between">
-        {/* Branding */}
         <div className="flex items-center space-x-2">
           <h1 className="text-2xl font-bold">🦄 Wildrydes</h1>
         </div>
 
-        {/* User ID and Session ID Display */}
         <div className="flex items-center space-x-6 text-sm">
           <div className="flex items-center space-x-2">
             <span className="text-gray-400">User ID:</span>
@@ -56,10 +41,9 @@ export const ChatHeader: React.FC = () => {
           </div>
         </div>
 
-        {/* Action Buttons */}
         <div className="flex items-center space-x-3">
           <button
-            onClick={handleNewChat}
+            onClick={createNewSession}
             className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded transition-colors duration-200"
             aria-label="Start a new chat"
           >
