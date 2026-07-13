@@ -1,0 +1,134 @@
+name: Repair Tainted Test Facade
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_repair:
+        description: "Confirm validation and untaint of the exact test facade Lambda"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-tainted-test-facade
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-3
+  TF_VERSION: "1.9.0"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  STACK_PATH: infra/environments/test
+
+jobs:
+  repair:
+    name: Validate and Untaint Test Facade
+    if: |
+      github.ref == 'refs/heads/migration/secure-agentcore-v1' &&
+      inputs.confirm_repair == true
+    runs-on: ubuntu-latest
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: repair-tainted-test-facade
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Compile recovery validator
+        run: python3 -m py_compile scripts/validate_tainted_facade_recovery.py
+
+      - name: Terraform init
+        working-directory: ${{ env.STACK_PATH }}
+        run: terraform init
+
+      - name: Build recovery evidence plan
+        id: recovery_plan
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -lock-timeout=60s -out=tfplan-taint-recovery
+          exitcode=$?
+          set -e
+          echo "exitcode=${exitcode}" >> "$GITHUB_OUTPUT"
+          if [ "$exitcode" -eq 1 ]; then exit 1; fi
+          if [ "$exitcode" -eq 0 ]; then
+            echo "No Terraform change is pending; no taint repair is required." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          terraform show -no-color tfplan-taint-recovery > tfplan-taint-recovery.txt
+          terraform show -json tfplan-taint-recovery > tfplan-taint-recovery.json
+
+      - name: Validate exact taint-only replacement
+        id: contract
+        if: steps.recovery_plan.outputs.exitcode == '2'
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/validate_tainted_facade_recovery.py inspect-plan \
+            --plan-json tfplan-taint-recovery.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Read live Lambda configuration
+        if: steps.recovery_plan.outputs.exitcode == '2'
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          aws lambda get-function-configuration \
+            --function-name "${{ steps.contract.outputs.function_name }}" \
+            --output json > lambda-facade-configuration.json
+          python3 ../../../scripts/validate_tainted_facade_recovery.py verify-aws \
+            --configuration-json lambda-facade-configuration.json \
+            --expected-role "${{ steps.contract.outputs.role }}"
+
+      - name: Remove only the validated taint marker
+        if: steps.recovery_plan.outputs.exitcode == '2'
+        working-directory: ${{ env.STACK_PATH }}
+        run: terraform untaint 'module.agent_api_facade.aws_lambda_function.this'
+
+      - name: Re-plan and enforce normal critical-resource policy
+        if: steps.recovery_plan.outputs.exitcode == '2'
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -lock-timeout=60s -out=tfplan-after-untaint
+          exitcode=$?
+          set -e
+          if [ "$exitcode" -eq 1 ]; then exit 1; fi
+          terraform show -no-color tfplan-after-untaint > tfplan-after-untaint.txt
+          terraform show -json tfplan-after-untaint > tfplan-after-untaint.json
+          python3 ../../../scripts/terraform_plan_guard.py analyze \
+            --plan-json tfplan-after-untaint.json \
+            --summary-output tfplan-after-untaint-summary.md \
+            --policy enforce-critical
+          cat tfplan-after-untaint-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload recovery evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tainted-facade-recovery-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ env.STACK_PATH }}/tfplan-taint-recovery.txt
+            ${{ env.STACK_PATH }}/tfplan-taint-recovery.json
+            ${{ env.STACK_PATH }}/lambda-facade-configuration.json
+            ${{ env.STACK_PATH }}/tfplan-after-untaint.txt
+            ${{ env.STACK_PATH }}/tfplan-after-untaint.json
+            ${{ env.STACK_PATH }}/tfplan-after-untaint-summary.md
+          retention-days: 14
+          if-no-files-found: ignore
