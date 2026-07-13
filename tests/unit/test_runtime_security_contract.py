@@ -34,11 +34,18 @@ class RuntimeSecurityContractTests(unittest.TestCase):
         self.assertIn('SigV4Auth(credentials.get_frozen_credentials(), "bedrock-agentcore", self.region)', SOURCE)
         self.assertIn('GATEWAY_AUTH_MODE != "aws_iam"', SOURCE)
 
+    def test_all_tools_are_gateway_governed(self) -> None:
+        self.assertNotIn("from ddgs import", SOURCE)
+        self.assertNotIn("def web_search", SOURCE)
+        self.assertNotIn("@tool", SOURCE)
+        self.assertIn("tools = initialize_mcp_tools()", SOURCE)
+
     def test_mcp_initialization_is_fail_closed_and_retryable(self) -> None:
         section = SOURCE.split("def initialize_mcp_tools", 1)[1].split("def response_text", 1)[0]
         success_path = section.split("try:", 1)[1].split("except Exception", 1)[0]
         failure_path = section.split("except Exception", 1)[1]
 
+        self.assertIn("with _mcp_init_lock", section)
         self.assertIn("if REQUIRE_MCP_TOOLS and not candidate_tools", success_path)
         self.assertLess(success_path.index("candidate_tools ="), success_path.index("_mcp_initialized = True"))
         self.assertIn("_mcp_initialized = False", failure_path)
