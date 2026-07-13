@@ -29,11 +29,11 @@ variable "cognito_client_id" {
 variable "request_timeout_seconds" {
   type        = number
   description = "Facade request timeout in seconds. Keep below the API Gateway HTTP API timeout."
-  default     = 29
+  default     = 28
 
   validation {
-    condition     = var.request_timeout_seconds >= 5 && var.request_timeout_seconds <= 29
-    error_message = "request_timeout_seconds must be between 5 and 29 seconds."
+    condition     = var.request_timeout_seconds >= 5 && var.request_timeout_seconds <= 28
+    error_message = "request_timeout_seconds must be between 5 and 28 seconds."
   }
 }
 
