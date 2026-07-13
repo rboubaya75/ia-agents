@@ -93,21 +93,7 @@ jobs:
           }
           NODE
 
-      - name: Lint frontend
-        working-directory: frontend
-        run: npm run lint
-
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
-
-      - name: Verify deployable frontend artifact
-        working-directory: frontend
-        run: |
-          test -s dist/index.html
-          find dist -maxdepth 2 -type f -print
-
-      - name: Commit only the audited lockfile
+      - name: Commit audited lockfile
         run: |
           git status --short
           unexpected="$(git status --short | awk '$2 != "frontend/package-lock.json" {print}')"
@@ -125,3 +111,17 @@ jobs:
           git add frontend/package-lock.json
           git commit -m "fix: refresh audited frontend dependency lock"
           git push origin HEAD:migration/secure-agentcore-v1
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verify deployable frontend artifact
+        working-directory: frontend
+        run: |
+          test -s dist/index.html
+          find dist -maxdepth 2 -type f -print
