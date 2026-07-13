@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../../contexts/useAuth';
 import { NewPasswordRequiredError } from '../../services/authService';
 
 const Login: React.FC = () => {
