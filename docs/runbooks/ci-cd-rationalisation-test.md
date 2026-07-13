@@ -1,38 +1,36 @@
-# Rationalisation CI/CD — environnement test
+# Runbook CI/CD — Secure AgentCore V1 test
 
 - **Branche :** `migration/secure-agentcore-v1`
-- **Périmètre :** environnement `test`
-- **Architecture cible :** ADR-0004
+- **Environnement :** `test`
+- **Architecture :** ADR-0005
 
-## 1. Objectif
+## 1. Pipeline qualité
 
-Conserver deux points d’entrée opérationnels :
+```text
+.github/workflows/test-application-quality.yml
+```
 
-1. une pipeline infrastructure ;
-2. une pipeline application.
+Déclenchement : push/PR sur le code Runtime, façade, frontend, scripts ou tests.
 
-Les workflows historiques ou scripts de spike ne sont pas des points d’entrée nominaux.
+Contrôles :
 
-## 2. Pipeline infrastructure
+- Python 3.12 `py_compile` ;
+- tests unitaires façade ;
+- contrat de sécurité Runtime ;
+- tests Trip Tools ;
+- frontend `npm ci` ;
+- frontend lint ;
+- frontend build.
 
-Workflow :
+Aucune promotion ne doit être effectuée si cette pipeline est rouge.
+
+## 2. Pipeline Terraform
 
 ```text
 .github/workflows/test-terraform-stack.yml
 ```
 
-Responsabilités :
-
-- Gitleaks ;
-- vérification lockfile ;
-- `terraform fmt` ;
-- `terraform validate` ;
-- `terraform plan` ;
-- `terraform apply` manuel ;
-- `destroy-plan` ;
-- `destroy` avec confirmation.
-
-Actions disponibles :
+Actions :
 
 ```text
 plan
@@ -41,17 +39,38 @@ destroy-plan
 destroy
 ```
 
-### Règles
+Contrôles : Gitleaks, lockfile, fmt, init, validate, plan et artifacts du plan.
 
-- `apply` uniquement sur la branche par défaut de test ;
-- credentials AWS via GitHub OIDC ;
-- revue du plan obligatoire ;
-- `destroy` exige `confirm_destroy=true` ;
-- le workflow protège les ressources AgentCore existantes en conservant l’image Runtime actuelle lorsqu’elles sont déjà dans le state.
+### Plan
+
+Lancer `workflow_dispatch` avec :
+
+```text
+stack_path = infra/environments/test
+action = plan
+```
+
+Revue obligatoire :
+
+- aucun destroy inattendu ;
+- aucune réactivation Gateway-first ;
+- Runtime IAM-only ;
+- façade Lambda active ;
+- target Trip Tools présent ;
+- frontend security headers policy présente ;
+- IAM sans `bedrock-agentcore:*`.
+
+### Apply
+
+Après revue du plan :
+
+```text
+action = apply
+```
+
+L’environnement GitHub `test` et ses reviewers restent obligatoires.
 
 ## 3. Pipeline application
-
-Workflow :
 
 ```text
 .github/workflows/test-application-deploy.yml
@@ -59,185 +78,105 @@ Workflow :
 
 Modes :
 
-| Mode | Usage |
-|---|---|
-| `frontend-only` | Rebuild et redéploie uniquement React vers S3/CloudFront. |
-| `image-only` | Build et push uniquement l’image AgentCore vers ECR. |
-| `runtime-only` | Met à jour Runtime avec un tag image existant. |
-| `full` | Build/push image, applique le control plane AgentCore, puis redéploie le frontend. |
+- `frontend-only` ;
+- `image-only` ;
+- `runtime-only` ;
+- `full`.
 
-### Déploiement complet actuel
-
-```text
-Actions -> Test Application Deploy
-```
-
-Paramètres :
+Pour clôturer la V1 :
 
 ```text
 deploy_mode = full
 image_tag = test
 endpoint_name = default
+enforce_secure_facade = true
 confirm_deploy = true
 ```
 
-Le workflow actuel :
+La pipeline doit :
 
-1. lit les outputs Terraform ;
-2. construit l’image `linux/arm64` ;
-3. pousse deux tags ECR uniques ;
-4. applique Runtime, Endpoint, Memory et Gateway MCP ;
-5. relit les outputs Terraform ;
-6. exécute le gate Runtime JWT ;
-7. génère `.env.production` ;
-8. construit React ;
-9. synchronise S3 ;
-10. invalide CloudFront.
+1. valider Terraform ;
+2. construire l’image ARM64 immutable ;
+3. appliquer Runtime, resource policies, Gateway et target ;
+4. vérifier le contrat sécurisé ;
+5. construire le frontend avec `VITE_AGENT_INVOKE_URL` ;
+6. publier S3 et invalider CloudFront.
 
-### Écart actuel
-
-Le workflow injecte encore :
-
-```text
-VITE_AGENT_RUNTIME_INVOKE_URL
-```
-
-avec l’URL Runtime directe.
-
-Après remédiation ADR-0004, il devra injecter en priorité :
-
-```text
-VITE_AGENT_INVOKE_URL=<API Gateway /agent/invoke>
-```
-
-Le Runtime direct restera au maximum un fallback temporaire de rollback.
-
-## 4. Workflow recommandé frontend seul
-
-```text
-Actions -> Test Application Deploy
-
-deploy_mode = frontend-only
-confirm_deploy = true
-```
-
-Précondition actuelle : une URL d’invocation valide doit être disponible dans les outputs ou fournie en override.
-
-Après remédiation, l’URL nominale sera `agent_invoke_url` depuis API Gateway.
-
-## 5. Workflow recommandé runtime seul
-
-```text
-Actions -> Test Application Deploy
-
-deploy_mode = runtime-only
-image_tag = <tag-immutable-existant>
-endpoint_name = default
-confirm_deploy = true
-```
-
-Ne pas utiliser `image_tag=test` en `runtime-only`, car ce mode ne construit pas l’image.
-
-## 6. Modèle Bedrock
-
-Le modèle V1 courant est :
-
-```text
-eu.anthropic.claude-haiku-4-5-20251001-v1:0
-```
-
-Il a été validé avec :
-
-```text
-ConverseStream + toolConfig
-```
-
-Ne pas changer le modèle sans test préalable et validation explicite.
-
-## 7. Tests après déploiement
-
-### Infrastructure
+## 4. Outputs à contrôler
 
 ```bash
 terraform -chdir=infra/environments/test output
 ```
 
-Vérifier :
+Obligatoires :
 
 ```text
+service_url
+agent_invoke_url
+agent_api_facade_function_name
+agent_api_facade_role_arn
 agent_runtime_arn
-agent_runtime_invoke_url
 agentcore_memory_id
 agentcore_gateway_mcp_url
-service_url
-agent_invoke_url après remédiation
+agentcore_trip_tools_target_id
+trip_tools_lambda_function_name
+secure_facade_ready = true
 ```
 
-### Runtime
+`agent_runtime_invoke_url` est technique et ne doit jamais être injecté dans le frontend.
 
-Vérifier dans CloudWatch :
+## 5. Smoke tests
 
-```text
-request_accepted
-agent_invocation
-memory_retrieved / memory_saved
-gateway_tools_loaded ou gateway_tools_not_configured
-```
-
-Ne jamais afficher de token ou prompt brut.
-
-### Frontend
-
-- login Cognito ;
-- nouveau mot de passe si requis ;
-- envoi message ;
-- session UUID 36 caractères ;
-- réponse Runtime ;
-- aucun appel direct Runtime après remédiation API Gateway.
-
-### CORS après remédiation
+### CORS
 
 ```bash
 curl -i -X OPTIONS "$AGENT_INVOKE_URL" \
   -H "Origin: https://<cloudfront-domain>" \
   -H "Access-Control-Request-Method: POST" \
-  -H "Access-Control-Request-Headers: authorization,content-type,x-amzn-bedrock-agentcore-runtime-session-id"
+  -H "Access-Control-Request-Headers: authorization,content-type"
 ```
 
-## 8. Destroy test
+### Sécurité
 
-Workflow :
+- sans JWT : 401/403 ;
+- JWT invalide : 401/403 ;
+- mauvais client : rejet ;
+- `actorId`, `userId`, `tenantId`, `trustedIdentity`, `groups` : rejet ;
+- URL Runtime directe depuis un autre rôle : AccessDenied.
+
+### Fonctionnel
+
+- réponse simple ;
+- Memory User A/User B ;
+- création d’un trip ;
+- liste du trip ;
+- lecture du trip ;
+- mise à jour du trip ;
+- impossibilité de lire un trip d’un autre utilisateur.
+
+### Logs
+
+Vérifier :
 
 ```text
-.github/workflows/test-terraform-stack.yml
+facade_invocation
+agent_invocation
+gateway_tools_loaded
+tool_identity_injection
+trip_tool_invocation
 ```
 
-Paramètres :
+Absence obligatoire de JWT, prompt brut, actorId brut, sessionId brut et secret.
+
+## 6. Limite de temps
+
+Le chemin synchrone doit répondre en moins de 28 secondes. Si Memory ou un tool dépasse régulièrement cette limite, ne pas augmenter artificiellement le timeout : ouvrir un ADR pour une architecture asynchrone.
+
+## 7. Destroy
 
 ```text
 action = destroy
 confirm_destroy = true
 ```
 
-L’environnement test est destructible. Les buckets versionnés et repositories ECR sont configurés avec des options de destruction adaptées au test ; toute utilisation hors test doit revoir ces paramètres.
-
-## 9. Workflows et scripts historiques
-
-À considérer comme historiques ou diagnostic uniquement :
-
-- activation Lambda Facade ;
-- P0 Gateway-first ;
-- scripts Boto3 historiques de création Runtime ;
-- variables manuelles P0.
-
-Ils ne doivent pas être présentés comme procédure nominale.
-
-## 10. Évolutions requises V1
-
-- réaligner la pipeline frontend sur API Gateway ;
-- renommer les paramètres `gateway_first` obsolètes ;
-- ajouter smoke test API Gateway -> Runtime ;
-- ajouter CORS smoke test ;
-- ajouter test identité négatif ;
-- ajouter test Runtime -> MCP Gateway -> tool ;
-- publier les résultats de tests et plans en artifacts.
+Uniquement pour l’environnement `test`, après vérification des données et artifacts nécessaires.
