@@ -36,9 +36,14 @@ class RuntimeSecurityContractTests(unittest.TestCase):
 
     def test_mcp_initialization_is_fail_closed_and_retryable(self) -> None:
         section = SOURCE.split("def initialize_mcp_tools", 1)[1].split("def response_text", 1)[0]
-        self.assertIn("if REQUIRE_MCP_TOOLS and not candidate_tools", section)
-        self.assertIn("_mcp_initialized = False", section)
-        self.assertLess(section.index("candidate_tools ="), section.index("_mcp_initialized = True"))
+        success_path = section.split("try:", 1)[1].split("except Exception", 1)[0]
+        failure_path = section.split("except Exception", 1)[1]
+
+        self.assertIn("if REQUIRE_MCP_TOOLS and not candidate_tools", success_path)
+        self.assertLess(success_path.index("candidate_tools ="), success_path.index("_mcp_initialized = True"))
+        self.assertIn("_mcp_initialized = False", failure_path)
+        self.assertIn("if REQUIRE_MCP_TOOLS", failure_path)
+        self.assertIn("raise", failure_path)
 
     def test_tool_identity_is_overwritten_by_runtime(self) -> None:
         self.assertIn('tool_input["userId"] = self.actor_id', SOURCE)
