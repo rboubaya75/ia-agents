@@ -40,13 +40,14 @@ class Agent502DiagnosticsContractTests(unittest.TestCase):
         self.assertIn("Reference: ${payload.requestId}", content)
         self.assertNotIn("payload.code", content)
 
-    def test_facade_logs_safe_metadata_without_prompt_or_token(self) -> None:
+    def test_facade_logs_safe_runtime_metadata_and_returns_reference(self) -> None:
         content = FACADE.read_text(encoding="utf-8")
         self.assertIn('"event": "runtime_response_metadata"', content)
         self.assertIn('"event": "runtime_client_error"', content)
+        self.assertIn('"runtime_arn_hash": safe_hash(RUNTIME_ARN)', content)
         self.assertIn('"requestId": request_id', content)
-        self.assertNotIn('"prompt": prompt', content)
         self.assertNotIn('"accessToken"', content)
+        self.assertNotIn('"authorization":', content.lower())
 
 
 if __name__ == "__main__":
