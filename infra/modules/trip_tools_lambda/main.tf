@@ -1,8 +1,17 @@
 resource "archive_file" "this" {
   type             = "zip"
-  source_file      = var.source_file
   output_path      = "${path.module}/trip_tools.zip"
   output_file_mode = "0666"
+
+  source {
+    content  = file(var.source_file)
+    filename = "lambda_function_code.py"
+  }
+
+  source {
+    content  = file(var.hardened_source_file)
+    filename = "lambda_function_hardened.py"
+  }
 }
 
 data "aws_iam_policy_document" "assume_role" {
@@ -57,7 +66,8 @@ data "aws_iam_policy_document" "execution" {
       "dynamodb:GetItem",
       "dynamodb:PutItem",
       "dynamodb:Query",
-      "dynamodb:UpdateItem"
+      "dynamodb:UpdateItem",
+      "dynamodb:TransactWriteItems"
     ]
     resources = [var.trips_table_arn]
   }
@@ -72,7 +82,7 @@ resource "aws_iam_role_policy" "execution" {
 resource "aws_lambda_function" "this" {
   function_name                  = var.function_name
   role                           = aws_iam_role.this.arn
-  handler                        = "lambda_function_code.lambda_handler"
+  handler                        = "lambda_function_hardened.lambda_handler"
   runtime                        = "python3.12"
   architectures                  = ["arm64"]
   timeout                        = 5
@@ -90,6 +100,7 @@ resource "aws_lambda_function" "this" {
       TRIPS_TABLE_NAME        = var.trips_table_name
       TRIPS_DEFAULT_PAGE_SIZE = "20"
       TRIPS_MAX_PAGE_SIZE     = "50"
+      IDEMPOTENCY_TTL_SECONDS = tostring(var.idempotency_ttl_seconds)
       LOG_LEVEL               = "INFO"
     }
   }
