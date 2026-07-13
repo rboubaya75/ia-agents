@@ -131,6 +131,7 @@ jobs:
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         with:
           terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
 
       - name: Install Python deployment dependencies
         run: python3 -m pip install "boto3>=1.43.18"
@@ -160,18 +161,57 @@ jobs:
         run: |
           mode="${{ inputs.deploy_mode }}"
 
-          frontend_bucket_name="$(terraform output -raw frontend_bucket_name 2>/dev/null || true)"
-          cloudfront_distribution_id="$(terraform output -raw cloudfront_distribution_id 2>/dev/null || true)"
-          cloudfront_domain_name="$(terraform output -raw cloudfront_domain_name 2>/dev/null || true)"
-          cognito_user_pool_id="$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)"
-          cognito_web_client_id="$(terraform output -raw cognito_web_client_id 2>/dev/null || true)"
-          service_url="$(terraform output -raw service_url 2>/dev/null || true)"
-          agent_invoke_url="$(terraform output -raw agent_invoke_url 2>/dev/null || true)"
-          agent_runtime_invoke_url="$(terraform output -raw agent_runtime_invoke_url 2>/dev/null || true)"
-          ecr_repository_url="$(terraform output -raw agentcore_ecr_repository_url 2>/dev/null || true)"
-          agent_service_name="$(terraform output -raw agent_service_name 2>/dev/null || true)"
-          agent_service_role_arn="$(terraform output -raw agent_service_role_arn 2>/dev/null || true)"
-          agent_service_model_id="$(terraform output -raw agent_service_model_id 2>/dev/null || true)"
+          if ! terraform output -json > terraform-outputs.json 2>terraform-output.stderr; then
+            cat terraform-output.stderr >&2
+            echo "Unable to read Terraform outputs from the configured remote state."
+            exit 1
+          fi
+
+          if ! jq -e 'type == "object"' terraform-outputs.json >/dev/null; then
+            echo "Terraform output JSON is invalid."
+            cat terraform-outputs.json >&2
+            exit 1
+          fi
+
+          output_count="$(jq 'length' terraform-outputs.json)"
+          if [ "$output_count" -eq 0 ]; then
+            state_count="$(terraform state list 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            echo "Terraform remote state exposes no outputs (managed resource count: ${state_count:-0})."
+            echo "Run Test Terraform Stack with action=apply to refresh state outputs before application deployment."
+            exit 1
+          fi
+
+          tf_output() {
+            jq -r --arg key "$1" '
+              .[$key].value // ""
+              | if type == "string" then . elif . == null then "" else tostring end
+            ' terraform-outputs.json
+          }
+
+          frontend_bucket_name="$(tf_output frontend_bucket_name)"
+          cloudfront_distribution_id="$(tf_output cloudfront_distribution_id)"
+          cloudfront_domain_name="$(tf_output cloudfront_domain_name)"
+          cognito_user_pool_id="$(tf_output cognito_user_pool_id)"
+          cognito_web_client_id="$(tf_output cognito_web_client_id)"
+          service_url="$(tf_output service_url)"
+          agent_invoke_url="$(tf_output agent_invoke_url)"
+          agent_runtime_invoke_url="$(tf_output agent_runtime_invoke_url)"
+          ecr_repository_url="$(tf_output agentcore_ecr_repository_url)"
+          agent_service_name="$(tf_output agent_service_name)"
+          agent_service_role_arn="$(tf_output agent_service_role_arn)"
+          agent_service_model_id="$(tf_output agent_service_model_id)"
+
+          for output_name in \
+            frontend_bucket_name cloudfront_distribution_id cloudfront_domain_name \
+            cognito_user_pool_id cognito_web_client_id service_url agent_invoke_url \
+            agent_runtime_invoke_url ecr_repository_url agent_service_name \
+            agent_service_role_arn agent_service_model_id; do
+            output_value="${!output_name}"
+            if [[ "$output_value" == *$'\n'* || "$output_value" == *$'\r'* ]]; then
+              echo "Terraform output ${output_name} contains an unsupported line break."
+              exit 1
+            fi
+          done
 
           resolved_api_base_url="${{ inputs.api_base_url }}"
           if [ -z "$resolved_api_base_url" ]; then
@@ -281,6 +321,7 @@ jobs:
         if: inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full'
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
+          set +e
           terraform plan \
             -detailed-exitcode \
             -lock-timeout=60s \
@@ -288,17 +329,20 @@ jobs:
             -var="agentcore_image_tag=${{ steps.tfout.outputs.resolved_image_tag }}" \
             -var="agent_runtime_endpoint_name=${{ inputs.endpoint_name }}" \
             -out=tfplan-agentcore-control-plane
-        continue-on-error: true
+          exitcode=$?
+          set -e
 
-      - name: Fail on AgentCore plan error
-        if: |
-          (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
-          steps.agentcore_plan.outputs.exitcode == '1'
-        run: exit 1
+          echo "exitcode=$exitcode" >> "$GITHUB_OUTPUT"
+          if [ "$exitcode" -ne 0 ] && [ "$exitcode" -ne 2 ]; then
+            echo "Terraform AgentCore plan failed with exit code $exitcode."
+            exit 1
+          fi
+          test -s tfplan-agentcore-control-plane
 
       - name: Render AgentCore plan evidence
         if: |
           (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.conclusion == 'success' &&
           (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
@@ -309,6 +353,7 @@ jobs:
         id: agentcore_plan_guard
         if: |
           (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.conclusion == 'success' &&
           (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
@@ -322,6 +367,7 @@ jobs:
         if: |
           always() &&
           (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.conclusion == 'success' &&
           (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
@@ -337,6 +383,7 @@ jobs:
         if: |
           always() &&
           (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.conclusion == 'success' &&
           (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         working-directory: ${{ steps.stack.outputs.path }}
         run: cat tfplan-agentcore-control-plane-summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -345,6 +392,7 @@ jobs:
         if: |
           always() &&
           (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.conclusion == 'success' &&
           (steps.agentcore_plan.outputs.exitcode == '0' || steps.agentcore_plan.outputs.exitcode == '2')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -361,6 +409,7 @@ jobs:
       - name: Fail on unsafe AgentCore plan
         if: |
           (inputs.deploy_mode == 'runtime-only' || inputs.deploy_mode == 'full') &&
+          steps.agentcore_plan.conclusion == 'success' &&
           steps.agentcore_plan_guard.outcome == 'failure'
         run: |
           echo "AgentCore Terraform plan contains a blocked deletion or replacement of a critical resource."
@@ -452,9 +501,53 @@ jobs:
         id: tfout_after
         working-directory: ${{ steps.stack.outputs.path }}
         run: |
-          service_url="$(terraform output -raw service_url 2>/dev/null || true)"
-          agent_invoke_url="$(terraform output -raw agent_invoke_url 2>/dev/null || true)"
-          agent_runtime_invoke_url="$(terraform output -raw agent_runtime_invoke_url 2>/dev/null || true)"
+          if ! terraform output -json > terraform-outputs-after.json 2>terraform-output-after.stderr; then
+            cat terraform-output-after.stderr >&2
+            echo "Unable to refresh Terraform outputs after the reviewed apply."
+            exit 1
+          fi
+
+          if ! jq -e 'type == "object" and length > 0' terraform-outputs-after.json >/dev/null; then
+            echo "Terraform outputs are missing after the reviewed apply."
+            exit 1
+          fi
+
+          tf_output() {
+            jq -r --arg key "$1" '
+              .[$key].value // ""
+              | if type == "string" then . elif . == null then "" else tostring end
+            ' terraform-outputs-after.json
+          }
+
+          service_url="$(tf_output service_url)"
+          agent_invoke_url="$(tf_output agent_invoke_url)"
+          agent_runtime_invoke_url="$(tf_output agent_runtime_invoke_url)"
+          cloudfront_domain_name="$(tf_output cloudfront_domain_name)"
+          frontend_bucket_name="$(tf_output frontend_bucket_name)"
+          cloudfront_distribution_id="$(tf_output cloudfront_distribution_id)"
+          cognito_user_pool_id="$(tf_output cognito_user_pool_id)"
+          cognito_web_client_id="$(tf_output cognito_web_client_id)"
+          agentcore_gateway_mcp_url="$(tf_output agentcore_gateway_mcp_url)"
+          agentcore_memory_id="$(tf_output agentcore_memory_id)"
+          agent_runtime_arn="$(tf_output agent_runtime_arn)"
+          facade_function_name="$(tf_output agent_api_facade_function_name)"
+          trip_tools_function_name="$(tf_output trip_tools_lambda_function_name)"
+          trip_tools_target_id="$(tf_output agentcore_trip_tools_target_id)"
+          secure_facade_ready="$(tf_output secure_facade_ready)"
+
+          for output_name in \
+            service_url agent_invoke_url agent_runtime_invoke_url cloudfront_domain_name \
+            frontend_bucket_name cloudfront_distribution_id cognito_user_pool_id \
+            cognito_web_client_id agentcore_gateway_mcp_url agentcore_memory_id \
+            agent_runtime_arn facade_function_name trip_tools_function_name \
+            trip_tools_target_id secure_facade_ready; do
+            output_value="${!output_name}"
+            if [[ "$output_value" == *$'\n'* || "$output_value" == *$'\r'* ]]; then
+              echo "Terraform output ${output_name} contains an unsupported line break."
+              exit 1
+            fi
+          done
+
           resolved_api_base_url="${{ inputs.api_base_url }}"
           if [ -z "$resolved_api_base_url" ]; then
             resolved_api_base_url="$service_url"
@@ -469,18 +562,18 @@ jobs:
             echo "resolved_agent_invoke_url=$resolved_agent_invoke_url"
             echo "agent_runtime_invoke_url=$agent_runtime_invoke_url"
             echo "service_url=$service_url"
-            echo "cloudfront_domain_name=$(terraform output -raw cloudfront_domain_name 2>/dev/null || true)"
-            echo "frontend_bucket_name=$(terraform output -raw frontend_bucket_name 2>/dev/null || true)"
-            echo "cloudfront_distribution_id=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || true)"
-            echo "cognito_user_pool_id=$(terraform output -raw cognito_user_pool_id 2>/dev/null || true)"
-            echo "cognito_web_client_id=$(terraform output -raw cognito_web_client_id 2>/dev/null || true)"
-            echo "agentcore_gateway_mcp_url=$(terraform output -raw agentcore_gateway_mcp_url 2>/dev/null || true)"
-            echo "agentcore_memory_id=$(terraform output -raw agentcore_memory_id 2>/dev/null || true)"
-            echo "agent_runtime_arn=$(terraform output -raw agent_runtime_arn 2>/dev/null || true)"
-            echo "facade_function_name=$(terraform output -raw agent_api_facade_function_name 2>/dev/null || true)"
-            echo "trip_tools_function_name=$(terraform output -raw trip_tools_lambda_function_name 2>/dev/null || true)"
-            echo "trip_tools_target_id=$(terraform output -raw agentcore_trip_tools_target_id 2>/dev/null || true)"
-            echo "secure_facade_ready=$(terraform output -raw secure_facade_ready 2>/dev/null || true)"
+            echo "cloudfront_domain_name=$cloudfront_domain_name"
+            echo "frontend_bucket_name=$frontend_bucket_name"
+            echo "cloudfront_distribution_id=$cloudfront_distribution_id"
+            echo "cognito_user_pool_id=$cognito_user_pool_id"
+            echo "cognito_web_client_id=$cognito_web_client_id"
+            echo "agentcore_gateway_mcp_url=$agentcore_gateway_mcp_url"
+            echo "agentcore_memory_id=$agentcore_memory_id"
+            echo "agent_runtime_arn=$agent_runtime_arn"
+            echo "facade_function_name=$facade_function_name"
+            echo "trip_tools_function_name=$trip_tools_function_name"
+            echo "trip_tools_target_id=$trip_tools_target_id"
+            echo "secure_facade_ready=$secure_facade_ready"
           } >> "$GITHUB_OUTPUT"
 
       - name: Secure V1 deployment contract gate
