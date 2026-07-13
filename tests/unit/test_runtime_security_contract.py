@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+import unittest
+
+RUNTIME_PATH = Path(__file__).resolve().parents[2] / "deploy-agentcore" / "agents" / "phase_4.py"
+SOURCE = RUNTIME_PATH.read_text(encoding="utf-8")
+TREE = ast.parse(SOURCE)
+
+
+class RuntimeSecurityContractTests(unittest.TestCase):
+    def test_runtime_source_is_valid_python(self) -> None:
+        compile(SOURCE, str(RUNTIME_PATH), "exec")
+
+    def test_runtime_no_longer_decodes_browser_jwt(self) -> None:
+        forbidden_fragments = (
+            "_decode_jwt_claims_unverified",
+            "Authorization header",
+            "Runtime-validated JWT",
+            "import base64",
+            "import requests",
+        )
+        for fragment in forbidden_fragments:
+            self.assertNotIn(fragment, SOURCE)
+
+    def test_runtime_requires_server_generated_trusted_identity(self) -> None:
+        self.assertIn('ALLOWED_REQUEST_FIELDS = {"prompt", "sessionId", "trustedIdentity"}', SOURCE)
+        self.assertIn('set(trusted_identity) != {"actorId"}', SOURCE)
+        self.assertIn("A server-generated trustedIdentity is required.", SOURCE)
+
+    def test_runtime_signs_gateway_calls_with_sigv4(self) -> None:
+        self.assertIn("class AgentCoreSigV4Auth", SOURCE)
+        self.assertIn('SigV4Auth(credentials.get_frozen_credentials(), "bedrock-agentcore", self.region)', SOURCE)
+        self.assertIn('GATEWAY_AUTH_MODE != "aws_iam"', SOURCE)
+
+    def test_tool_identity_is_overwritten_by_runtime(self) -> None:
+        self.assertIn('tool_input["userId"] = self.actor_id', SOURCE)
+
+    def test_no_eval_or_exec_calls(self) -> None:
+        for node in ast.walk(TREE):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                self.assertNotIn(node.func.id, {"eval", "exec"})
+
+
+if __name__ == "__main__":
+    unittest.main()
