@@ -1,4 +1,11 @@
-import React, { createContext, useEffect, useState, type ReactNode } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import type { AuthState } from '../types';
 import * as authService from '../services/authService';
 import { NewPasswordRequiredError } from '../services/authService';
@@ -9,6 +16,7 @@ export interface AuthContextType extends AuthState {
   completeNewPassword: (newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshToken: () => Promise<void>;
+  getValidAccessToken: () => Promise<string>;
   registerChatCleanup: (cleanup: () => void) => void;
   newPasswordRequired: boolean;
   pendingUsername: string | null;
@@ -20,14 +28,15 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [authState, setAuthState] = useState<AuthState>({
-    isAuthenticated: false,
-    user: null,
-    userId: null,
-    jwtToken: null,
-  });
+const EMPTY_AUTH_STATE: AuthState = {
+  isAuthenticated: false,
+  user: null,
+  userId: null,
+  jwtToken: null,
+};
 
+export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  const [authState, setAuthState] = useState<AuthState>(EMPTY_AUTH_STATE);
   const [newPasswordRequired, setNewPasswordRequired] = useState(false);
   const [pendingUsername, setPendingUsername] = useState<string | null>(null);
   const [chatCleanup, setChatCleanup] = useState<(() => void) | null>(null);
@@ -46,25 +55,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           jwtToken,
         });
       } catch {
-        setAuthState({
-          isAuthenticated: false,
-          user: null,
-          userId: null,
-          jwtToken: null,
-        });
+        setAuthState(EMPTY_AUTH_STATE);
       }
     };
 
-    checkExistingSession();
+    void checkExistingSession();
   }, []);
 
-  const login = async (username: string, password: string): Promise<void> => {
+  const login = useCallback(async (username: string, password: string): Promise<void> => {
     try {
       const result = await authService.login(username, password);
 
       setNewPasswordRequired(false);
       setPendingUsername(null);
-
       setAuthState({
         isAuthenticated: true,
         user: result.user,
@@ -72,12 +75,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         jwtToken: result.jwtToken,
       });
     } catch (error) {
-      setAuthState({
-        isAuthenticated: false,
-        user: null,
-        userId: null,
-        jwtToken: null,
-      });
+      setAuthState(EMPTY_AUTH_STATE);
 
       if (error instanceof NewPasswordRequiredError) {
         setNewPasswordRequired(true);
@@ -86,79 +84,79 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       throw error;
     }
-  };
+  }, []);
 
-  const completeNewPassword = async (newPassword: string): Promise<void> => {
+  const completeNewPassword = useCallback(async (newPassword: string): Promise<void> => {
     const result = await authService.completeNewPassword(newPassword);
 
     setNewPasswordRequired(false);
     setPendingUsername(null);
-
     setAuthState({
       isAuthenticated: true,
       user: result.user,
       userId: result.userId,
       jwtToken: result.jwtToken,
     });
-  };
+  }, []);
 
-  const registerChatCleanup = (cleanup: () => void): void => {
+  const registerChatCleanup = useCallback((cleanup: () => void): void => {
     setChatCleanup(() => cleanup);
-  };
+  }, []);
 
-  const logout = async (): Promise<void> => {
+  const logout = useCallback(async (): Promise<void> => {
     try {
       await authService.logout();
     } finally {
-      if (chatCleanup) {
-        chatCleanup();
-      }
-
+      chatCleanup?.();
       setNewPasswordRequired(false);
       setPendingUsername(null);
-
-      setAuthState({
-        isAuthenticated: false,
-        user: null,
-        userId: null,
-        jwtToken: null,
-      });
+      setAuthState(EMPTY_AUTH_STATE);
     }
-  };
+  }, [chatCleanup]);
 
-  const refreshToken = async (): Promise<void> => {
+  const getValidAccessToken = useCallback(async (): Promise<string> => {
     try {
       const jwtToken = await authService.getJwtToken();
       const userId = extractUserId(jwtToken);
-      const user = await authService.getCurrentUser();
 
-      setAuthState({
+      setAuthState((current) => ({
+        ...current,
         isAuthenticated: true,
-        user,
         userId,
         jwtToken,
-      });
+      }));
+      return jwtToken;
     } catch (error) {
-      setAuthState({
-        isAuthenticated: false,
-        user: null,
-        userId: null,
-        jwtToken: null,
-      });
+      setAuthState(EMPTY_AUTH_STATE);
       throw error;
     }
-  };
+  }, []);
 
-  const value: AuthContextType = {
+  const refreshToken = useCallback(async (): Promise<void> => {
+    await getValidAccessToken();
+  }, [getValidAccessToken]);
+
+  const value = useMemo<AuthContextType>(() => ({
     ...authState,
     login,
     completeNewPassword,
     logout,
     refreshToken,
+    getValidAccessToken,
     registerChatCleanup,
     newPasswordRequired,
     pendingUsername,
-  };
+  }), [
+    authState,
+    completeNewPassword,
+    getValidAccessToken,
+    login,
+    logout,
+    newPasswordRequired,
+    pendingUsername,
+    refreshToken,
+    registerChatCleanup,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

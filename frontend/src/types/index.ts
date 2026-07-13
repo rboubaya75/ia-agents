@@ -47,30 +47,31 @@ export interface AuthService {
 
 // Chat service types
 export interface AgentCoreRequest {
-  input: {
-    prompt: string;
-  };
+  prompt: string;
+  sessionId: string;
+  operationId: string;
 }
 
 export interface AgentCoreResponse {
-  output: {
-    message: string;
-    timestamp?: string;
-    model?: string;
-  };
+  message: string;
+  sessionId?: string;
+  operationId?: string;
+  requestId?: string;
 }
 
 export interface ChatResponse {
   message: string;
   timestamp?: string;
+  operationId: string;
+  requestId?: string;
 }
 
 export interface ChatService {
   sendMessage(
     message: string,
     sessionId: string,
-    actorId: string,
-    jwtToken: string
+    getAccessToken: () => Promise<string>,
+    existingOperationId?: string,
   ): Promise<ChatResponse>;
 }
 
