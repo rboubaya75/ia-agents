@@ -352,27 +352,38 @@ def initialize_mcp_tools() -> list[Any]:
     global _mcp_initialized, mcp_client, mcp_tools
     if _mcp_initialized:
         return mcp_tools
-    _mcp_initialized = True
 
     if not GATEWAY_URL:
         if REQUIRE_MCP_TOOLS:
             raise RuntimeError("GATEWAY_URL is required for V1 MCP tools.")
         logger.warning("gateway_tools_not_configured")
+        _mcp_initialized = True
         return []
     if GATEWAY_AUTH_MODE != "aws_iam":
         raise RuntimeError("Only aws_iam MCP Gateway authentication is supported in V1.")
 
     try:
-        mcp_client = MCPClient(lambda: create_iam_mcp_transport(GATEWAY_URL))
-        mcp_client.__enter__()
-        mcp_tools = get_all_mcp_tools(mcp_client)
+        candidate_client = MCPClient(lambda: create_iam_mcp_transport(GATEWAY_URL))
+        candidate_client.__enter__()
+        candidate_tools = get_all_mcp_tools(candidate_client)
+        if REQUIRE_MCP_TOOLS and not candidate_tools:
+            candidate_client.__exit__(None, None, None)
+            raise RuntimeError("AgentCore Gateway returned no MCP tools for V1.")
+
+        mcp_client = candidate_client
+        mcp_tools = candidate_tools
+        _mcp_initialized = True
         logger.info(json.dumps({"event": "gateway_tools_loaded", "count": len(mcp_tools)}))
+        return mcp_tools
     except Exception as exc:
+        mcp_client = None
+        mcp_tools = []
+        _mcp_initialized = False
         logger.error(json.dumps({"event": "gateway_tools_load_failed", "error_type": type(exc).__name__}))
         if REQUIRE_MCP_TOOLS:
             raise
-        mcp_tools = []
-    return mcp_tools
+        _mcp_initialized = True
+        return []
 
 
 def response_text(response: Any) -> str:
