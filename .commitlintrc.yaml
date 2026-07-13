@@ -12,6 +12,7 @@ rules:
       - refactor
       - revert
       - style
+      - terraform
       - test
   subject-empty:
     - 2

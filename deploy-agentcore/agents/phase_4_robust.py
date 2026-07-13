@@ -1,4 +1,5 @@
 """Bounded transport adapter for the Secure V1 AgentCore Runtime."""
+
 from __future__ import annotations
 
 import os
@@ -33,7 +34,9 @@ for timeout_name, timeout_value in {
     "MCP_POOL_TIMEOUT_SECONDS": MCP_POOL_TIMEOUT_SECONDS,
 }.items():
     if timeout_value <= 0 or timeout_value > 20:
-        raise RuntimeError(f"{timeout_name} must be greater than 0 and at most 20 seconds.")
+        raise RuntimeError(
+            f"{timeout_name} must be greater than 0 and at most 20 seconds."
+        )
 
 if "get_trips is paginated" not in base.PHASE4_SYSTEM_PROMPT_BASE:
     base.PHASE4_SYSTEM_PROMPT_BASE += (
@@ -70,4 +73,5 @@ def __getattr__(name: str) -> Any:
 
 
 if __name__ == "__main__":
+    base.initialize_mcp_tools()
     app.run()

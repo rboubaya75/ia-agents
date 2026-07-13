@@ -22,7 +22,7 @@ export const ChatContainer: React.FC = () => {
     setError,
   } = useChatContext();
 
-  const { jwtToken } = useAuth();
+  const { getValidAccessToken } = useAuth();
 
   const handleSendMessage = async (messageContent: string) => {
     setError(null);
@@ -30,11 +30,7 @@ export const ChatContainer: React.FC = () => {
     setLoading(true);
 
     try {
-      if (!jwtToken) {
-        throw new Error('Authentication token is missing. Please log in again.');
-      }
-
-      const response = await sendMessage(messageContent, sessionId, jwtToken);
+      const response = await sendMessage(messageContent, sessionId, getValidAccessToken);
       addMessage(response.message, 'system');
     } catch (err) {
       const errorMessage = err instanceof Error

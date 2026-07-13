@@ -30,7 +30,7 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
   count              = var.enable_agentcore_control_plane ? 1 : 0
   name               = "${local.name_prefix}-trip-tools"
   gateway_identifier = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_id
-  description        = "Authenticated trip CRUD tools backed by DynamoDB."
+  description        = "Authenticated and idempotent trip CRUD tools backed by DynamoDB."
 
   credential_provider_configuration {
     gateway_iam_role {}
@@ -44,13 +44,28 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
         tool_schema {
           inline_payload {
             name        = "create_trip"
-            description = "Create a trip for the authenticated user. userId is injected by Runtime."
+            description = "Create a trip after explicit user confirmation. Identity, operation and deadline fields are injected by Runtime."
             input_schema {
               type = "object"
               property {
                 name        = "userId"
                 type        = "string"
                 description = "Server-injected user identifier."
+              }
+              property {
+                name        = "operationId"
+                type        = "string"
+                description = "Server-injected idempotency key."
+              }
+              property {
+                name        = "requestId"
+                type        = "string"
+                description = "Server-injected request correlation identifier."
+              }
+              property {
+                name        = "deadlineEpochMs"
+                type        = "integer"
+                description = "Server-injected execution deadline."
               }
               property {
                 name        = "tripName"
@@ -87,13 +102,23 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
 
           inline_payload {
             name        = "get_trips"
-            description = "List one bounded page of trips for the authenticated user. userId is injected by Runtime."
+            description = "List one bounded page of trips for the authenticated user. Runtime injects identity and request context."
             input_schema {
               type = "object"
               property {
                 name        = "userId"
                 type        = "string"
                 description = "Server-injected user identifier."
+              }
+              property {
+                name        = "requestId"
+                type        = "string"
+                description = "Server-injected request correlation identifier."
+              }
+              property {
+                name        = "deadlineEpochMs"
+                type        = "integer"
+                description = "Server-injected execution deadline."
               }
               property {
                 name        = "limit"
@@ -119,6 +144,16 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
                 description = "Server-injected user identifier."
               }
               property {
+                name        = "requestId"
+                type        = "string"
+                description = "Server-injected request correlation identifier."
+              }
+              property {
+                name        = "deadlineEpochMs"
+                type        = "integer"
+                description = "Server-injected execution deadline."
+              }
+              property {
                 name        = "tripId"
                 type        = "string"
                 description = "Trip identifier."
@@ -129,13 +164,28 @@ resource "aws_bedrockagentcore_gateway_target" "trip_tools" {
 
           inline_payload {
             name        = "update_trip"
-            description = "Update one trip belonging to the authenticated user."
+            description = "Update one trip after explicit user confirmation. Runtime injects identity, operation and deadline fields."
             input_schema {
               type = "object"
               property {
                 name        = "userId"
                 type        = "string"
                 description = "Server-injected user identifier."
+              }
+              property {
+                name        = "operationId"
+                type        = "string"
+                description = "Server-injected idempotency key."
+              }
+              property {
+                name        = "requestId"
+                type        = "string"
+                description = "Server-injected request correlation identifier."
+              }
+              property {
+                name        = "deadlineEpochMs"
+                type        = "integer"
+                description = "Server-injected execution deadline."
               }
               property {
                 name        = "tripId"

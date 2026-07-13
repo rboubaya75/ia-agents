@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import type { ChatResponse } from '../types';
 
 const AGENT_INVOKE_URL =
@@ -12,6 +13,8 @@ type AgentErrorPayload = {
   message?: unknown;
   requestId?: unknown;
 };
+
+export type AccessTokenProvider = () => Promise<string>;
 
 const getAgentInvokeEndpoint = (): string => {
   if (AGENT_INVOKE_URL) {
@@ -40,10 +43,30 @@ const getErrorMessage = async (response: Response): Promise<string> => {
   return GENERIC_AGENT_ERROR;
 };
 
+const invokeAgent = (
+  prompt: string,
+  sessionId: string,
+  operationId: string,
+  accessToken: string,
+  signal: AbortSignal,
+): Promise<Response> => fetch(getAgentInvokeEndpoint(), {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    prompt,
+    sessionId,
+    operationId,
+  }),
+  signal,
+});
+
 export const sendMessage = async (
   message: string,
   sessionId: string,
-  accessToken: string
+  getAccessToken: AccessTokenProvider,
 ): Promise<ChatResponse> => {
   const prompt = message.trim();
   if (!prompt) {
@@ -55,26 +78,26 @@ export const sendMessage = async (
   if (!SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error('Invalid session ID');
   }
-  if (!accessToken) {
-    throw new Error('Authentication token is required');
-  }
 
+  const operationId = uuidv4();
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
   try {
-    const response = await fetch(getAgentInvokeEndpoint(), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        prompt,
-        sessionId,
-      }),
-      signal: controller.signal,
-    });
+    let accessToken = await getAccessToken();
+    if (!accessToken) {
+      throw new Error('Authentication token is required');
+    }
+
+    let response = await invokeAgent(prompt, sessionId, operationId, accessToken, controller.signal);
+
+    if (response.status === 401) {
+      accessToken = await getAccessToken();
+      if (!accessToken) {
+        throw new Error('Authentication token renewal failed');
+      }
+      response = await invokeAgent(prompt, sessionId, operationId, accessToken, controller.signal);
+    }
 
     if (!response.ok) {
       const messageText = await getErrorMessage(response);
@@ -85,10 +108,25 @@ export const sendMessage = async (
     let responseText: string;
 
     if (contentType?.includes('application/json')) {
-      const data = await response.json();
-      responseText = data.message || data.output?.message || data.response || JSON.stringify(data);
+      const data: unknown = await response.json();
+      if (typeof data !== 'object' || data === null) {
+        throw new Error(GENERIC_AGENT_ERROR);
+      }
+      const payload = data as {
+        message?: unknown;
+        output?: { message?: unknown };
+        response?: unknown;
+      };
+      const candidate = payload.message ?? payload.output?.message ?? payload.response;
+      if (typeof candidate !== 'string' || !candidate.trim()) {
+        throw new Error(GENERIC_AGENT_ERROR);
+      }
+      responseText = candidate.trim();
     } else {
-      responseText = await response.text();
+      responseText = (await response.text()).trim();
+      if (!responseText) {
+        throw new Error(GENERIC_AGENT_ERROR);
+      }
     }
 
     return {
