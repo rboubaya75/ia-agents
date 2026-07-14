@@ -71,15 +71,23 @@ jobs:
       - name: Verify Runtime imports
         run: |
           python - <<'PY'
+          import inspect
+
           from bedrock_agentcore.memory import MemoryClient
           from bedrock_agentcore.runtime import BedrockAgentCoreApp, RequestContext
-          from mcp.client.streamable_http import streamablehttp_client
+          from mcp.client.streamable_http import streamable_http_client
           from strands import Agent
           from strands.hooks import AfterInvocationEvent, HookProvider, HookRegistry, MessageAddedEvent
           from strands.models import BedrockModel
           from strands.session import FileSessionManager
           from strands.tools.mcp.mcp_client import MCPClient
-          print("Runtime imports verified")
+
+          parameters = inspect.signature(streamable_http_client).parameters
+          if "http_client" not in parameters:
+              raise RuntimeError(
+                  "The pinned MCP streamable_http_client API does not accept http_client."
+              )
+          print("Runtime imports and MCP transport signature verified")
           PY
 
       - name: Run unit security contracts
