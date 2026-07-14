@@ -29,12 +29,10 @@ os.environ.update(
     }
 )
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "deploy-agentcore"
-    / "agents"
-    / "phase_4_robust.py"
-)
+ROOT = Path(__file__).resolve().parents[2]
+MODULE_PATH = ROOT / "deploy-agentcore" / "agents" / "phase_4_robust.py"
+ENTRYPOINT_PATH = ROOT / "deploy-agentcore" / "agents" / "entrypoint.py"
+DOCKERFILE_PATH = ROOT / "deploy-agentcore" / "Dockerfile"
 SPEC = importlib.util.spec_from_file_location("secure_runtime_robustness", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"Unable to load Runtime module from {MODULE_PATH}")
@@ -211,12 +209,14 @@ class RuntimeRobustnessTests(unittest.TestCase):
         initialize_mock.assert_called_once()
         reset_mock.assert_not_called()
 
-    def test_runtime_entrypoint_prewarms_gateway(self) -> None:
-        source = MODULE_PATH.read_text(encoding="utf-8")
-        self.assertIn("base.initialize_mcp_tools()", source)
-        self.assertLess(
-            source.index("base.initialize_mcp_tools()"), source.index("app.run()")
-        )
+    def test_container_entrypoint_starts_http_without_mcp_prewarm(self) -> None:
+        entrypoint = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+        dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('CMD ["python", "-m", "agents.entrypoint"]', dockerfile)
+        self.assertIn("app.run()", entrypoint)
+        self.assertNotIn("initialize_mcp_tools", entrypoint)
+        self.assertNotIn("phase_4_robust\"]", dockerfile)
 
 
 if __name__ == "__main__":

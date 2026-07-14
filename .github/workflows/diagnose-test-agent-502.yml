@@ -130,11 +130,13 @@ jobs:
         run: |
           mkdir -p diagnostics
           session_id="sid-v1-$(printf '%s' "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${GITHUB_SHA}" | sha256sum | awk '{print $1}')"
+          operation_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
           jq -nc \
             --arg client_id "${{ steps.contract.outputs.cognito_client_id }}" \
             --arg session_id "$session_id" \
+            --arg operation_id "$operation_id" \
             '{
-              body: ({prompt:"Reply with OK only. Do not call tools.", sessionId:$session_id} | tojson),
+              body: ({prompt:"Reply with OK only. Do not call tools.", sessionId:$session_id, operationId:$operation_id} | tojson),
               isBase64Encoded:false,
               requestContext:{authorizer:{jwt:{claims:{sub:"diagnostic-workflow",client_id:$client_id,token_use:"access"}}}}
             }' > diagnostics/smoke-event.json
@@ -160,11 +162,14 @@ jobs:
           body_error="$(jq -r '.body | fromjson? | .error // ""' diagnostics/smoke-response.json)"
           body_code="$(jq -r '.body | fromjson? | .code // ""' diagnostics/smoke-response.json)"
           request_id="$(jq -r '.body | fromjson? | .requestId // ""' diagnostics/smoke-response.json)"
+          response_operation_id="$(jq -r '.body | fromjson? | .operationId // ""' diagnostics/smoke-response.json)"
           {
             echo "api_status=$api_status"
             echo "body_error=$body_error"
             echo "body_code=$body_code"
             echo "request_id=$request_id"
+            echo "operation_id=$operation_id"
+            echo "response_operation_id=$response_operation_id"
           } >> "$GITHUB_OUTPUT"
 
       - name: Collect CloudWatch evidence
@@ -214,6 +219,8 @@ jobs:
             echo "- Facade error category: \`${{ steps.smoke.outputs.body_error || 'none' }}\`"
             echo "- AWS error code: \`${{ steps.smoke.outputs.body_code || 'none' }}\`"
             echo "- Correlation reference: \`${{ steps.smoke.outputs.request_id || 'not-available' }}\`"
+            echo "- Request operation ID present: \`${{ steps.smoke.outputs.operation_id != '' }}\`"
+            echo "- Response operation ID matches request: \`${{ steps.smoke.outputs.operation_id == steps.smoke.outputs.response_operation_id }}\`"
             echo "- Facade log events collected: \`${facade_event_count}\`"
             echo "- Runtime log groups found: \`${runtime_group_count}\`"
             echo "- Runtime log events collected: \`${runtime_event_count}\`"
@@ -236,5 +243,9 @@ jobs:
           status="${{ steps.smoke.outputs.api_status }}"
           if [ -z "$status" ] || [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
             echo "The deployed facade smoke request failed. Review the diagnostic summary and artifact."
+            exit 1
+          fi
+          if [ "${{ steps.smoke.outputs.operation_id }}" != "${{ steps.smoke.outputs.response_operation_id }}" ]; then
+            echo "The deployed facade did not preserve the smoke operation identifier."
             exit 1
           fi
