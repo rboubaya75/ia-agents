@@ -11,4 +11,4 @@ COPY --chown=bedrock_agentcore:bedrock_agentcore . .
 
 USER bedrock_agentcore
 EXPOSE 8080
-CMD ["python", "-m", "agents.phase_4_robust"]
+CMD ["python", "-m", "agents.entrypoint"]
