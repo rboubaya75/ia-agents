@@ -23,7 +23,7 @@ from typing import Any, Dict
 
 import httpx
 from bedrock_agentcore.runtime import BedrockAgentCoreApp, RequestContext
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 try:
     from . import phase_4 as base
@@ -217,7 +217,7 @@ async def create_iam_mcp_transport(gateway_url: str):
         auth=base.AgentCoreSigV4Auth(base.REGION),
         timeout=mcp_httpx_timeout(),
     ) as client:
-        async with streamablehttp_client(gateway_url, http_client=client) as streams:
+        async with streamable_http_client(gateway_url, http_client=client) as streams:
             yield streams
 
 
