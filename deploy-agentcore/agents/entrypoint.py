@@ -7,7 +7,11 @@ its bounded retry and error handling already apply.
 
 from __future__ import annotations
 
-from .phase_4_robust import app
+from . import phase_4_robust as runtime
+from .memory_support import configure_runtime_memory
+
+configure_runtime_memory(runtime.base)
+app = runtime.app
 
 
 def main() -> None:

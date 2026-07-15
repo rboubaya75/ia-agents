@@ -1,0 +1,2 @@
+# Reproducible control-plane dependency used by Terraform local-exec.
+boto3==1.43.46
