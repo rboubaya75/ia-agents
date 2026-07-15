@@ -1,5 +1,5 @@
 locals {
-  agentcore_memory_strategy_name      = "TravelPreferences"
+  agentcore_memory_strategy_name       = "TravelPreferences"
   agentcore_memory_namespace_template = "/travel/{actorId}/preferences"
 }
 
@@ -16,16 +16,61 @@ resource "terraform_data" "agentcore_memory_preferences_strategy" {
   count = var.enable_agentcore_control_plane ? 1 : 0
 
   triggers_replace = {
-    memory_id          = aws_bedrockagentcore_memory.agent[0].id
-    strategy_name      = local.agentcore_memory_strategy_name
-    namespace_template = local.agentcore_memory_namespace_template
-    script_sha256      = filesha256("${path.root}/../../../scripts/configure_agentcore_memory_strategy.py")
+    memory_id            = aws_bedrockagentcore_memory.agent[0].id
+    strategy_name        = local.agentcore_memory_strategy_name
+    namespace_template   = local.agentcore_memory_namespace_template
+    deployment_revision  = var.agentcore_image_tag
+    script_sha256        = filesha256("${path.root}/../../../scripts/configure_agentcore_memory_strategy.py")
+    requirements_sha256  = filesha256("${path.root}/../../../deploy-agentcore/requirements-deploy.txt")
   }
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-EOT
-      python3 "$SCRIPT_PATH" ensure \
+      set -euo pipefail
+      VENV_DIR="$${RUNNER_TEMP:-/tmp}/agentcore-memory-$MEMORY_ID"
+      python3 -m venv "$VENV_DIR"
+      "$VENV_DIR/bin/python" -m pip install \
+        --disable-pip-version-check \
+        --requirement "$REQUIREMENTS_PATH"
+      "$VENV_DIR/bin/python" "$SCRIPT_PATH" ensure \
+        --memory-id "$MEMORY_ID" \
+        --strategy-name "$STRATEGY_NAME" \
+        --namespace-template "$NAMESPACE_TEMPLATE" \
+        --region "$AWS_REGION"
+    EOT
+
+    environment = {
+      SCRIPT_PATH        = "${path.root}/../../../scripts/configure_agentcore_memory_strategy.py"
+      REQUIREMENTS_PATH  = "${path.root}/../../../deploy-agentcore/requirements-deploy.txt"
+      MEMORY_ID          = aws_bedrockagentcore_memory.agent[0].id
+      STRATEGY_NAME      = local.agentcore_memory_strategy_name
+      NAMESPACE_TEMPLATE = local.agentcore_memory_namespace_template
+      AWS_REGION         = var.region
+    }
+  }
+
+  depends_on = [aws_bedrockagentcore_memory.agent]
+}
+
+resource "terraform_data" "agentcore_memory_preferences_verification" {
+  count = var.enable_agentcore_control_plane ? 1 : 0
+
+  triggers_replace = {
+    memory_id           = aws_bedrockagentcore_memory.agent[0].id
+    strategy_name       = local.agentcore_memory_strategy_name
+    namespace_template  = local.agentcore_memory_namespace_template
+    deployment_revision = var.agentcore_image_tag
+    strategy_revision   = terraform_data.agentcore_memory_preferences_strategy[0].id
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      VENV_DIR="$${RUNNER_TEMP:-/tmp}/agentcore-memory-$MEMORY_ID"
+      test -x "$VENV_DIR/bin/python"
+      "$VENV_DIR/bin/python" "$SCRIPT_PATH" check \
         --memory-id "$MEMORY_ID" \
         --strategy-name "$STRATEGY_NAME" \
         --namespace-template "$NAMESPACE_TEMPLATE" \
@@ -41,7 +86,7 @@ resource "terraform_data" "agentcore_memory_preferences_strategy" {
     }
   }
 
-  depends_on = [aws_bedrockagentcore_memory.agent]
+  depends_on = [terraform_data.agentcore_memory_preferences_strategy]
 }
 
 resource "aws_bedrockagentcore_agent_runtime" "agent" {
@@ -84,7 +129,7 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
 
   depends_on = [
     aws_iam_role_policy_attachment.agentcore_runtime,
-    terraform_data.agentcore_memory_preferences_strategy,
+    terraform_data.agentcore_memory_preferences_verification,
   ]
 }
 
