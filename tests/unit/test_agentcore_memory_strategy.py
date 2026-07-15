@@ -118,7 +118,8 @@ class AgentCoreMemoryStrategyTests(unittest.TestCase):
             terraform,
         )
         self.assertIn("configure_agentcore_memory_strategy.py", terraform)
-        self.assertIn('MEMORY_NAMESPACE_TEMPLATE   =', terraform)
+        self.assertIn("MEMORY_NAMESPACE_TEMPLATE", terraform)
+        self.assertIn("local.agentcore_memory_namespace_template", terraform)
         self.assertIn(
             "terraform_data.agentcore_memory_preferences_strategy", terraform
         )
