@@ -1,5 +1,5 @@
 locals {
-  agentcore_memory_strategy_name       = "TravelPreferences"
+  agentcore_memory_strategy_name      = "TravelPreferences"
   agentcore_memory_namespace_template = "/travel/{actorId}/preferences"
 }
 
