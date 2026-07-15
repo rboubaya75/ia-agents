@@ -28,6 +28,16 @@ def _aws_error_code(exc: BaseException) -> str:
     return str(code) if code else "unknown"
 
 
+def _first_content(message: Any) -> dict[str, Any] | None:
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if not isinstance(content, list) or not content:
+        return None
+    first = content[0]
+    return first if isinstance(first, dict) else None
+
+
 def configure_runtime_memory(base: Any) -> None:
     """Patch the stable Runtime with the V1 preference-memory contract.
 
@@ -48,16 +58,19 @@ def configure_runtime_memory(base: Any) -> None:
             self.namespace = MEMORY_NAMESPACE_TEMPLATE
 
         def retrieve_user_context(self, event: Any) -> None:
-            messages = event.agent.messages
-            if not messages or messages[-1].get("role") != "user":
+            messages = getattr(event.agent, "messages", None)
+            if not isinstance(messages, list) or not messages:
                 return
-            content = messages[-1].get("content", [{}])[0]
-            if not isinstance(content, dict) or "toolResult" in content:
+            message = messages[-1]
+            if not isinstance(message, dict) or message.get("role") != "user":
+                return
+            content = _first_content(message)
+            if content is None or "toolResult" in content:
                 return
 
             actor_id = event.agent.state.get("actor_id")
             user_query = content.get("text", "")
-            if not actor_id or not user_query:
+            if not actor_id or not isinstance(user_query, str) or not user_query:
                 return
             namespace = self.namespace.format(actorId=actor_id)
             try:
@@ -121,17 +134,22 @@ def configure_runtime_memory(base: Any) -> None:
         def save_interaction(self, event: Any) -> None:
             actor_id = ""
             try:
-                messages = event.agent.messages
+                messages = getattr(event.agent, "messages", None)
                 actor_id = event.agent.state.get("actor_id")
                 session_id = event.agent.state.get("session_id")
-                if len(messages) < 2 or not actor_id or not session_id:
+                if (
+                    not isinstance(messages, list)
+                    or len(messages) < 2
+                    or not actor_id
+                    or not session_id
+                ):
                     return
 
                 user_query = None
                 assistant_response = None
                 for message in reversed(messages):
-                    content = message.get("content", [{}])[0]
-                    if not isinstance(content, dict):
+                    content = _first_content(message)
+                    if content is None:
                         continue
                     if message.get("role") == "assistant" and assistant_response is None:
                         assistant_response = content.get("text")
