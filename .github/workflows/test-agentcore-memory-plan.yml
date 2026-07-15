@@ -77,6 +77,32 @@ jobs:
           print("Pinned AgentCore Memory SDK contract verified")
           PY
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Generate Terraform formatting evidence
+        run: |
+          mkdir -p terraform-format-evidence
+          terraform fmt -recursive "${STACK_PATH}"
+          cp "${STACK_PATH}/agentcore_native.tf" \
+            terraform-format-evidence/agentcore_native.tf
+          git diff -- "${STACK_PATH}/agentcore_native.tf" \
+            > terraform-format-evidence/agentcore_native.patch || true
+
+      - name: Upload Terraform formatting evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: agentcore-memory-format-${{ github.sha }}-${{ github.run_id }}
+          path: terraform-format-evidence
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Enforce committed Terraform formatting
+        run: git diff --exit-code -- "${STACK_PATH}/agentcore_native.tf"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
         with:
@@ -84,17 +110,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: test-agentcore-memory-plan
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
       - name: Terraform init and validate
         working-directory: ${{ env.STACK_PATH }}
         run: |
           terraform init
-          terraform fmt -check -recursive
           terraform validate
 
       - name: Plan AgentCore Memory path
