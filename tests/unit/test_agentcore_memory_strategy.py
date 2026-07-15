@@ -16,7 +16,7 @@ if SPEC is None or SPEC.loader is None:
 module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
 
-MEMORY_ID = "memory-123"
+MEMORY_ID = "memory-12345"
 STRATEGY_NAME = "TravelPreferences"
 NAMESPACE = "/travel/{actorId}/preferences"
 
@@ -51,7 +51,7 @@ def preference_strategy(
         "description": description,
         "type": strategy_type,
         "status": status,
-        "namespaces": [],
+        "namespaces": ["/travel/example/preferences"],
         "namespaceTemplates": [namespace],
     }
 
@@ -59,7 +59,10 @@ def preference_strategy(
 def active_memory(strategies: list[dict] | None = None) -> dict:
     now = datetime(2026, 7, 15, tzinfo=timezone.utc)
     return {
-        "arn": "arn:aws:bedrock-agentcore:eu-west-3:123456789012:memory/memory-123",
+        "arn": (
+            "arn:aws:bedrock-agentcore:eu-west-3:123456789012:"
+            "memory/memory-12345"
+        ),
         "id": MEMORY_ID,
         "name": "wildrydes_test_memory",
         "eventExpiryDuration": 30,
