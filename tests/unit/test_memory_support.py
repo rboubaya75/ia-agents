@@ -64,6 +64,36 @@ class PreferenceMemorySupportTests(unittest.TestCase):
         self.assertIn("Never claim", self.base.PHASE4_SYSTEM_PROMPT_BASE)
         self.assertIn("booked", self.base.PHASE4_SYSTEM_PROMPT_BASE)
 
+    def test_empty_message_content_is_ignored(self) -> None:
+        client = MagicMock()
+        event = Event(
+            Agent(
+                messages=[{"role": "user", "content": []}],
+                state={"actor_id": "user-123", "session_id": "session-123"},
+            )
+        )
+        hook = self.hook_class("memory-1", client)
+
+        hook.retrieve_user_context(event)
+
+        client.retrieve_memories.assert_not_called()
+        self.base.logger.info.assert_not_called()
+        self.base.logger.warning.assert_not_called()
+
+    def test_non_mapping_content_is_ignored(self) -> None:
+        client = MagicMock()
+        event = Event(
+            Agent(
+                messages=[{"role": "user", "content": ["invalid"]}],
+                state={"actor_id": "user-123", "session_id": "session-123"},
+            )
+        )
+        hook = self.hook_class("memory-1", client)
+
+        hook.retrieve_user_context(event)
+
+        client.retrieve_memories.assert_not_called()
+
     def test_logs_empty_retrieval_without_exposing_query(self) -> None:
         client = MagicMock()
         client.retrieve_memories.return_value = []
@@ -137,6 +167,23 @@ class PreferenceMemorySupportTests(unittest.TestCase):
         )
         log_payload = json.loads(self.base.logger.info.call_args.args[0])
         self.assertEqual(log_payload["event"], "memory_saved")
+
+    def test_save_skips_malformed_messages(self) -> None:
+        client = MagicMock()
+        event = Event(
+            Agent(
+                messages=[
+                    {"role": "user", "content": []},
+                    {"role": "assistant", "content": []},
+                ],
+                state={"actor_id": "user-123", "session_id": "session-123"},
+            )
+        )
+        hook = self.hook_class("memory-1", client)
+
+        hook.save_interaction(event)
+
+        client.create_event.assert_not_called()
 
     def test_save_error_log_is_redacted(self) -> None:
         client = MagicMock()
