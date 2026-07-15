@@ -16,12 +16,12 @@ resource "terraform_data" "agentcore_memory_preferences_strategy" {
   count = var.enable_agentcore_control_plane ? 1 : 0
 
   triggers_replace = {
-    memory_id            = aws_bedrockagentcore_memory.agent[0].id
-    strategy_name        = local.agentcore_memory_strategy_name
-    namespace_template   = local.agentcore_memory_namespace_template
-    deployment_revision  = var.agentcore_image_tag
-    script_sha256        = filesha256("${path.root}/../../../scripts/configure_agentcore_memory_strategy.py")
-    requirements_sha256  = filesha256("${path.root}/../../../deploy-agentcore/requirements-deploy.txt")
+    memory_id           = aws_bedrockagentcore_memory.agent[0].id
+    strategy_name       = local.agentcore_memory_strategy_name
+    namespace_template  = local.agentcore_memory_namespace_template
+    deployment_revision = var.agentcore_image_tag
+    script_sha256       = filesha256("${path.root}/../../../scripts/configure_agentcore_memory_strategy.py")
+    requirements_sha256 = filesha256("${path.root}/../../../deploy-agentcore/requirements-deploy.txt")
   }
 
   provisioner "local-exec" {
