@@ -1,5 +1,5 @@
 locals {
-  agentcore_memory_strategy_name       = "TravelPreferences"
+  agentcore_memory_strategy_name      = "TravelPreferences"
   agentcore_memory_namespace_template = "/travel/{actorId}/preferences"
 }
 
@@ -24,7 +24,7 @@ resource "terraform_data" "agentcore_memory_preferences_strategy" {
 
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
-    command = <<-EOT
+    command     = <<-EOT
       python3 "$SCRIPT_PATH" ensure \
         --memory-id "$MEMORY_ID" \
         --strategy-name "$STRATEGY_NAME" \
@@ -58,18 +58,18 @@ resource "aws_bedrockagentcore_agent_runtime" "agent" {
   }
 
   environment_variables = {
-    AWS_REGION                  = var.region
-    AWS_DEFAULT_REGION          = var.region
-    MODEL_ID                    = var.agentcore_model_id
-    LOG_LEVEL                   = "INFO"
-    SESSION_DIR                 = "/tmp/sessions"
-    ENABLE_RAG                  = tostring(var.enable_rag)
-    MEMORY_ID                   = aws_bedrockagentcore_memory.agent[0].id
-    MEMORY_NAMESPACE_TEMPLATE   = local.agentcore_memory_namespace_template
-    GATEWAY_URL                 = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
-    GATEWAY_AUTH_MODE           = "aws_iam"
-    REQUIRE_MCP_TOOLS           = "true"
-    MAX_PROMPT_CHARS            = "4000"
+    AWS_REGION                = var.region
+    AWS_DEFAULT_REGION        = var.region
+    MODEL_ID                  = var.agentcore_model_id
+    LOG_LEVEL                 = "INFO"
+    SESSION_DIR               = "/tmp/sessions"
+    ENABLE_RAG                = tostring(var.enable_rag)
+    MEMORY_ID                 = aws_bedrockagentcore_memory.agent[0].id
+    MEMORY_NAMESPACE_TEMPLATE = local.agentcore_memory_namespace_template
+    GATEWAY_URL               = aws_bedrockagentcore_gateway.tools_mcp[0].gateway_url
+    GATEWAY_AUTH_MODE         = "aws_iam"
+    REQUIRE_MCP_TOOLS         = "true"
+    MAX_PROMPT_CHARS          = "4000"
   }
 
   network_configuration {
