@@ -1,113 +1,144 @@
-# WildRydes — Secure AgentCore V1 Landing Zone
+# WildRydes — Secure AgentCore V2
 
-- **Branche et environnement :** `migration/secure-agentcore-v1` / `test`
-- **IaC :** Terraform
-- **CI/CD :** GitHub Actions avec OIDC AWS
-- **Runtime :** Python 3.12, `deploy-agentcore/agents/phase_4_robust.py`
-- **Modèle :** `eu.anthropic.claude-haiku-4-5-20251001-v1:0`
-- **RAG :** hors V1, désactivé par défaut
+- **Branche :** `migration/secure-agentcore-v2`
+- **Baseline V1 :** `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
+- **Statut V2 :** cadrage et architecture documentaire
+- **Environnement initial :** `test`
+- **Principe :** aucun développement structurant avant validation du HLD et des LLD concernés
 
-## Architecture V1 implémentée
+## Démarrage V2
+
+La V1 est considérée close par décision projet et devient la baseline de la V2. Les garanties V1 restent applicables tant qu’un ADR V2 n’a pas explicitement remplacé une décision : identité de confiance construite côté serveur, Runtime IAM-only, tools MCP gouvernés, idempotence des mutations, logs redacted et tests industriels.
+
+Le référentiel V2 commence ici :
+
+- [`docs/v2/README.md`](docs/v2/README.md) — index et gouvernance documentaire ;
+- [`docs/v2/V2-CHARTER-FR.md`](docs/v2/V2-CHARTER-FR.md) — vision, périmètre, exigences et Definition of Done ;
+- [`docs/v2/V2-ROADMAP-FR.md`](docs/v2/V2-ROADMAP-FR.md) — phases et gates ;
+- [`docs/hld/HLD-Secure-AgentCore-V2-FR.md`](docs/hld/HLD-Secure-AgentCore-V2-FR.md) — HLD initial ;
+- [`docs/lld/LLD-V2-INDEX-FR.md`](docs/lld/LLD-V2-INDEX-FR.md) — catalogue des LLD obligatoires ;
+- [`docs/adr/V2-ADR-BACKLOG-FR.md`](docs/adr/V2-ADR-BACKLOG-FR.md) — backlog des décisions structurantes.
+
+## Cycle de gouvernance V2
+
+```text
+Exigences
+  -> options et ADR
+  -> HLD
+  -> validation HLD
+  -> LLD par domaine
+  -> validation LLD
+  -> implémentation
+  -> tests et preuves
+  -> documentation As-Built
+  -> réception
+```
+
+## Cible technique V2
+
+- Python 3.12 et FastAPI ;
+- backend applicatif sur EKS ;
+- agents custom sous `/agents` ;
+- Strands ou LangGraph derrière un adapter optionnel ;
+- Bedrock AgentCore Runtime comme runtime d’exécution uniquement ;
+- Bedrock Converse API ;
+- embeddings Bedrock configurables ;
+- RAG applicatif avec S3 Vectors, DynamoDB et S3 ;
+- Cognito ;
+- React, TypeScript et Vite ;
+- frontend S3 privé, CloudFront et WAF ;
+- AgentCore Gateway MCP ;
+- Terraform et Helm ;
+- GitLab CI avec OIDC AWS comme cible ;
+- OpenTelemetry et CloudWatch ;
+- Secrets Manager et KMS.
+
+Sont explicitement exclus :
+
+- Bedrock managed Agents ;
+- Bedrock Knowledge Bases ;
+- OpenSearch Serverless.
+
+## Architecture To-Be initiale
+
+```text
+Browser / React
+  -> CloudFront + WAF
+       -> S3 privé
+       -> API Gateway + Cognito
+            -> frontière applicative à décider par ADR
+                 -> FastAPI sur EKS
+                      -> APIs conversation et documents
+                      -> ingestion et retrieval applicatifs
+                 -> AgentCore Runtime IAM-only
+                      -> agents custom
+                      -> Bedrock Converse API
+                      -> AgentCore Memory
+                      -> AgentCore Gateway MCP
+                           -> tools métier
+
+Données
+  -> S3 : documents sources
+  -> S3 Vectors : index vectoriel
+  -> DynamoDB : métadonnées, états et données métier
+  -> CloudWatch : logs, métriques et traces OpenTelemetry
+```
+
+Cette vue est un point de départ. Le chemin d’ingress, la répartition FastAPI/Runtime, le modèle d’isolation et le pipeline d’ingestion restent soumis aux ADR V2.
+
+## Gates documentaires
+
+### V2-G0 — Baseline et cadrage
+
+- baseline V1 référencée ;
+- charte et roadmap disponibles ;
+- HLD initial disponible ;
+- catalogue LLD et backlog ADR disponibles.
+
+### V2-G1 — HLD approuvé
+
+- exigences majeures traçables ;
+- ADR structurants décidés ;
+- flux, zones de confiance, données, disponibilité, coûts et migration documentés.
+
+### V2-G2 — LLD approuvés
+
+- conception détaillée disponible pour chaque domaine de la tranche ;
+- contrats, IAM, réseau, erreurs, tests et rollback détaillés ;
+- aucun choix critique implicite.
+
+## Catalogue LLD initial
+
+1. plateforme AWS, réseau, EKS et FastAPI ;
+2. RAG et ingestion documentaire ;
+3. agents et orchestration ;
+4. AgentCore Gateway MCP et tools ;
+5. identité, sécurité et conformité ;
+6. données, mémoire, rétention et restauration ;
+7. observabilité, SLO et FinOps ;
+8. CI/CD, Terraform, Helm et promotion ;
+9. stratégie de tests et preuves ;
+10. frontend React V2.
+
+## Baseline V1 conservée
 
 ```text
 Browser / React
   -> CloudFront / S3 privé
-  -> Cognito User Pool
-       - access token résolu avant chaque appel
-       - un seul renouvellement/retry sur HTTP 401
+  -> Cognito
   -> API Gateway HTTP API
-       - Cognito JWT authorizer
-       - CORS limité au domaine CloudFront
-       - throttling et access logs
-  -> Lambda Agent Invocation Security Facade
-       - payload strict prompt + sessionId + operationId
-       - actorId = claims.sub
-       - requestId et deadlineEpochMs produits côté serveur
-       - rejet de toute identité ou configuration client arbitraire
+  -> Lambda Security Facade
   -> AgentCore Runtime IAM-only
-       - trustedIdentity produite par la façade
-       - contexte d'opération injecté dans les tools
-       - client MCP initialisé à la première invocation et reconnecté une seule fois
-       - Claude Haiku 4.5 EU
-       - AgentCore Memory
-       - tools Strands
-  -> AgentCore Gateway MCP AWS_IAM
-  -> Lambda Trip Tools
-       - deadline vérifiée avant accès DynamoDB
-       - create/update idempotents
-  -> DynamoDB Trips
+       -> Bedrock
+       -> AgentCore Memory
+       -> AgentCore Gateway MCP
+            -> Trip Tools Lambda
+            -> DynamoDB Trips
 ```
 
-Le navigateur ne connaît et n’utilise jamais l’URL technique AgentCore Runtime.
+Le navigateur ne connaît jamais l’URL technique AgentCore Runtime. L’identité de confiance provient des claims Cognito validés et est reconstruite côté serveur. Runtime écrase l’identité et le contexte avant les appels aux tools.
 
-## Contrat d’identité et d’opération
-
-La seule source de confiance pour l’identité est :
-
-```text
-actorId = Cognito access-token claim `sub`
-```
-
-Le frontend envoie uniquement :
-
-```json
-{
-  "prompt": "Planifie un voyage à Tokyo",
-  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
-  "operationId": "76e6f404-49de-4dc4-9c60-f2c25a0de91f"
-}
-```
-
-`operationId` est créé une fois par message. Il reste identique pendant l’unique retry d’authentification afin qu’une mutation déjà exécutée ne soit pas dupliquée.
-
-La façade rejette notamment :
-
-```text
-actorId
-userId
-tenantId
-trustedIdentity
-requestId
-deadlineEpochMs
-groups
-modelOverride
-systemPrompt
-toolName
-```
-
-Elle construit ensuite :
-
-```text
-trustedIdentity.actorId
-requestId
-deadlineEpochMs
-```
-
-Runtime écrase toujours `userId`, `operationId`, `requestId` et `deadlineEpochMs` avant un appel aux tools Trips. `operationId` n’est injecté que dans les tools de mutation.
-
-## Contrôles de sécurité et de résilience
-
-- S3 Block Public Access et CloudFront OAC ;
-- HTTPS et headers CloudFront : CSP, HSTS, anti-framing, `nosniff`, Referrer-Policy et Permissions-Policy ;
-- Cognito access token vérifié par API Gateway puis contrôlé par la façade (`token_use`, `client_id`, `sub`) ;
-- access token récupéré auprès du SDK Cognito avant chaque appel applicatif ;
-- façade Lambda Python 3.12 ARM64, concurrence réservée et timeout inférieur à API Gateway ;
-- deadline serveur propagée jusqu’à la Lambda Trip Tools ;
-- Runtime IAM-only avec resource policy limitée au rôle de la façade ;
-- Gateway MCP IAM avec resource policy limitée au rôle Runtime ;
-- démarrage HTTP indépendant du Gateway, initialisation MCP lazy, fermeture au shutdown et reconnexion bornée à une tentative ;
-- retry MCP utilisant le même `operationId` ;
-- IAM Runtime limité au modèle, à Memory, au Gateway, à ECR et aux logs nécessaires ;
-- Lambda Trip Tools limitée à la table DynamoDB exacte ;
-- créations déterministes par `userId + operationId` et mises à jour rejouables ;
-- ECR immutable et scan on push ;
-- DynamoDB SSE, PITR et partitionnement par `userId` ;
-- logs corrélés par `requestId` et identifiants sensibles hashés ;
-- contenu Memory présenté au modèle comme donnée non fiable, jamais comme instruction.
-
-## Tools V1
-
-AgentCore Gateway expose un target Lambda réel :
+Les quatre tools V1 restent :
 
 ```text
 create_trip
@@ -116,95 +147,23 @@ get_trip
 update_trip
 ```
 
-Les entrées sont validées : formats d’identifiants, tailles, dates ISO, ordre des dates, deadline et rejet des champs inconnus. Toutes les opérations DynamoDB sont contraintes à la partition `userId` injectée par Runtime.
+La documentation V1 reste disponible :
 
-`create_trip` et `update_trip` nécessitent une confirmation explicite dans le contrat agent. Elles utilisent `operationId` pour retourner le résultat d’une opération déjà terminée plutôt que répéter son effet de bord. La réutilisation d’un même `operationId` avec un payload différent est rejetée.
+- [`docs/hld/HLD-WildRydes-Agentic-AI-FR.md`](docs/hld/HLD-WildRydes-Agentic-AI-FR.md) ;
+- [`docs/lld/LLD-WildRydes-Agentic-AI-FR.md`](docs/lld/LLD-WildRydes-Agentic-AI-FR.md) ;
+- [`docs/adr/ADR-0005-lambda-security-facade-agentcore-runtime-iam.md`](docs/adr/ADR-0005-lambda-security-facade-agentcore-runtime-iam.md) ;
+- [`docs/adr/ADR-0006-idempotency-deadline-mcp-lifecycle.md`](docs/adr/ADR-0006-idempotency-deadline-mcp-lifecycle.md) ;
+- [`tests/README.md`](tests/README.md) — stratégie et matrice des tests industriels.
 
-## CI/CD
+## Discipline de livraison
 
-### Qualité automatique
+Pour chaque phase :
 
-```text
-.github/workflows/test-application-quality.yml
-```
+1. présenter le plan ;
+2. limiter les modifications au périmètre validé ;
+3. résumer les fichiers changés ;
+4. exécuter lint, typecheck et tests pertinents ;
+5. signaler tous les échecs et limites ;
+6. attendre validation avant la phase suivante.
 
-- compilation Python 3.12 ;
-- tests unitaires de la façade, du Runtime, du lifecycle MCP et des tools ;
-- audit des dépendances Python ;
-- frontend `npm ci`, audit, lint et build.
-
-### Qualité industrielle
-
-```text
-.github/workflows/test-industrial-quality.yml
-```
-
-- fault injection sur les pannes MCP avant et après mutation ;
-- vérification de la reconnexion unique et du budget de deadline ;
-- initialisation MCP concurrente ;
-- contrats IAM Runtime, Gateway, façade et Trip Tools ;
-- contrôles de redaction et de corrélation des événements ;
-- chaîne de timeouts frontend, API Gateway, façade, Runtime et Lambda ;
-- artefact JSON traçable par identifiant de risque, conservé 90 jours.
-
-Le référentiel complet se trouve dans `tests/README.md`.
-
-### Infrastructure
-
-```text
-.github/workflows/test-terraform-stack.yml
-```
-
-- Gitleaks ;
-- lockfile ;
-- Terraform fmt/init/validate ;
-- plan ;
-- apply et destroy contrôlés.
-
-### Déploiement applicatif
-
-```text
-.github/workflows/test-application-deploy.yml
-```
-
-Modes : `frontend-only`, `image-only`, `runtime-only`, `full`.
-
-Le frontend reçoit :
-
-```text
-VITE_AGENT_INVOKE_URL=<API Gateway /agent/invoke>
-```
-
-L’output `agent_runtime_invoke_url` reste technique et ne doit jamais être injecté dans le navigateur.
-
-## État de la V1
-
-L’implémentation du code et de l’IaC V1 est présente sur la branche. La V1 ne doit être déclarée **validée** qu’après les preuves suivantes :
-
-1. pipeline qualité verte ;
-2. Terraform fmt/validate/plan vert et plan revu ;
-3. déploiement `full` réussi ;
-4. tests navigateur CORS/JWT et renouvellement du token ;
-5. refus d’invocation Runtime directe ;
-6. isolation Memory User A/User B ;
-7. exécution end-to-end des quatre tools MCP ;
-8. création et mise à jour rejouées avec le même `operationId` sans doublon ;
-9. reconnexion MCP après rupture de transport ;
-10. vérification des logs redacted, de la corrélation et de la latence inférieure à 28 secondes.
-
-## Documentation
-
-- `tests/README.md` — stratégie, conventions et matrice des tests industriels ;
-- `docs/adr/ADR-0004-api-gateway-direct-agentcore-runtime-jwt.md` — historique, superseded ;
-- `docs/adr/ADR-0005-lambda-security-facade-agentcore-runtime-iam.md` — décision active ;
-- `docs/adr/ADR-0006-idempotency-deadline-mcp-lifecycle.md` — décision active ;
-- `docs/hld/HLD-WildRydes-Agentic-AI-FR.md` ;
-- `docs/lld/LLD-WildRydes-Agentic-AI-FR.md` ;
-- `docs/migration/REMEDIATION-Gateway-First-APIGW.md` ;
-- `docs/runbooks/ci-cd-rationalisation-test.md` ;
-- `docs/validation/V1-MEMORY-SECURITY-SUMMARY-FR.md` — synthèse entretien et onboarding ;
-- `docs/validation/V1-MEMORY-SECURITY-TESTS-FR.md` — annexe des protocoles, statuts et preuves.
-
-## Gouvernance
-
-Toute modification du chemin d’ingress, de l’identité, du modèle, de Memory ou des tools doit être présentée avec ses tradeoffs, documentée dans un ADR et validée explicitement avant application.
+Aucun déploiement, `terraform apply`, `terraform destroy`, merge ou changement d’environnement ne doit être implicite.
