@@ -12,6 +12,11 @@ resource "archive_file" "this" {
     content  = file(var.hardened_source_file)
     filename = "lambda_function_hardened.py"
   }
+
+  source {
+    content  = file(var.phase2_source_file)
+    filename = "lambda_function_phase2.py"
+  }
 }
 
 data "aws_iam_policy_document" "assume_role" {
@@ -82,7 +87,7 @@ resource "aws_iam_role_policy" "execution" {
 resource "aws_lambda_function" "this" {
   function_name                  = var.function_name
   role                           = aws_iam_role.this.arn
-  handler                        = "lambda_function_hardened.lambda_handler"
+  handler                        = "lambda_function_phase2.lambda_handler"
   runtime                        = "python3.12"
   architectures                  = ["arm64"]
   timeout                        = 5
