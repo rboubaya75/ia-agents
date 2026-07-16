@@ -175,11 +175,13 @@ jobs:
         working-directory: ${{ inputs.stack_path }}
         run: |
           set -euo pipefail
+          outputs_file="$RUNNER_TEMP/terraform-outputs-security.json"
+          trap 'rm -f "$outputs_file"' EXIT
           terraform init -input=false
-          terraform output -json > terraform-outputs-security.json
+          terraform output -json > "$outputs_file"
 
           tf_output() {
-            jq -r --arg key "$1" '.[$key].value // ""' terraform-outputs-security.json
+            jq -r --arg key "$1" '.[$key].value // ""' "$outputs_file"
           }
 
           agent_invoke_url="$(tf_output agent_invoke_url)"
