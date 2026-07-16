@@ -4,6 +4,7 @@ module "trip_tools_lambda" {
   function_name        = "${local.name_prefix}-trip-tools"
   source_file          = "${path.root}/../../../deploy-agentcore/lambda_function_code.py"
   hardened_source_file = "${path.root}/../../../deploy-agentcore/lambda_function_hardened.py"
+  phase2_source_file   = "${path.root}/../../../deploy-agentcore/lambda_function_phase2.py"
 
   trips_table_name        = module.dynamodb_trips.table_name
   trips_table_arn         = module.dynamodb_trips.table_arn

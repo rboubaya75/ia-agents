@@ -13,6 +13,11 @@ variable "hardened_source_file" {
   description = "Absolute path to the hardened mutation wrapper source file."
 }
 
+variable "phase2_source_file" {
+  type        = string
+  description = "Absolute path to the Phase 2 isolation and pagination wrapper source file."
+}
+
 variable "trips_table_name" {
   type        = string
   description = "DynamoDB trips table name."
