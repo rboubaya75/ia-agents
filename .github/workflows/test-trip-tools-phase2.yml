@@ -90,5 +90,5 @@ jobs:
             trip-tools-regression.log
             trip-tools-phase2.log
             trip-tools-phase2-results.json
-          retention-days: 14
+          retention-days: 90
           if-no-files-found: error
