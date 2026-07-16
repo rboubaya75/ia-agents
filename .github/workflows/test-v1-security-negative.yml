@@ -1,0 +1,292 @@
+name: Test V1 Security Negative
+
+on:
+  pull_request:
+    branches: ["migration/secure-agentcore-v1"]
+    paths:
+      - "infra/modules/agent_api_facade/src/lambda_function.py"
+      - "infra/modules/api_gateway_agent_ingress/**"
+      - "scripts/run_v1_security_negative_validation.py"
+      - "tests/unit/test_agent_api_facade.py"
+      - "tests/unit/test_v1_security_negative_validation.py"
+      - "docs/validation/V1-SECURITY-NEGATIVE-PHASE3-FR.md"
+      - ".github/workflows/test-v1-security-negative.yml"
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Run the negative HTTP, CORS and Runtime IAM probes against test"
+        required: true
+        type: boolean
+        default: false
+      confirm_e2e:
+        description: "Required confirmation for active probes against the test environment"
+        required: true
+        type: boolean
+        default: false
+      stack_path:
+        description: "Terraform stack containing the deployed test outputs"
+        required: true
+        type: choice
+        options:
+          - infra/environments/test
+        default: infra/environments/test
+      refresh_token_secret_id:
+        description: "Secrets Manager ID containing a raw refresh token or JSON refreshToken"
+        required: false
+        type: string
+        default: ""
+      forbidden_origin:
+        description: "HTTPS origin that must not receive CORS authorization"
+        required: true
+        type: string
+        default: "https://unauthorized.invalid"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-v1-security-negative-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-3
+  TF_VERSION: "1.9.0"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  security-negative-contracts:
+    name: Security Negative Contracts
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: deploy-agentcore/requirements-deploy.txt
+
+      - name: Install pinned deployment SDK
+        run: |
+          python -m pip install --disable-pip-version-check \
+            --requirement deploy-agentcore/requirements-deploy.txt
+          python -m pip check
+
+      - name: Compile security contracts
+        run: |
+          python -m py_compile \
+            infra/modules/agent_api_facade/src/lambda_function.py \
+            scripts/run_v1_security_negative_validation.py \
+            tests/unit/test_agent_api_facade.py \
+            tests/unit/test_v1_security_negative_validation.py
+
+      - name: Run facade regression tests
+        run: |
+          set -o pipefail
+          python tests/unit/test_agent_api_facade.py -v \
+            2>&1 | tee v1-security-facade-tests.log
+
+      - name: Run negative-security harness tests
+        run: |
+          set -o pipefail
+          python tests/unit/test_v1_security_negative_validation.py -v \
+            2>&1 | tee v1-security-negative-tests.log
+
+      - name: Generate redacted case catalog
+        run: |
+          python scripts/run_v1_security_negative_validation.py \
+            --catalog-only \
+            --output v1-security-negative-catalog.json
+
+      - name: Upload contract evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v1-security-negative-contracts-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            v1-security-facade-tests.log
+            v1-security-negative-tests.log
+            v1-security-negative-catalog.json
+          retention-days: 90
+          if-no-files-found: error
+
+  security-negative-e2e:
+    name: Security Negative E2E Test
+    needs: security-negative-contracts
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_e2e == true &&
+      github.ref == 'refs/heads/migration/secure-agentcore-v1'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Confirm active test
+        run: |
+          if [ "${{ inputs.confirm_e2e }}" != "true" ]; then
+            echo "Active E2E probes require confirm_e2e=true."
+            exit 1
+          fi
+          if [ -z "${{ inputs.refresh_token_secret_id }}" ]; then
+            echo "refresh_token_secret_id is required for authenticated probes."
+            exit 1
+          fi
+          if ! echo "${{ inputs.forbidden_origin }}" | grep -Eq '^https://[^/[:space:]]+/?$'; then
+            echo "forbidden_origin must be an HTTPS origin without a path."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v1-security-negative-e2e
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: deploy-agentcore/requirements-deploy.txt
+
+      - name: Install pinned deployment SDK
+        run: |
+          python -m pip install --disable-pip-version-check \
+            --requirement deploy-agentcore/requirements-deploy.txt
+          python -m pip check
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Read deployed test outputs
+        id: tfout
+        working-directory: ${{ inputs.stack_path }}
+        run: |
+          set -euo pipefail
+          outputs_file="$RUNNER_TEMP/terraform-outputs-security.json"
+          trap 'rm -f "$outputs_file"' EXIT
+          terraform init -input=false
+          terraform output -json > "$outputs_file"
+
+          tf_output() {
+            jq -r --arg key "$1" '.[$key].value // ""' "$outputs_file"
+          }
+
+          agent_invoke_url="$(tf_output agent_invoke_url)"
+          cloudfront_domain_name="$(tf_output cloudfront_domain_name)"
+          cognito_web_client_id="$(tf_output cognito_web_client_id)"
+          agent_runtime_arn="$(tf_output agent_runtime_arn)"
+
+          for value in \
+            "$agent_invoke_url" \
+            "$cloudfront_domain_name" \
+            "$cognito_web_client_id" \
+            "$agent_runtime_arn"; do
+            if [ -z "$value" ] || [[ "$value" == *$'\n'* ]] || [[ "$value" == *$'\r'* ]]; then
+              echo "A required Terraform output is missing or malformed."
+              exit 1
+            fi
+          done
+
+          if ! echo "$agent_invoke_url" | grep -Eq '^https://[^[:space:]]+/agent/invoke$'; then
+            echo "agent_invoke_url is not the expected HTTPS facade route."
+            exit 1
+          fi
+
+          {
+            echo "agent_invoke_url=$agent_invoke_url"
+            echo "allowed_origin=https://$cloudfront_domain_name"
+            echo "cognito_web_client_id=$cognito_web_client_id"
+            echo "agent_runtime_arn=$agent_runtime_arn"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Exchange refresh token and run redacted probes
+        env:
+          REFRESH_TOKEN_SECRET_ID: ${{ inputs.refresh_token_secret_id }}
+          COGNITO_WEB_CLIENT_ID: ${{ steps.tfout.outputs.cognito_web_client_id }}
+          AGENT_INVOKE_URL: ${{ steps.tfout.outputs.agent_invoke_url }}
+          ALLOWED_ORIGIN: ${{ steps.tfout.outputs.allowed_origin }}
+          FORBIDDEN_ORIGIN: ${{ inputs.forbidden_origin }}
+          AGENT_RUNTIME_ARN: ${{ steps.tfout.outputs.agent_runtime_arn }}
+        run: |
+          set -euo pipefail
+          secret_file="$(mktemp)"
+          auth_request_file="$(mktemp)"
+          auth_response_file="$(mktemp)"
+          cleanup() {
+            rm -f "$secret_file" "$auth_request_file" "$auth_response_file"
+          }
+          trap cleanup EXIT
+          chmod 600 "$secret_file" "$auth_request_file" "$auth_response_file"
+
+          aws secretsmanager get-secret-value \
+            --secret-id "$REFRESH_TOKEN_SECRET_ID" \
+            --query SecretString \
+            --output text > "$secret_file"
+
+          if jq -e 'type == "object"' "$secret_file" >/dev/null 2>&1; then
+            refresh_token="$(jq -r '.refreshToken // .refresh_token // empty' "$secret_file")"
+          else
+            refresh_token="$(cat "$secret_file")"
+          fi
+          if [ -z "$refresh_token" ]; then
+            echo "The secret does not contain a refresh token."
+            exit 1
+          fi
+          echo "::add-mask::$refresh_token"
+
+          jq -n \
+            --arg client_id "$COGNITO_WEB_CLIENT_ID" \
+            --arg refresh_token "$refresh_token" \
+            '{AuthFlow:"REFRESH_TOKEN_AUTH",ClientId:$client_id,AuthParameters:{REFRESH_TOKEN:$refresh_token}}' \
+            > "$auth_request_file"
+
+          aws cognito-idp initiate-auth \
+            --cli-input-json "file://$auth_request_file" \
+            > "$auth_response_file"
+
+          access_token="$(jq -r '.AuthenticationResult.AccessToken // empty' "$auth_response_file")"
+          id_token="$(jq -r '.AuthenticationResult.IdToken // empty' "$auth_response_file")"
+          if [ -z "$access_token" ] || [ -z "$id_token" ]; then
+            echo "Cognito did not return both access and ID tokens."
+            exit 1
+          fi
+          echo "::add-mask::$access_token"
+          echo "::add-mask::$id_token"
+
+          V1_ACCESS_TOKEN="$access_token" \
+          V1_ID_TOKEN="$id_token" \
+          python scripts/run_v1_security_negative_validation.py \
+            --api-url "$AGENT_INVOKE_URL" \
+            --allowed-origin "$ALLOWED_ORIGIN" \
+            --forbidden-origin "$FORBIDDEN_ORIGIN" \
+            --require-authenticated-cases \
+            --require-id-token \
+            --runtime-arn "$AGENT_RUNTIME_ARN" \
+            --runtime-endpoint default \
+            --require-runtime-deny \
+            --region "$AWS_REGION" \
+            --output v1-security-negative-e2e.json
+
+          unset access_token id_token refresh_token
+
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v1-security-negative-e2e-${{ github.sha }}-${{ github.run_id }}
+          path: v1-security-negative-e2e.json
+          retention-days: 90
+          if-no-files-found: warn
