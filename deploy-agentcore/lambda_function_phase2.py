@@ -1,9 +1,9 @@
-"""Phase 2 read isolation, pagination binding and redacted evidence wrapper.
+"""Phase 2 read isolation, signed pagination and redacted evidence wrapper.
 
 The existing hardened mutation implementation remains the source of truth for
 confirmation and durable idempotency. This wrapper strengthens read behavior,
-binds continuation tokens to the authenticated actor and emits evidence-safe
-outcome events for all four Trip tools.
+authenticates short-lived continuation tokens with an AWS KMS HMAC key and
+emits evidence-safe outcome events for all four Trip tools.
 """
 
 from __future__ import annotations
@@ -12,21 +12,130 @@ import base64
 import binascii
 import hmac
 import json
+import os
+import time
 from typing import Any, Dict
 
+import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 import lambda_function_code as base
 import lambda_function_hardened as hardened
 
-TOKEN_VERSION = 2
+TOKEN_VERSION = 3
 TOKEN_ACTOR_FIELD = "actorHash"
 TOKEN_TRIP_FIELD = "tripId"
+TOKEN_EXPIRES_FIELD = "expiresAt"
+TOKEN_MAC_FIELD = "mac"
+MAC_ALGORITHM = "HMAC_SHA_256"
+CURSOR_HMAC_KEY_ENV = "TRIPS_CURSOR_HMAC_KEY_ID"
+CURSOR_TTL_SECONDS = int(os.getenv("TRIPS_CURSOR_TTL_SECONDS", "900"))
+if CURSOR_TTL_SECONDS < 60 or CURSOR_TTL_SECONDS > 3600:
+    raise RuntimeError("TRIPS_CURSOR_TTL_SECONDS must be between 60 and 3600.")
+
+_kms_client: Any | None = None
 
 
 def _event_hash(event: Dict[str, Any], field: str) -> str:
     value = event.get(field)
     return base._safe_hash(value) if isinstance(value, str) and value else "unknown"
+
+
+def _get_kms_client() -> Any:
+    global _kms_client
+    if _kms_client is None:
+        _kms_client = boto3.client("kms")
+    return _kms_client
+
+
+def _kms_key_id() -> str:
+    value = os.getenv(CURSOR_HMAC_KEY_ENV)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"{CURSOR_HMAC_KEY_ENV} environment variable is required.")
+    return value.strip()
+
+
+def _encode_bytes(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _decode_bytes(value: Any, field: str) -> bytes:
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise base.ValidationError(f"{field} is invalid.")
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (UnicodeEncodeError, binascii.Error) as exc:
+        raise base.ValidationError(f"{field} is invalid.") from exc
+    if not decoded:
+        raise base.ValidationError(f"{field} is invalid.")
+    return decoded
+
+
+def _encode_json(value: Dict[str, Any]) -> str:
+    payload = json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return _encode_bytes(payload)
+
+
+def _decode_json(token: Any) -> Dict[str, Any]:
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > base.MAX_NEXT_TOKEN_CHARS
+    ):
+        raise base.ValidationError("nextToken is invalid.")
+    try:
+        payload = _decode_bytes(token, "nextToken")
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise base.ValidationError("nextToken is invalid.") from exc
+    if not isinstance(value, dict):
+        raise base.ValidationError("nextToken is invalid.")
+    return value
+
+
+def _unsigned_token_payload(
+    actor_hash: str, trip_id: str, expires_at: int
+) -> Dict[str, Any]:
+    return {
+        "v": TOKEN_VERSION,
+        TOKEN_ACTOR_FIELD: actor_hash,
+        TOKEN_TRIP_FIELD: trip_id,
+        TOKEN_EXPIRES_FIELD: expires_at,
+    }
+
+
+def _canonical_token_message(payload: Dict[str, Any]) -> bytes:
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _generate_mac(message: bytes) -> bytes:
+    result = _get_kms_client().generate_mac(
+        KeyId=_kms_key_id(),
+        Message=message,
+        MacAlgorithm=MAC_ALGORITHM,
+    )
+    mac = result.get("Mac") if isinstance(result, dict) else None
+    if not isinstance(mac, (bytes, bytearray)) or len(mac) != 32:
+        raise RuntimeError("AWS KMS returned an invalid pagination MAC.")
+    return bytes(mac)
+
+
+def _verify_mac(message: bytes, mac: bytes) -> None:
+    try:
+        result = _get_kms_client().verify_mac(
+            KeyId=_kms_key_id(),
+            Message=message,
+            Mac=mac,
+            MacAlgorithm=MAC_ALGORITHM,
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "KMSInvalidMacException":
+            raise base.ValidationError("nextToken integrity verification failed.") from exc
+        raise
+    if not isinstance(result, dict) or result.get("MacValid") is not True:
+        raise base.ValidationError("nextToken integrity verification failed.")
 
 
 def _encode_next_token(last_key: Dict[str, Any], user_id: str) -> str:
@@ -35,47 +144,30 @@ def _encode_next_token(last_key: Dict[str, Any], user_id: str) -> str:
             "DynamoDB pagination key escaped the authenticated partition."
         )
     trip_id = base._trip_id_value(last_key.get("tripId"), "pagination tripId")
-    payload = json.dumps(
-        {
-            "v": TOKEN_VERSION,
-            TOKEN_ACTOR_FIELD: base._safe_hash(user_id),
-            TOKEN_TRIP_FIELD: trip_id,
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    payload = _unsigned_token_payload(
+        base._safe_hash(user_id),
+        trip_id,
+        int(time.time()) + CURSOR_TTL_SECONDS,
+    )
+    mac = _generate_mac(_canonical_token_message(payload))
+    return _encode_json({**payload, TOKEN_MAC_FIELD: _encode_bytes(mac)})
 
 
 def _decode_next_token(token: Any, user_id: str) -> Dict[str, str] | None:
     if token is None:
         return None
-    if (
-        not isinstance(token, str)
-        or not token
-        or len(token) > base.MAX_NEXT_TOKEN_CHARS
-    ):
-        raise base.ValidationError("nextToken is invalid.")
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        value = json.loads(
-            base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    value = _decode_json(token)
+    expected_keys = {
+        "v",
+        TOKEN_ACTOR_FIELD,
+        TOKEN_TRIP_FIELD,
+        TOKEN_EXPIRES_FIELD,
+        TOKEN_MAC_FIELD,
+    }
+    if set(value) != expected_keys or value.get("v") != TOKEN_VERSION:
+        raise base.ValidationError(
+            "nextToken version is unsupported; restart pagination."
         )
-    except (
-        UnicodeEncodeError,
-        UnicodeDecodeError,
-        binascii.Error,
-        json.JSONDecodeError,
-    ) as exc:
-        raise base.ValidationError("nextToken is invalid.") from exc
-
-    expected_keys = {"v", TOKEN_ACTOR_FIELD, TOKEN_TRIP_FIELD}
-    if (
-        not isinstance(value, dict)
-        or set(value) != expected_keys
-        or value.get("v") != TOKEN_VERSION
-    ):
-        raise base.ValidationError("nextToken is invalid.")
 
     actor_hash = value.get(TOKEN_ACTOR_FIELD)
     expected_actor_hash = base._safe_hash(user_id)
@@ -86,12 +178,19 @@ def _decode_next_token(token: Any, user_id: str) -> Dict[str, str] | None:
             "nextToken is not valid for the authenticated user."
         )
 
-    return {
-        "userId": user_id,
-        "tripId": base._trip_id_value(
-            value.get(TOKEN_TRIP_FIELD), "nextToken tripId"
-        ),
-    }
+    trip_id = base._trip_id_value(value.get(TOKEN_TRIP_FIELD), "nextToken tripId")
+    expires_at = value.get(TOKEN_EXPIRES_FIELD)
+    if isinstance(expires_at, bool) or not isinstance(expires_at, int):
+        raise base.ValidationError("nextToken expiration is invalid.")
+    if expires_at < int(time.time()):
+        raise base.ValidationError("nextToken has expired; restart pagination.")
+
+    unsigned = _unsigned_token_payload(actor_hash, trip_id, expires_at)
+    mac = _decode_bytes(value.get(TOKEN_MAC_FIELD), "nextToken MAC")
+    if len(mac) != 32:
+        raise base.ValidationError("nextToken MAC is invalid.")
+    _verify_mac(_canonical_token_message(unsigned), mac)
+    return {"userId": user_id, "tripId": trip_id}
 
 
 def get_trips(event: Dict[str, Any]) -> Dict[str, Any]:
