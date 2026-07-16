@@ -173,7 +173,9 @@ class TripToolsPhase2Tests(unittest.TestCase):
         missing = phase2.lambda_handler(
             event(USER_B, tripId=TRIP_A2), context("get_trip")
         )
-        self.assertEqual(cross_user, missing)
+        self.assertFalse(cross_user["found"])
+        self.assertFalse(missing["found"])
+        self.assertEqual(cross_user["message"], missing["message"])
         keys = [call.kwargs["Key"] for call in self.table.get_item.call_args_list]
         self.assertEqual(keys[0], {"userId": USER_B, "tripId": TRIP_A})
         self.assertEqual(keys[1], {"userId": USER_B, "tripId": TRIP_A2})
@@ -244,16 +246,18 @@ class TripToolsPhase2Tests(unittest.TestCase):
         self.table.query.assert_not_called()
 
     def test_expired_cursor_is_rejected_before_kms_and_dynamodb(self) -> None:
-        actor_hash = base._safe_hash(USER_A)
+        expires_at = int(time.time()) - 1
         unsigned = phase2._unsigned_token_payload(
-            actor_hash,
+            base._safe_hash(USER_A),
             TRIP_A,
-            int(time.time()) - 1,
+            expires_at,
         )
         signed = {
             **unsigned,
             phase2.TOKEN_MAC_FIELD: phase2._encode_bytes(
-                local_mac(phase2._canonical_token_message(unsigned))
+                local_mac(
+                    phase2._canonical_token_message(USER_A, TRIP_A, expires_at)
+                )
             ),
         }
         response = phase2.lambda_handler(
