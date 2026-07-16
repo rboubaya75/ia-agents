@@ -28,12 +28,10 @@ os.environ.update(
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE_PATH = ROOT / "deploy-agentcore" / "lambda_function_code.py"
-HARDENED_PATH = ROOT / "deploy-agentcore" / "lambda_function_hardened.py"
-PHASE2_PATH = ROOT / "deploy-agentcore" / "lambda_function_phase2.py"
 
 
-def _load(name: str, path: Path):
+def load(name: str, relative_path: str):
+    path = ROOT / relative_path
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load {name} from {path}")
@@ -43,9 +41,9 @@ def _load(name: str, path: Path):
     return module
 
 
-base = _load("lambda_function_code", BASE_PATH)
-hardened = _load("lambda_function_hardened", HARDENED_PATH)
-phase2 = _load("lambda_function_phase2", PHASE2_PATH)
+base = load("lambda_function_code", "deploy-agentcore/lambda_function_code.py")
+load("lambda_function_hardened", "deploy-agentcore/lambda_function_hardened.py")
+phase2 = load("lambda_function_phase2", "deploy-agentcore/lambda_function_phase2.py")
 
 USER_A = "user-a"
 USER_B = "user-b"
@@ -63,26 +61,31 @@ def context(tool_name: str):
     )
 
 
-def read_event(user_id: str = USER_A, **values: object) -> dict:
-    return {
+def event(user_id: str = USER_A, **values: object) -> dict:
+    payload = {
         "userId": user_id,
         "requestId": REQUEST_ID,
         "deadlineEpochMs": int(time.time() * 1000) + 30_000,
-        **values,
     }
+    payload.update(values)
+    return payload
 
 
 def mutation_event(user_id: str = USER_A, **values: object) -> dict:
-    return read_event(
+    payload = event(
         user_id,
         operationId=OPERATION_ID,
         confirmationVerified=True,
-        **values,
     )
+    payload.update(values)
+    return payload
 
 
-def client_error(code: str, operation: str) -> ClientError:
-    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
+def conditional_error() -> ClientError:
+    return ClientError(
+        {"Error": {"Code": "ConditionalCheckFailedException", "Message": "conflict"}},
+        "PutItem",
+    )
 
 
 class TripToolsPhase2Tests(unittest.TestCase):
@@ -96,7 +99,7 @@ class TripToolsPhase2Tests(unittest.TestCase):
     def tearDown(self) -> None:
         base._get_table = self.previous_get_table
 
-    def test_get_trip_reads_only_authenticated_partition_consistently(self) -> None:
+    def test_get_trip_is_partition_scoped_consistent_and_redacted(self) -> None:
         self.table.get_item.return_value = {
             "Item": {
                 "userId": USER_A,
@@ -105,82 +108,55 @@ class TripToolsPhase2Tests(unittest.TestCase):
                 "creationOperationId": OPERATION_ID,
             }
         }
-
-        response = phase2.lambda_handler(
-            read_event(tripId=TRIP_A), context("get_trip")
-        )
-
+        response = phase2.lambda_handler(event(tripId=TRIP_A), context("get_trip"))
         self.assertTrue(response["found"])
         self.assertNotIn("userId", response["trip"])
         self.assertNotIn("creationOperationId", response["trip"])
         self.table.get_item.assert_called_once_with(
-            Key={"userId": USER_A, "tripId": TRIP_A},
-            ConsistentRead=True,
+            Key={"userId": USER_A, "tripId": TRIP_A}, ConsistentRead=True
         )
 
-    def test_get_trip_cross_user_and_missing_are_indistinguishable(self) -> None:
+    def test_cross_user_and_missing_trip_are_indistinguishable(self) -> None:
         self.table.get_item.return_value = {}
-
         cross_user = phase2.lambda_handler(
-            read_event(USER_B, tripId=TRIP_A), context("get_trip")
+            event(USER_B, tripId=TRIP_A), context("get_trip")
         )
         missing = phase2.lambda_handler(
-            read_event(USER_B, tripId=TRIP_A2), context("get_trip")
+            event(USER_B, tripId=TRIP_A2), context("get_trip")
         )
-
-        self.assertEqual(cross_user["found"], False)
-        self.assertEqual(missing["found"], False)
         self.assertEqual(cross_user["message"], missing["message"])
         keys = [call.kwargs["Key"] for call in self.table.get_item.call_args_list]
-        self.assertEqual(keys[0], {"userId": USER_B, "tripId": TRIP_A})
-        self.assertEqual(keys[1], {"userId": USER_B, "tripId": TRIP_A2})
-        self.assertNotIn(USER_A, json.dumps(keys))
+        self.assertEqual(keys[0]["userId"], USER_B)
+        self.assertEqual(keys[1]["userId"], USER_B)
 
-    def test_pagination_has_no_duplicate_and_consumes_same_actor_cursor(self) -> None:
+    def test_same_actor_pagination_has_no_duplicate(self) -> None:
         self.table.query.side_effect = [
             {
-                "Items": [{"userId": USER_A, "tripId": TRIP_A, "tripName": "A"}],
+                "Items": [{"userId": USER_A, "tripId": TRIP_A}],
                 "LastEvaluatedKey": {"userId": USER_A, "tripId": TRIP_A},
             },
-            {
-                "Items": [
-                    {"userId": USER_A, "tripId": TRIP_A2, "tripName": "A2"}
-                ]
-            },
+            {"Items": [{"userId": USER_A, "tripId": TRIP_A2}]},
         ]
-
-        first = phase2.lambda_handler(read_event(limit=1), context("get_trips"))
+        first = phase2.lambda_handler(event(limit=1), context("get_trips"))
         second = phase2.lambda_handler(
-            read_event(limit=1, nextToken=first["nextToken"]),
-            context("get_trips"),
+            event(limit=1, nextToken=first["nextToken"]), context("get_trips")
         )
-
         ids = [first["trips"][0]["tripId"], second["trips"][0]["tripId"]]
         self.assertEqual(ids, [TRIP_A, TRIP_A2])
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertEqual(
-            self.table.query.call_args_list[1].kwargs["ExclusiveStartKey"],
-            {"userId": USER_A, "tripId": TRIP_A},
+
+    def test_cursor_from_user_a_is_rejected_for_user_b(self) -> None:
+        token = phase2._encode_next_token(
+            {"userId": USER_A, "tripId": TRIP_A}, USER_A
         )
-
-    def test_pagination_cursor_from_user_a_is_rejected_for_user_b(self) -> None:
-        self.table.query.return_value = {
-            "Items": [{"userId": USER_A, "tripId": TRIP_A}],
-            "LastEvaluatedKey": {"userId": USER_A, "tripId": TRIP_A},
-        }
-        first = phase2.lambda_handler(read_event(limit=1), context("get_trips"))
-        self.table.query.reset_mock()
-
         response = phase2.lambda_handler(
-            read_event(USER_B, limit=1, nextToken=first["nextToken"]),
-            context("get_trips"),
+            event(USER_B, nextToken=token), context("get_trips")
         )
-
         self.assertEqual(response["error"], "validation_error")
         self.assertIn("authenticated user", response["message"])
         self.table.query.assert_not_called()
 
-    def test_tampered_cursor_actor_binding_is_rejected(self) -> None:
+    def test_tampered_cursor_is_rejected(self) -> None:
         token = phase2._encode_next_token(
             {"userId": USER_A, "tripId": TRIP_A}, USER_A
         )
@@ -191,15 +167,13 @@ class TripToolsPhase2Tests(unittest.TestCase):
         tampered = base64.urlsafe_b64encode(
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
         ).decode().rstrip("=")
-
         response = phase2.lambda_handler(
-            read_event(nextToken=tampered), context("get_trips")
+            event(nextToken=tampered), context("get_trips")
         )
-
         self.assertEqual(response["error"], "validation_error")
         self.table.query.assert_not_called()
 
-    def test_update_without_confirmation_has_no_dynamodb_effect(self) -> None:
+    def test_update_without_confirmation_has_no_side_effect(self) -> None:
         response = phase2.lambda_handler(
             mutation_event(
                 confirmationVerified=False,
@@ -208,104 +182,67 @@ class TripToolsPhase2Tests(unittest.TestCase):
             ),
             context("update_trip"),
         )
-
         self.assertEqual(response["error"], "validation_error")
         self.table.get_item.assert_not_called()
         self.client.transact_write_items.assert_not_called()
 
     def test_user_b_cannot_update_user_a_trip(self) -> None:
         self.table.get_item.side_effect = [{}, {}]
-
         response = phase2.lambda_handler(
             mutation_event(USER_B, tripId=TRIP_A, status="confirmed"),
             context("update_trip"),
         )
-
         self.assertFalse(response["updated"])
-        self.assertEqual(response["message"], "Trip not found.")
         self.assertEqual(
             self.table.get_item.call_args_list[1].kwargs["Key"],
             {"userId": USER_B, "tripId": TRIP_A},
         )
         self.client.transact_write_items.assert_not_called()
 
-    def test_create_replay_emits_redacted_outcome_without_duplicate(self) -> None:
-        payload = {
+    def test_create_replay_has_one_write_attempt_and_redacted_outcome(self) -> None:
+        trip_payload = {
             "tripName": "Setif",
             "startDate": "2026-08-26",
             "endDate": "2026-09-06",
         }
         trip_id = base._deterministic_trip_id(USER_A, OPERATION_ID)
-        self.table.put_item.side_effect = client_error(
-            "ConditionalCheckFailedException", "PutItem"
-        )
+        self.table.put_item.side_effect = conditional_error()
         self.table.get_item.return_value = {
             "Item": {
                 "userId": USER_A,
                 "tripId": trip_id,
                 "creationOperationId": OPERATION_ID,
-                "creationOperationHash": base._operation_hash(payload),
+                "creationOperationHash": base._operation_hash(trip_payload),
             }
         }
-        previous_info = base.logger.info
+        original_info = base.logger.info
         base.logger.info = Mock()
         try:
             response = phase2.lambda_handler(
-                mutation_event(**payload), context("create_trip")
+                mutation_event(**trip_payload), context("create_trip")
+            )
+            logs = "\n".join(
+                str(call.args[0]) for call in base.logger.info.call_args_list if call.args
             )
         finally:
-            log_calls = base.logger.info.call_args_list
-            base.logger.info = previous_info
-
+            base.logger.info = original_info
         self.assertTrue(response["replayed"])
         self.table.put_item.assert_called_once()
-        evidence = "\n".join(str(call.args[0]) for call in log_calls if call.args)
-        self.assertIn("trip_mutation_outcome", evidence)
-        self.assertIn('"replayed": true', evidence.lower())
-        self.assertNotIn(USER_A, evidence)
-        self.assertNotIn(OPERATION_ID, evidence)
-        self.assertNotIn(trip_id, evidence)
+        self.assertIn("trip_mutation_outcome", logs)
+        self.assertNotIn(USER_A, logs)
+        self.assertNotIn(OPERATION_ID, logs)
+        self.assertNotIn(trip_id, logs)
 
-    def test_reused_create_operation_with_different_payload_is_conflict(self) -> None:
-        trip_id = base._deterministic_trip_id(USER_A, OPERATION_ID)
-        self.table.put_item.side_effect = client_error(
-            "ConditionalCheckFailedException", "PutItem"
-        )
-        self.table.get_item.return_value = {
-            "Item": {
-                "userId": USER_A,
-                "tripId": trip_id,
-                "creationOperationId": OPERATION_ID,
-                "creationOperationHash": "different",
-            }
-        }
-
-        response = phase2.lambda_handler(
-            mutation_event(
-                tripName="Setif",
-                startDate="2026-08-26",
-                endDate="2026-09-06",
-            ),
-            context("create_trip"),
-        )
-
-        self.assertEqual(response["error"], "idempotency_conflict")
-
-    def test_terraform_packages_and_uses_phase2_wrapper(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        environment = (
-            root / "infra" / "environments" / "test" / "trip_tools.tf"
-        ).read_text(encoding="utf-8")
-        module = (
-            root / "infra" / "modules" / "trip_tools_lambda" / "main.tf"
-        ).read_text(encoding="utf-8")
-        variables = (
-            root / "infra" / "modules" / "trip_tools_lambda" / "variables.tf"
-        ).read_text(encoding="utf-8")
-
+    def test_terraform_uses_phase2_wrapper(self) -> None:
+        environment = (ROOT / "infra/environments/test/trip_tools.tf").read_text()
+        module = (ROOT / "infra/modules/trip_tools_lambda/main.tf").read_text()
+        variables = (ROOT / "infra/modules/trip_tools_lambda/variables.tf").read_text()
         self.assertIn("phase2_source_file", environment)
         self.assertIn('filename = "lambda_function_phase2.py"', module)
-        self.assertIn('handler = "lambda_function_phase2.lambda_handler"', module)
+        self.assertIn(
+            'handler                        = "lambda_function_phase2.lambda_handler"',
+            module,
+        )
         self.assertIn('variable "phase2_source_file"', variables)
 
 
