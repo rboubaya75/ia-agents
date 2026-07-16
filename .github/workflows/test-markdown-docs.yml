@@ -1,8 +1,19 @@
 name: Test Markdown Documentation
 
 on:
+  push:
+    branches:
+      - "migration/secure-agentcore-v1"
+      - "migration/secure-agentcore-v2"
+    paths:
+      - "README.md"
+      - "docs/**/*.md"
+      - "scripts/validate_markdown_docs.py"
+      - ".github/workflows/test-markdown-docs.yml"
   pull_request:
-    branches: ["migration/secure-agentcore-v1"]
+    branches:
+      - "migration/secure-agentcore-v1"
+      - "migration/secure-agentcore-v2"
     paths:
       - "README.md"
       - "docs/**/*.md"
@@ -35,8 +46,21 @@ jobs:
         run: python -m py_compile scripts/validate_markdown_docs.py
 
       - name: Validate V1 documentation
+        if: github.base_ref == 'migration/secure-agentcore-v1' || github.ref_name == 'migration/secure-agentcore-v1'
         run: |
           python scripts/validate_markdown_docs.py \
             README.md \
             docs/validation/V1-MEMORY-SECURITY-SUMMARY-FR.md \
             docs/validation/V1-MEMORY-SECURITY-TESTS-FR.md
+
+      - name: Validate V2 documentation
+        if: github.base_ref == 'migration/secure-agentcore-v2' || github.ref_name == 'migration/secure-agentcore-v2'
+        run: |
+          python scripts/validate_markdown_docs.py \
+            README.md \
+            docs/v2/README.md \
+            docs/v2/V2-CHARTER-FR.md \
+            docs/v2/V2-ROADMAP-FR.md \
+            docs/hld/HLD-Secure-AgentCore-V2-FR.md \
+            docs/lld/LLD-V2-INDEX-FR.md \
+            docs/adr/V2-ADR-BACKLOG-FR.md
