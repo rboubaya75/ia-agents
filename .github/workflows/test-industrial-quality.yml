@@ -1,0 +1,104 @@
+name: Test Industrial Quality
+
+on:
+  pull_request:
+    branches: ["migration/secure-agentcore-v1"]
+    paths:
+      - "deploy-agentcore/**"
+      - "frontend/src/services/chatService.ts"
+      - "infra/environments/test/agentcore_native.tf"
+      - "infra/modules/agent_api_facade/**"
+      - "infra/modules/api_gateway_agent_ingress/**"
+      - "infra/modules/trip_tools_lambda/**"
+      - "scripts/run_industrial_test_suite.py"
+      - "tests/industrial/**"
+      - "tests/README.md"
+      - ".github/workflows/test-industrial-quality.yml"
+  push:
+    branches: ["migration/secure-agentcore-v1"]
+    paths:
+      - "deploy-agentcore/**"
+      - "frontend/src/services/chatService.ts"
+      - "infra/environments/test/agentcore_native.tf"
+      - "infra/modules/agent_api_facade/**"
+      - "infra/modules/api_gateway_agent_ingress/**"
+      - "infra/modules/trip_tools_lambda/**"
+      - "scripts/run_industrial_test_suite.py"
+      - "tests/industrial/**"
+      - "tests/README.md"
+      - ".github/workflows/test-industrial-quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-industrial-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_DEFAULT_REGION: eu-west-3
+  AWS_REGION: eu-west-3
+
+jobs:
+  industrial-contracts:
+    name: Industrial Resilience Security and Observability
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: deploy-agentcore/requirements.txt
+
+      - name: Install pinned Runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            --requirement deploy-agentcore/requirements.txt
+          python -m pip check
+
+      - name: Compile industrial suite
+        run: |
+          python -m py_compile \
+            scripts/run_industrial_test_suite.py \
+            tests/industrial/_industrial_helpers.py \
+            tests/industrial/test_runtime_resilience.py \
+            tests/industrial/test_quality_boundaries.py
+
+      - name: Run industrial contracts
+        run: |
+          set -o pipefail
+          python scripts/run_industrial_test_suite.py \
+            --output industrial-test-results.json \
+            2>&1 | tee industrial-test-results.log
+
+      - name: Verify evidence completeness
+        if: always()
+        run: |
+          test -s industrial-test-results.json
+          jq -e '
+            .schemaVersion == 1 and
+            .suite.testsRun == .suite.testsDiscovered and
+            .suite.testsRun >= 17 and
+            (.cases | length) == .suite.testsRun and
+            ([.cases[].caseId | select(. == "UNMAPPED")] | length) == 0
+          ' industrial-test-results.json >/dev/null
+
+      - name: Upload industrial evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: industrial-test-results-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            industrial-test-results.log
+            industrial-test-results.json
+          retention-days: 90
+          if-no-files-found: error
