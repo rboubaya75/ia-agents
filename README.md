@@ -27,7 +27,7 @@ Browser / React
   -> AgentCore Runtime IAM-only
        - trustedIdentity produite par la façade
        - contexte d'opération injecté dans les tools
-       - client MCP préchauffé et reconnecté une seule fois
+       - client MCP initialisé à la première invocation et reconnecté une seule fois
        - Claude Haiku 4.5 EU
        - AgentCore Memory
        - tools Strands
@@ -95,7 +95,7 @@ Runtime écrase toujours `userId`, `operationId`, `requestId` et `deadlineEpochM
 - deadline serveur propagée jusqu’à la Lambda Trip Tools ;
 - Runtime IAM-only avec resource policy limitée au rôle de la façade ;
 - Gateway MCP IAM avec resource policy limitée au rôle Runtime ;
-- initialisation MCP avant `app.run()`, fermeture au shutdown et reconnexion bornée à une tentative ;
+- démarrage HTTP indépendant du Gateway, initialisation MCP lazy, fermeture au shutdown et reconnexion bornée à une tentative ;
 - retry MCP utilisant le même `operationId` ;
 - IAM Runtime limité au modèle, à Memory, au Gateway, à ECR et aux logs nécessaires ;
 - Lambda Trip Tools limitée à la table DynamoDB exacte ;
@@ -132,6 +132,22 @@ Les entrées sont validées : formats d’identifiants, tailles, dates ISO, ordr
 - tests unitaires de la façade, du Runtime, du lifecycle MCP et des tools ;
 - audit des dépendances Python ;
 - frontend `npm ci`, audit, lint et build.
+
+### Qualité industrielle
+
+```text
+.github/workflows/test-industrial-quality.yml
+```
+
+- fault injection sur les pannes MCP avant et après mutation ;
+- vérification de la reconnexion unique et du budget de deadline ;
+- initialisation MCP concurrente ;
+- contrats IAM Runtime, Gateway, façade et Trip Tools ;
+- contrôles de redaction et de corrélation des événements ;
+- chaîne de timeouts frontend, API Gateway, façade, Runtime et Lambda ;
+- artefact JSON traçable par identifiant de risque, conservé 90 jours.
+
+Le référentiel complet se trouve dans `tests/README.md`.
 
 ### Infrastructure
 
@@ -178,6 +194,7 @@ L’implémentation du code et de l’IaC V1 est présente sur la branche. La V1
 
 ## Documentation
 
+- `tests/README.md` — stratégie, conventions et matrice des tests industriels ;
 - `docs/adr/ADR-0004-api-gateway-direct-agentcore-runtime-jwt.md` — historique, superseded ;
 - `docs/adr/ADR-0005-lambda-security-facade-agentcore-runtime-iam.md` — décision active ;
 - `docs/adr/ADR-0006-idempotency-deadline-mcp-lifecycle.md` — décision active ;
