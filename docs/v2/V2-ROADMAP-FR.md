@@ -1,6 +1,6 @@
 # Roadmap de transition — Secure AgentCore V2
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Branche :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
 - **Principe :** aucune implémentation structurante avant validation du HLD et du LLD correspondant
@@ -20,288 +20,117 @@ V2-G0 Baseline et cadrage
   -> V2-G9 Documentation As-Built et clôture
 ```
 
-Les gates sont cumulatives. Une phase ne doit pas masquer un écart ouvert dans une phase antérieure.
+Les gates sont cumulatives.
 
-## 2. Phase 0 — Baseline V1 et cadrage V2
+## 2. Phase 0 — Baseline et cadrage
 
-### Travaux
+Travaux : figer la baseline V1, documenter l’As-Is, définir le périmètre, les exclusions, les exigences initiales, la branche V2, le backlog ADR et la gouvernance documentaire.
 
-- figer la baseline V1 ;
-- établir l’inventaire des composants réutilisés, remplacés et supprimés ;
-- documenter l’As-Is ;
-- définir le périmètre, les exclusions et les exigences initiales ;
-- créer la branche V2 ;
-- ouvrir le backlog ADR ;
-- définir la gouvernance documentaire.
+**Gate V2-G0 :** charte, roadmap, HLD initial, catalogue des dix LLD et backlog ADR disponibles ; aucun changement applicatif actif.
 
-### Livrables
+## 3. Phase 1 — Exigences et ADR structurants
 
-- `docs/v2/README.md` ;
-- `docs/v2/V2-CHARTER-FR.md` ;
-- `docs/v2/V2-ROADMAP-FR.md` ;
-- baseline V1 référencée par SHA.
+Les ADR bloquants sont :
 
-### Gate V2-G0
+1. `V2-ADR-001` ingress et frontière de sécurité ;
+2. `V2-ADR-002` répartition FastAPI / AgentCore Runtime ;
+3. `V2-ADR-003` RAG S3 Vectors ;
+4. `V2-ADR-004` ingestion documentaire ;
+5. `V2-ADR-005` agents et orchestration ;
+6. `V2-ADR-006` identité, autorisation et isolation ;
+7. `V2-ADR-007` réseau et calcul EKS ;
+8. `V2-ADR-008` observabilité et contexte distribué ;
+9. `V2-ADR-009` GitLab CI et promotion ;
+10. `V2-ADR-010` sauvegarde, restauration et réhydratation.
 
-- documents disponibles ;
-- exclusions techniques enregistrées ;
-- aucun changement applicatif actif ;
-- backlog ADR et catalogue LLD initialisés.
-
-## 3. Phase 1 — Exigences détaillées et ADR structurants
-
-### Travaux
-
-- consolider les cas d’usage et parcours ;
-- définir volumétrie, classification des données et contraintes de conservation ;
-- définir SLO, RTO/RPO, performance et budgets de coût ;
-- instruire les options d’ingress ;
-- arbitrer le rôle FastAPI/EKS, AgentCore Runtime et Gateway MCP ;
-- arbitrer mono-agent ou multi-agent ;
-- arbitrer le workflow d’ingestion ;
-- définir le modèle d’isolation utilisateur ou tenant ;
-- définir la trajectoire GitHub Actions vers GitLab CI.
-
-### Livrables
-
-- catalogue d’exigences versionné ;
-- ADR d’ingress ;
-- ADR plateforme EKS/FastAPI ;
-- ADR RAG/S3 Vectors ;
-- ADR agents et orchestration ;
-- ADR données et mémoire ;
-- ADR CI/CD ;
-- ADR observabilité et résilience.
-
-### Gate
-
-Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentation.
+**Gate :** aucun ADR critique sans décision ou expérimentation bornée assortie de critères.
 
 ## 4. Phase 2 — HLD V2
 
-### Travaux
+Le HLD doit couvrir architecture logique et physique, flux d’identité et de données, ingestion, retrieval, agents, tools, zones de confiance, EKS, stockage, disponibilité, reprise, observabilité, coûts, CI/CD, analyse As-Is / To-Be et trajectoire de migration.
 
-- architecture logique et physique To-Be ;
-- flux d’identité, données, ingestion, retrieval, agents et tools ;
-- zones de confiance ;
-- architecture EKS ;
-- stockage S3, S3 Vectors et DynamoDB ;
-- haute disponibilité et reprise ;
-- observabilité et FinOps ;
-- CI/CD et environnements ;
-- analyse As-Is / To-Be ;
-- trajectoire de migration et rollback ;
-- estimation des coûts et risques.
-
-### Livrable
-
-- `docs/hld/HLD-Secure-AgentCore-V2-FR.md` en statut `Approved`.
-
-### Gate V2-G1
-
-- HLD revu ;
-- composants et responsabilités non ambigus ;
-- flux sensibles et frontières de confiance couverts ;
-- risques majeurs associés à des contrôles ;
-- aucun développement structurant autorisé avant cette validation.
+**Gate V2-G1 :** HLD `Approved`, responsabilités non ambiguës, risques majeurs associés à des contrôles et aucune implémentation structurante autorisée avant validation.
 
 ## 5. Phase 3 — LLD par domaine
 
-### LLD obligatoires
+Les dix LLD canoniques sont :
 
-1. plateforme AWS, réseau, EKS et FastAPI ;
-2. RAG et ingestion documentaire ;
-3. agents et orchestration ;
-4. Gateway MCP et tools ;
-5. identité, sécurité et conformité ;
-6. données, mémoire, rétention et restauration ;
-7. observabilité, SLO et FinOps ;
-8. CI/CD, Terraform, Helm et promotion ;
-9. stratégie de tests et preuves.
+1. `V2-LLD-001` Plateforme AWS, réseau, EKS et FastAPI ;
+2. `V2-LLD-002` RAG et ingestion documentaire ;
+3. `V2-LLD-003` Agents et orchestration ;
+4. `V2-LLD-004` AgentCore Gateway MCP et tools ;
+5. `V2-LLD-005` Identité, sécurité et conformité ;
+6. `V2-LLD-006` Données, mémoire, rétention et restauration ;
+7. `V2-LLD-007` Observabilité, SLO et FinOps ;
+8. `V2-LLD-008` CI/CD, Terraform, Helm et promotion ;
+9. `V2-LLD-009` Stratégie de tests et preuves ;
+10. `V2-LLD-010` Frontend React V2.
 
-### Contenu minimal de chaque LLD
+Chaque LLD couvre périmètre, dépendances ADR exactes, composants, séquences, contrats, IAM, secrets, timeouts, retries, capacité, coûts, observabilité, tests, rollback et risques résiduels.
 
-- périmètre et dépendances ;
-- composants et responsabilités ;
-- séquences détaillées ;
-- contrats d’API ou d’événements ;
-- configuration ;
-- IAM et secrets ;
-- erreurs, timeouts et retries ;
-- capacité, performance et coûts ;
-- logs, métriques et traces ;
-- tests et critères d’acceptation ;
-- rollback et exploitation ;
-- risques résiduels.
+**Gate V2-G2 :** tous les LLD requis pour la tranche sont `Approved`, avec exigences et tests traçables.
 
-### Gate V2-G2
+## 6. Phase 4 — Socle EKS et FastAPI
 
-- tous les LLD nécessaires à la première tranche sont `Approved` ;
-- exigences et tests sont traçables ;
-- les choix non tranchés sont bloquants ou explicitement différés.
+- Terraform, réseau, endpoints, EKS, namespaces et identités de workloads ;
+- ECR, Secrets Manager, KMS, Helm et FastAPI ;
+- WAF, API Gateway et ingress selon ADR ;
+- observabilité minimale et gates CI.
 
-## 6. Phase 4 — Socle plateforme EKS et FastAPI
+**Gate V2-G3 :** plan Terraform revu, charts testés, contrats FastAPI validés, IAM et réseau testés hors ligne.
 
-### Travaux
+## 7. Phase 5 — RAG et ingestion
 
-- modules Terraform ;
-- réseau et endpoints nécessaires ;
-- cluster EKS ;
-- namespaces, politiques et identités de workloads ;
-- ECR ;
-- Secrets Manager et KMS ;
-- Helm charts ;
-- FastAPI avec health, readiness et graceful shutdown ;
-- WAF, API Gateway et intégration d’ingress selon ADR ;
-- observabilité minimale ;
-- gates CI de compilation, sécurité et plan.
+- S3 source, quarantaine, parsing, chunking et embeddings ;
+- S3 Vectors et métadonnées DynamoDB ;
+- idempotence, suppression, réindexation et isolation ;
+- citations, provenance et dataset d’évaluation ;
+- protections adversariales.
 
-### Gate V2-G3
+**Gate V2-G4 :** ingestion rejouable, suppression cohérente, métriques de retrieval et citations vérifiables.
 
-- plan Terraform revu ;
-- charts Helm testés ;
-- contrats FastAPI validés ;
-- contrôles réseau et IAM testés hors ligne ;
-- aucun déploiement sans autorisation explicite.
+## 8. Phase 6 — Agents et MCP
 
-## 7. Phase 5 — RAG et ingestion documentaire
+- agents sous `/agents`, adapter, Converse API et orchestrateur minimal ;
+- budgets de tours, tokens, temps et tools ;
+- Gateway MCP, catalogue versionné, confirmation, idempotence et non-rejeu ;
+- résilience et circuit breaker.
 
-### Travaux
-
-- stockage source S3 ;
-- validation, parsing et chunking ;
-- embeddings Bedrock configurables ;
-- index S3 Vectors ;
-- métadonnées DynamoDB ;
-- ingestion idempotente ;
-- réindexation et suppression ;
-- isolation ;
-- citations et provenance ;
-- protection contre prompt injection et data poisoning ;
-- dataset d’évaluation versionné.
-
-### Gate V2-G4
-
-- ingestion rejouable sans doublon ;
-- suppression cohérente source/index/métadonnées ;
-- métriques de retrieval calculées ;
-- citations vérifiables ;
-- tests adversariaux disponibles.
-
-## 8. Phase 6 — Agents custom et Gateway MCP
-
-### Travaux
-
-- structure `/agents` ;
-- contrats applicatifs indépendants du framework ;
-- adapter Strands ou LangGraph ;
-- Bedrock Converse API ;
-- orchestrateur minimal ;
-- agents spécialisés justifiés ;
-- budgets de tours et de tokens ;
-- tool allowlists par agent ;
-- Gateway MCP et tools versionnés ;
-- confirmation, idempotence et non-rejeu ;
-- resilience et circuit breaker.
-
-### Gate V2-G5
-
-- agents testables sans service externe ;
-- aucun tool non gouverné ;
-- mutation protégée et rejouable ;
-- retrieval traité comme donnée non fiable ;
-- appels modèle et tools traçables.
+**Gate V2-G5 :** agents testables hors ligne, aucun tool non gouverné et mutations protégées.
 
 ## 9. Phase 7 — Frontend V2
 
-### Travaux
+- streaming, citations, upload et suivi d’ingestion ;
+- historique, préférences, confirmations et reprise après erreur ;
+- sécurité navigateur, accessibilité et tests.
 
-- streaming ;
-- affichage des sources ;
-- upload documentaire ;
-- état d’ingestion ;
-- historique et préférences ;
-- confirmations ;
-- reprise après 401 et erreur ambiguë ;
-- accessibilité ;
-- tests navigateur.
-
-### Gate V2-G6
-
-- aucune URL technique Runtime exposée ;
-- tokens et prompts absents des stockages non autorisés ;
-- parcours nominaux et erreurs testés ;
-- sources et confirmations compréhensibles.
+**Gate V2-G6 :** aucune URL Runtime exposée, parcours nominaux et erreurs testés.
 
 ## 10. Phase 8 — Sécurité, observabilité, FinOps et CI/CD
 
-### Travaux
-
-- threat model ;
-- WAF et règles de protection ;
-- Pod Security et Network Policies ;
+- threat model, WAF, Pod Security, Network Policies et contrôle egress ;
 - SBOM, scans et signature d’images ;
-- OpenTelemetry ;
-- dashboards CloudWatch ;
-- SLO, alertes et error budgets ;
-- métriques de tokens, embeddings, stockage et calcul ;
-- pipeline GitLab CI OIDC ;
-- parité avec les gates existantes avant retrait de GitHub Actions.
+- OpenTelemetry, CloudWatch, SLO, alertes et coûts ;
+- GitLab CI OIDC et parité avec les gates existantes.
 
-### Gate V2-G7
-
-- sécurité négative démontrée ;
-- corrélation bout en bout ;
-- coûts mesurables ;
-- parité CI prouvée ;
-- rollback documenté.
+**Gate V2-G7 :** sécurité négative, corrélation, coûts, parité CI et rollback démontrés.
 
 ## 11. Phase 9 — Tests industriels et réception
 
-### Travaux
+- unitaires, contrats, intégration et E2E ;
+- isolation, tests adversariaux, charge, soak, chaos et restauration ;
+- mesure SLO et preuves redacted.
 
-- unitaires, contrats et intégration ;
-- E2E ;
-- isolation multi-utilisateur ou multi-tenant ;
-- prompt injection et data poisoning ;
-- charge et soak tests ;
-- chaos contrôlé ;
-- restauration ;
-- mesure SLO ;
-- preuves immuables et redacted.
-
-### Gate V2-G8
-
-- aucune exigence critique sans test ;
-- résultats reproductibles ;
-- échecs connus documentés ;
-- restauration et rollback prouvés ;
-- rapport de réception disponible.
+**Gate V2-G8 :** aucune exigence critique sans test, résultats reproductibles et rapport de réception disponible.
 
 ## 12. Phase 10 — As-Built et clôture
 
-### Travaux
+- mise à jour HLD/LLD ;
+- clôture ou supersession des ADR ;
+- runbooks, matrice de coûts, rapport de réception, release et tag V2.
 
-- mettre à jour HLD et LLD selon l’implémentation ;
-- clôturer ou superseder les ADR ;
-- finaliser runbooks, standards et procédures ;
-- produire la matrice de coûts ;
-- produire le rapport de réception ;
-- préparer release et tag V2.
+**Gate V2-G9 :** documentation As-Built, preuves archivées, risques résiduels acceptés et release explicitement autorisée.
 
-### Gate V2-G9
+## 13. Règles de passage
 
-- documentation en statut `As-Built` ;
-- preuves archivées ;
-- dette et risques résiduels acceptés ;
-- release autorisée explicitement.
-
-## 13. Règles de passage entre phases
-
-- plan présenté avant chaque phase ;
-- modification limitée au périmètre validé ;
-- fichiers changés résumés ;
-- lint, typecheck et tests exécutés ;
-- tous les échecs signalés ;
-- validation explicite avant la phase suivante ;
-- aucun `terraform apply`, déploiement, merge ou destruction implicite.
+Plan avant modification, périmètre limité, fichiers résumés, validations exécutées, échecs signalés et validation explicite avant la phase suivante. Aucun `terraform apply`, déploiement, merge ou destroy implicite.
