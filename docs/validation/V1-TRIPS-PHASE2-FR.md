@@ -143,25 +143,55 @@ clé ou MAC brute
 
 ## 7. Matrice des contrats automatisés
 
-| Contrat | Niveau | Statut dans la PR | Preuve attendue |
+| Contrat | Niveau | Statut | Preuve |
 |---|---|---|---|
-| A lit son voyage | unité/contrat | À VALIDER PAR CI | clé `{userId=A, tripId}` et `ConsistentRead=true` |
-| B lit un `tripId` de A | unité/contrat | À VALIDER PAR CI | clé construite avec B, réponse générique |
-| pagination A page 1 puis page 2 | unité/contrat | À VALIDER PAR CI | IDs distincts et `ExclusiveStartKey` exact |
-| curseur A présenté par B | unité/contrat | À VALIDER PAR CI | rejet avant KMS et DynamoDB |
-| `actorHash` altéré | unité/contrat | À VALIDER PAR CI | rejet avant KMS et DynamoDB |
-| `tripId` seul altéré | unité/contrat | À VALIDER PAR CI | `KMSInvalidMacException` convertie en `validation_error` |
-| curseur expiré | unité/contrat | À VALIDER PAR CI | rejet avant KMS et DynamoDB |
-| token V2 non signé | unité/contrat | À VALIDER PAR CI | demande de recommencer la pagination |
-| update sans confirmation | unité/contrat | À VALIDER PAR CI | aucune lecture ni transaction DynamoDB |
-| B modifie un voyage de A | unité/contrat | À VALIDER PAR CI | aucune transaction |
-| replay create | unité/contrat | À VALIDER PAR CI | un seul essai d’écriture, `replayed=true` |
-| payload différent avec même opération | régression | À VALIDER PAR CI | `idempotency_conflict` |
-| update atomique et replay tardif | régression | À VALIDER PAR CI | transaction et ledger TTL existants |
-| packaging Terraform et clé HMAC | contrat IaC | À VALIDER PAR CI | handler, clé KMS, IAM et variables attendus |
-| logs redacted | unité/contrat | À VALIDER PAR CI | absence des identifiants bruts |
+| A lit son voyage | unité/contrat | PASS PROUVÉ | clé `{userId=A, tripId}` et `ConsistentRead=true` |
+| B lit un `tripId` de A | unité/contrat | PASS PROUVÉ | clé construite avec B, réponse générique |
+| pagination A page 1 puis page 2 | unité/contrat | PASS PROUVÉ | IDs distincts et `ExclusiveStartKey` exact |
+| curseur A présenté par B | unité/contrat | PASS PROUVÉ | rejet avant KMS et DynamoDB |
+| `actorHash` altéré | unité/contrat | PASS PROUVÉ | rejet avant KMS et DynamoDB |
+| `tripId` seul altéré | unité/contrat | PASS PROUVÉ | `KMSInvalidMacException` convertie en `validation_error` |
+| curseur expiré | unité/contrat | PASS PROUVÉ | rejet avant KMS et DynamoDB |
+| token V2 non signé | unité/contrat | PASS PROUVÉ | demande de recommencer la pagination |
+| update sans confirmation | unité/contrat | PASS PROUVÉ | aucune lecture ni transaction DynamoDB |
+| B modifie un voyage de A | unité/contrat | PASS PROUVÉ | aucune transaction |
+| replay create | unité/contrat | PASS PROUVÉ | un seul essai d’écriture, `replayed=true` |
+| payload différent avec même opération | régression | PASS PROUVÉ | `idempotency_conflict` |
+| update atomique et replay tardif | régression | PASS PROUVÉ | transaction et ledger TTL existants |
+| packaging Terraform et clé HMAC | contrat IaC | PASS PROUVÉ | handler, clé KMS, IAM et variables attendus |
+| logs redacted | unité/contrat | PASS PROUVÉ | absence des identifiants bruts |
 
-## 8. Gate CI dédiée
+## 8. Preuves automatisées archivées
+
+Code validé :
+
+```text
+e376d2f45980c663a1e4ad03422a56e64f771bf5
+```
+
+Gate Trip Tools Phase 2 :
+
+```text
+Workflow : Test Trip Tools Phase 2
+Run ID   : 29492100107
+Artefact : trip-tools-phase2-e5d6de7b59544b53b126d25ffbd936be8561a8f3-29492100107
+Digest   : sha256:6f0d10d0c9869511e70783b899c3351d75c62c5d3e49faca749978861f197871
+Expire   : 14 octobre 2026
+```
+
+Plan Terraform et analyse de sécurité :
+
+```text
+Workflow : Test Terraform Stack
+Run ID   : 29492100085
+Artefact : tfplan-e5d6de7b59544b53b126d25ffbd936be8561a8f3-29492100085
+Digest   : sha256:5543ebbfe493181d13ce3a92a39bada24338a930613d13d85f48dbd08d629e35
+Expire   : 30 juillet 2026
+```
+
+Le plan Terraform doit être copié dans le stockage de preuves V1 avant son expiration GitHub. L’artefact fonctionnel Phase 2 est conservé pendant 90 jours.
+
+## 9. Gate CI dédiée
 
 Workflow :
 
@@ -191,7 +221,7 @@ terraform fmt -check \
   infra/modules/trip_tools_lambda/variables.tf
 ```
 
-## 9. Scénarios AWS E2E restant à exécuter
+## 10. Scénarios AWS E2E restant à exécuter
 
 Ces contrôles restent `NON TESTÉ E2E` tant qu’un déploiement contrôlé n’a pas été exécuté.
 
@@ -210,7 +240,7 @@ Ces contrôles restent `NON TESTÉ E2E` tant qu’un déploiement contrôlé n�
 | token expiré | NON TESTÉ E2E | rejet et reprise depuis la première page |
 | audit CloudWatch redacted | NON TESTÉ E2E | requête Logs Insights et extraits minimaux |
 
-## 10. Critères de passage à la Phase 3
+## 11. Critères de passage à la Phase 3
 
 La Phase 3 ne doit commencer qu’après :
 
