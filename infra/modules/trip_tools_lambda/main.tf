@@ -95,7 +95,6 @@ data "aws_iam_policy_document" "execution" {
     sid    = "UsePaginationHmacKey"
     effect = "Allow"
     actions = [
-      "kms:DescribeKey",
       "kms:GenerateMac",
       "kms:VerifyMac"
     ]
@@ -105,7 +104,7 @@ data "aws_iam_policy_document" "execution" {
 
 resource "aws_iam_role_policy" "execution" {
   name   = "${var.function_name}-execution"
-  role   = aws_iam_role.this.id
+  role   = aws_iam_role.this.arn
   policy = data.aws_iam_policy_document.execution.json
 }
 
