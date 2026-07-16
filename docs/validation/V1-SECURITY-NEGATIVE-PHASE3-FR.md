@@ -59,8 +59,9 @@ Le job `Security Negative Contracts` :
 3. rejoue les tests de régression de la façade ;
 4. vérifie les quatorze cas HTTP/CORS du harness avec un transport contrôlé ;
 5. vérifie statiquement que CORS n’autorise pas `*` et que la route utilise un authorizer JWT ;
-6. prouve que le rapport ne conserve ni token ni valeur injectée ;
-7. archive les logs et le catalogue complet pendant 90 jours.
+6. vérifie statiquement que la resource policy Runtime autorise la façade et refuse les autres principaux ;
+7. prouve que le rapport ne conserve ni token ni valeur injectée ;
+8. archive les logs et le catalogue complet pendant 90 jours.
 
 Ces preuves valident le **contrat**, pas encore l’environnement AWS déployé.
 
@@ -74,11 +75,13 @@ confirm_e2e=true
 branche=migration/secure-agentcore-v1
 ```
 
-Il lit les outputs Terraform existants sans les modifier, échange un refresh token Cognito contre des tokens courts, exécute les probes, puis archive uniquement un résultat redacted.
+Il lit les outputs Terraform existants sans les modifier, échange un refresh token Cognito contre des tokens courts, exécute les probes, puis archive uniquement un résultat redacted. Le JSON temporaire des outputs est écrit sous `RUNNER_TEMP`, puis supprimé à la fin de l’étape.
 
 Aucun access token ou ID token n’est passé dans les arguments du script. Ils sont fournis par variables d’environnement au seul processus de validation et masqués dans GitHub Actions.
 
-## 4. Secret de test requis
+Une erreur réseau est convertie en statut HTTP technique `0`. Le cas correspondant devient `FAIL`, sans message réseau brut, afin qu’un rapport redacted reste archivable au lieu de disparaître sur exception.
+
+## 4. Secret de test et autorisations requises
 
 L’entrée `refresh_token_secret_id` désigne un secret AWS Secrets Manager contenant soit :
 
@@ -97,6 +100,15 @@ soit :
 Le refresh token appartient à un utilisateur Cognito de test sans privilège. Sa durée de vie est limitée par la configuration du User Pool Client. Il doit être révoqué ou remplacé après la campagne de recette.
 
 Le workflow ne publie jamais le contenu du secret. La requête Cognito est construite dans un fichier temporaire en mode `0600`, supprimé à la fin du job.
+
+Le rôle OIDC utilisé par le workflow doit pouvoir :
+
+- lire le backend et les outputs Terraform du stack `test` ;
+- appeler `secretsmanager:GetSecretValue` uniquement sur le secret de recette ;
+- appeler le flux Cognito nécessaire à l’échange du refresh token ;
+- tenter `bedrock-agentcore:InvokeAgentRuntime` sur le Runtime de test.
+
+Ces autorisations doivent rester limitées à l’environnement `test`. Aucun secret ne doit être placé dans un input en clair autre que son identifiant Secrets Manager.
 
 ## 5. Preuve CORS
 
@@ -122,9 +134,12 @@ La façade reste responsable des contrôles `token_use=access`, `client_id` atte
 
 ## 7. Preuve IAM Runtime
 
-Le rôle OIDC de la CI tente un appel direct `InvokeAgentRuntime` avec un payload syntaxiquement valide.
+La preuve combine deux éléments distincts :
 
-Le résultat accepté est uniquement un code de type :
+1. un contrat statique Terraform vérifie la présence de `AllowOnlySecurityFacadeRole`, `DenyOtherRuntimeInvokers` et de la condition sur `aws:PrincipalArn` ;
+2. le rôle OIDC de la CI tente un appel direct `InvokeAgentRuntime` avec un payload syntaxiquement valide.
+
+Le résultat E2E accepté est uniquement un code de type :
 
 ```text
 AccessDenied
@@ -133,7 +148,9 @@ ForbiddenException
 UnauthorizedException
 ```
 
-Une invocation réussie est un échec bloquant. Une autre erreur n’est pas convertie artificiellement en succès, car elle ne prouve pas la frontière IAM.
+Une invocation réussie est un échec bloquant. Une autre erreur n’est pas convertie artificiellement en succès.
+
+Le seul `AccessDenied` prouve que le principal de test ne peut pas invoquer directement le Runtime. Il ne permet pas, isolément, d’attribuer le refus à une instruction IAM précise. L’attribution architecturale repose donc sur la lecture conjointe du contrat Terraform et du résultat E2E.
 
 ## 8. Format des preuves
 
@@ -171,7 +188,8 @@ message AWS brut
 |---|---|---|
 | façade JWT et champs interdits | à valider par la CI de la PR | NON TESTÉ E2E |
 | CORS CloudFront/arbitraire | à valider par la CI de la PR | NON TESTÉ E2E |
-| refus Runtime direct | à valider par la CI de la PR | NON TESTÉ E2E |
+| resource policy Runtime | à valider par contrat Terraform | NON TESTÉ E2E |
+| refus du principal CI vers Runtime | à valider par la CI de la PR | NON TESTÉ E2E |
 | rapport redacted | à valider par la CI de la PR | NON TESTÉ E2E |
 
 Aucun statut ne doit passer à `PASS PROUVÉ E2E` avant l’exécution manuelle et l’archivage de l’artefact correspondant.
