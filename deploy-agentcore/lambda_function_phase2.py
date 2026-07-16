@@ -65,7 +65,9 @@ def _decode_bytes(value: Any, field: str) -> bytes:
         raise base.ValidationError(f"{field} is invalid.")
     try:
         padded = value + "=" * (-len(value) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+        decoded = base64.b64decode(
+            padded.encode("ascii"), altchars=b"-_", validate=True
+        )
     except (UnicodeEncodeError, binascii.Error) as exc:
         raise base.ValidationError(f"{field} is invalid.") from exc
     if not decoded:
@@ -106,8 +108,16 @@ def _unsigned_token_payload(
     }
 
 
-def _canonical_token_message(payload: Dict[str, Any]) -> bytes:
-    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+def _canonical_token_message(user_id: str, trip_id: str, expires_at: int) -> bytes:
+    authenticated_payload = {
+        "v": TOKEN_VERSION,
+        "userId": user_id,
+        TOKEN_TRIP_FIELD: trip_id,
+        TOKEN_EXPIRES_FIELD: expires_at,
+    }
+    return json.dumps(
+        authenticated_payload, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
 
 
 def _generate_mac(message: bytes) -> bytes:
@@ -144,12 +154,13 @@ def _encode_next_token(last_key: Dict[str, Any], user_id: str) -> str:
             "DynamoDB pagination key escaped the authenticated partition."
         )
     trip_id = base._trip_id_value(last_key.get("tripId"), "pagination tripId")
+    expires_at = int(time.time()) + CURSOR_TTL_SECONDS
     payload = _unsigned_token_payload(
         base._safe_hash(user_id),
         trip_id,
-        int(time.time()) + CURSOR_TTL_SECONDS,
+        expires_at,
     )
-    mac = _generate_mac(_canonical_token_message(payload))
+    mac = _generate_mac(_canonical_token_message(user_id, trip_id, expires_at))
     return _encode_json({**payload, TOKEN_MAC_FIELD: _encode_bytes(mac)})
 
 
@@ -185,11 +196,10 @@ def _decode_next_token(token: Any, user_id: str) -> Dict[str, str] | None:
     if expires_at < int(time.time()):
         raise base.ValidationError("nextToken has expired; restart pagination.")
 
-    unsigned = _unsigned_token_payload(actor_hash, trip_id, expires_at)
     mac = _decode_bytes(value.get(TOKEN_MAC_FIELD), "nextToken MAC")
     if len(mac) != 32:
         raise base.ValidationError("nextToken MAC is invalid.")
-    _verify_mac(_canonical_token_message(unsigned), mac)
+    _verify_mac(_canonical_token_message(user_id, trip_id, expires_at), mac)
     return {"userId": user_id, "tripId": trip_id}
 
 
