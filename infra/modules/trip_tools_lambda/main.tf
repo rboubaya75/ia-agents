@@ -19,6 +19,20 @@ resource "archive_file" "this" {
   }
 }
 
+resource "aws_kms_key" "pagination_hmac" {
+  description              = "HMAC key for authenticated ${var.function_name} pagination cursors."
+  customer_master_key_spec = "HMAC_256"
+  key_usage                = "GENERATE_VERIFY_MAC"
+  enable_key_rotation      = false
+  deletion_window_in_days  = 7
+  tags                     = var.tags
+}
+
+resource "aws_kms_alias" "pagination_hmac" {
+  name          = "alias/${var.function_name}-pagination-hmac"
+  target_key_id = aws_kms_key.pagination_hmac.key_id
+}
+
 data "aws_iam_policy_document" "assume_role" {
   statement {
     effect  = "Allow"
@@ -76,6 +90,17 @@ data "aws_iam_policy_document" "execution" {
     ]
     resources = [var.trips_table_arn]
   }
+
+  statement {
+    sid    = "UsePaginationHmacKey"
+    effect = "Allow"
+    actions = [
+      "kms:DescribeKey",
+      "kms:GenerateMac",
+      "kms:VerifyMac"
+    ]
+    resources = [aws_kms_key.pagination_hmac.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "execution" {
@@ -102,11 +127,13 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      TRIPS_TABLE_NAME        = var.trips_table_name
-      TRIPS_DEFAULT_PAGE_SIZE = "20"
-      TRIPS_MAX_PAGE_SIZE     = "50"
-      IDEMPOTENCY_TTL_SECONDS = tostring(var.idempotency_ttl_seconds)
-      LOG_LEVEL               = "INFO"
+      TRIPS_TABLE_NAME           = var.trips_table_name
+      TRIPS_DEFAULT_PAGE_SIZE    = "20"
+      TRIPS_MAX_PAGE_SIZE        = "50"
+      TRIPS_CURSOR_HMAC_KEY_ID   = aws_kms_key.pagination_hmac.arn
+      TRIPS_CURSOR_TTL_SECONDS   = "900"
+      IDEMPOTENCY_TTL_SECONDS    = tostring(var.idempotency_ttl_seconds)
+      LOG_LEVEL                  = "INFO"
     }
   }
 
