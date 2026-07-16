@@ -12,12 +12,12 @@ import hashlib
 import json
 import os
 import sys
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol
 from urllib import error, parse, request
-import uuid
 
 FORBIDDEN_FIELDS: tuple[tuple[str, Any], ...] = (
     ("actorId", "security-probe-actor"),
@@ -119,6 +119,10 @@ def urllib_transport(
             headers=_lower_headers(exc.headers or {}),
             body=_bounded_body(exc),
         )
+    except (error.URLError, TimeoutError, OSError):
+        # Keep network failure evidence deterministic and redacted. Status 0 can
+        # never satisfy an HTTP contract, so the corresponding probe is a FAIL.
+        return HttpResponse(status=0, headers={}, body=b"")
 
 
 def _request_id_hash(body: bytes) -> str | None:
@@ -195,15 +199,26 @@ def run_http_probes(
     parsed = parse.urlparse(api_url)
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError("api_url must be an absolute HTTPS URL")
-    for name, origin in (("allowed_origin", allowed_origin), ("forbidden_origin", forbidden_origin)):
+    for name, origin in (
+        ("allowed_origin", allowed_origin),
+        ("forbidden_origin", forbidden_origin),
+    ):
         origin_parts = parse.urlparse(origin)
-        if origin_parts.scheme != "https" or not origin_parts.netloc or origin_parts.path not in ("", "/"):
+        if (
+            origin_parts.scheme != "https"
+            or not origin_parts.netloc
+            or origin_parts.path not in ("", "/")
+        ):
             raise ValueError(f"{name} must be an HTTPS origin without a path")
 
     if require_authenticated_cases and not access_token:
-        raise ValueError("Authenticated cases require the access-token environment variable")
+        raise ValueError(
+            "Authenticated cases require the access-token environment variable"
+        )
     if require_id_token and not id_token:
-        raise ValueError("The ID-token rejection case requires the ID-token environment variable")
+        raise ValueError(
+            "The ID-token rejection case requires the ID-token environment variable"
+        )
 
     results: list[ProbeResult] = []
     payload = _base_body()
@@ -254,7 +269,9 @@ def run_http_probes(
     forbidden_headers = dict(preflight_headers)
     forbidden_headers["origin"] = forbidden_origin
     forbidden = transport("OPTIONS", api_url, forbidden_headers, None, timeout)
-    forbidden_value = _lower_headers(forbidden.headers).get("access-control-allow-origin")
+    forbidden_value = _lower_headers(forbidden.headers).get(
+        "access-control-allow-origin"
+    )
     forbidden_passed = forbidden_value not in {forbidden_origin, "*"}
     results.append(
         ProbeResult(
@@ -383,7 +400,10 @@ def build_evidence(
     code_sha: str,
 ) -> dict[str, Any]:
     parsed = parse.urlparse(api_url)
-    counts = {name: sum(result.status == name for result in results) for name in ("PASS", "FAIL", "SKIP")}
+    counts = {
+        name: sum(result.status == name for result in results)
+        for name in ("PASS", "FAIL", "SKIP")
+    }
     return {
         "schemaVersion": 1,
         "generatedAt": utc_now(),
@@ -393,12 +413,17 @@ def build_evidence(
             "apiPathHash": safe_hash(parsed.path or "/"),
             "allowedOrigin": allowed_origin,
         },
-        "summary": {"total": len(results), **{key.lower(): value for key, value in counts.items()}},
+        "summary": {
+            "total": len(results),
+            **{key.lower(): value for key, value in counts.items()},
+        },
         "results": [asdict(result) for result in results],
     }
 
 
-def ensure_redacted(evidence: Mapping[str, Any], sensitive_values: Iterable[str]) -> None:
+def ensure_redacted(
+    evidence: Mapping[str, Any], sensitive_values: Iterable[str]
+) -> None:
     serialized = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
     for value in sensitive_values:
         if value and len(value) >= 16 and value in serialized:
@@ -407,7 +432,9 @@ def ensure_redacted(evidence: Mapping[str, Any], sensitive_values: Iterable[str]
 
 def write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -444,7 +471,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.api_url or not args.allowed_origin:
-        raise SystemExit("--api-url and --allowed-origin are required outside --catalog-only")
+        raise SystemExit(
+            "--api-url and --allowed-origin are required outside --catalog-only"
+        )
 
     access_token = os.getenv(args.access_token_env, "")
     id_token = os.getenv(args.id_token_env, "")
@@ -493,7 +522,9 @@ def main(argv: list[str] | None = None) -> int:
 
     failures = [result for result in results if result.status == "FAIL"]
     skips = [result for result in results if result.status == "SKIP"]
-    if args.require_runtime_deny and any(result.case == "runtime_direct_invoke_denied" for result in skips):
+    if args.require_runtime_deny and any(
+        result.case == "runtime_direct_invoke_denied" for result in skips
+    ):
         failures.append(
             ProbeResult(
                 case="runtime_direct_invoke_denied",
