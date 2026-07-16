@@ -2,9 +2,13 @@ name: Commit Lint
 
 on:
   push:
-    branches: ["migration/secure-agentcore-v1"]
+    branches:
+      - "migration/secure-agentcore-v1"
+      - "migration/secure-agentcore-v2"
   pull_request:
-    branches: ["migration/secure-agentcore-v1"]
+    branches:
+      - "migration/secure-agentcore-v1"
+      - "migration/secure-agentcore-v2"
 
 permissions:
   contents: read
