@@ -13,39 +13,30 @@ La V1 est considérée close par décision projet. Elle reste la baseline foncti
 
 ## 2. Principes non négociables
 
-La V2 respecte les choix techniques suivants :
-
 - Python 3.12 et FastAPI pour les services applicatifs ;
 - agents custom sous `/agents` ;
 - Strands ou LangGraph uniquement derrière un adapter optionnel ;
 - Bedrock AgentCore Runtime comme runtime d’exécution uniquement ;
-- Bedrock Converse API pour l’accès aux modèles ;
+- Bedrock Converse API pour les modèles ;
 - embeddings Bedrock configurables ;
 - RAG applicatif avec S3 Vectors, DynamoDB et S3 ;
-- Cognito pour l’authentification ;
-- React, TypeScript et Vite ;
+- Cognito, React, TypeScript et Vite ;
 - frontend sur S3 privé, CloudFront et WAF ;
 - backend applicatif sur EKS ;
-- Terraform et Helm ;
-- GitLab CI avec OIDC AWS comme cible V2 ;
-- OpenTelemetry et CloudWatch ;
-- Secrets Manager pour les secrets.
+- Terraform, Helm et GitLab CI avec OIDC AWS ;
+- OpenTelemetry, CloudWatch et Secrets Manager.
 
-Sont exclus :
-
-- Bedrock managed Agents ;
-- Bedrock Knowledge Bases ;
-- OpenSearch Serverless.
+Sont exclus : Bedrock managed Agents, Bedrock Knowledge Bases et OpenSearch Serverless.
 
 ## 3. Documents de cadrage
 
 | Document | Finalité | Statut initial |
 |---|---|---|
-| [`V2-CHARTER-FR.md`](V2-CHARTER-FR.md) | Vision, périmètre, exigences, principes et Definition of Done | Draft |
-| [`V2-ROADMAP-FR.md`](V2-ROADMAP-FR.md) | Phases, dépendances, gates HLD/LLD et livrables | Draft |
+| [`V2-CHARTER-FR.md`](V2-CHARTER-FR.md) | Vision, périmètre, exigences et Definition of Done | Draft |
+| [`V2-ROADMAP-FR.md`](V2-ROADMAP-FR.md) | Phases, dépendances et gates | Draft |
 | [`../hld/HLD-Secure-AgentCore-V2-FR.md`](../hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
-| [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue des LLD obligatoires et critères de validation | Draft |
-| [`../adr/V2-ADR-BACKLOG-FR.md`](../adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
+| [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD | Draft |
+| [`../adr/V2-ADR-BACKLOG-FR.md`](../adr/V2-ADR-BACKLOG-FR.md) | Backlog canonique des ADR | Draft |
 
 ## 4. Cycle de gouvernance
 
@@ -62,44 +53,47 @@ Exigences
   -> réception
 ```
 
-Aucun composant structurant ne doit être implémenté avant validation du HLD et du LLD qui le gouvernent. Une divergence significative entre conception et implémentation exige un ADR nouveau ou amendé.
+Aucun composant structurant ne doit être implémenté avant validation du HLD et du LLD qui le gouvernent.
 
 ## 5. Statuts documentaires
 
-- `Draft` : document en construction, non utilisable comme autorisation d’implémenter ;
-- `In Review` : contenu complet soumis à revue ;
-- `Approved` : gate franchie, implémentation autorisée dans le périmètre défini ;
-- `As-Built` : document aligné sur l’implémentation réceptionnée ;
-- `Superseded` : remplacé par une décision ou une version ultérieure.
+- `Draft` : en construction ;
+- `In Review` : soumis à revue ;
+- `Approved` : gate franchie ;
+- `As-Built` : aligné sur l’implémentation réceptionnée ;
+- `Superseded` : remplacé.
 
-## 6. Premières gates
+## 6. Gates
 
-### Gate V2-G0 — Baseline et cadrage
+### V2-G0 — Baseline et cadrage
 
 - baseline V1 identifiée ;
-- périmètre V2 défini ;
-- contraintes et exclusions enregistrées ;
-- roadmap et backlog ADR disponibles.
+- périmètre et exclusions définis ;
+- roadmap, HLD initial, backlog ADR et catalogue LLD disponibles.
 
-### Gate V2-G1 — Architecture HLD
+### V2-G1 — Architecture HLD
 
 - ADR structurants instruits ;
 - HLD complet et revu ;
-- flux, zones de confiance, données, résilience et exploitation couverts ;
-- analyse As-Is / To-Be et trajectoire de transition documentées.
+- flux, zones de confiance, données, résilience, coûts et transition couverts.
 
-### Gate V2-G2 — Conception LLD
+### V2-G2 — Conception LLD
 
-- LLD plateforme, RAG, agents, MCP, sécurité, observabilité et CI/CD approuvés ;
-- contrats techniques et exigences de test traçables ;
-- risques résiduels acceptés ou traités.
+Les dix LLD canoniques doivent être traités selon la tranche :
+
+1. `V2-LLD-001` Plateforme AWS, réseau, EKS et FastAPI ;
+2. `V2-LLD-002` RAG et ingestion documentaire ;
+3. `V2-LLD-003` Agents et orchestration ;
+4. `V2-LLD-004` AgentCore Gateway MCP et tools ;
+5. `V2-LLD-005` Identité, sécurité et conformité ;
+6. `V2-LLD-006` Données, mémoire, rétention et restauration ;
+7. `V2-LLD-007` Observabilité, SLO et FinOps ;
+8. `V2-LLD-008` CI/CD, Terraform, Helm et promotion ;
+9. `V2-LLD-009` Stratégie de tests et preuves ;
+10. `V2-LLD-010` Frontend React V2.
+
+La gate exige des contrats techniques et critères de test traçables, ainsi que des risques résiduels acceptés ou traités.
 
 ## 7. Discipline de livraison
 
-Chaque phase doit produire :
-
-- un plan avant modification ;
-- la liste des fichiers modifiés ;
-- les validations exécutées ;
-- les échecs ou limites constatés ;
-- une demande de validation avant passage à la phase suivante.
+Chaque phase doit produire un plan, la liste des fichiers modifiés, les validations exécutées, les échecs ou limites constatés et une demande de validation avant la phase suivante.
