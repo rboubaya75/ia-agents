@@ -126,13 +126,13 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      TRIPS_TABLE_NAME           = var.trips_table_name
-      TRIPS_DEFAULT_PAGE_SIZE    = "20"
-      TRIPS_MAX_PAGE_SIZE        = "50"
-      TRIPS_CURSOR_HMAC_KEY_ID   = aws_kms_key.pagination_hmac.arn
-      TRIPS_CURSOR_TTL_SECONDS   = "900"
-      IDEMPOTENCY_TTL_SECONDS    = tostring(var.idempotency_ttl_seconds)
-      LOG_LEVEL                  = "INFO"
+      TRIPS_TABLE_NAME         = var.trips_table_name
+      TRIPS_DEFAULT_PAGE_SIZE  = "20"
+      TRIPS_MAX_PAGE_SIZE      = "50"
+      TRIPS_CURSOR_HMAC_KEY_ID = aws_kms_key.pagination_hmac.arn
+      TRIPS_CURSOR_TTL_SECONDS = "900"
+      IDEMPOTENCY_TTL_SECONDS  = tostring(var.idempotency_ttl_seconds)
+      LOG_LEVEL                = "INFO"
     }
   }
 
