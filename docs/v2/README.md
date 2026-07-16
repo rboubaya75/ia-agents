@@ -1,6 +1,6 @@
 # Référentiel documentaire — Secure AgentCore V2
 
-- **Branche :** `migration/secure-agentcore-v2`
+- **Branche cible :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1, commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
 - **Statut :** initialisation documentaire
 - **Langue de référence :** français
@@ -11,7 +11,15 @@ Ce répertoire constitue le point d’entrée documentaire de la V2. Il organise
 
 La V1 est considérée close par décision projet. Elle reste la baseline fonctionnelle et sécuritaire à préserver tant qu’un ADR V2 n’a pas explicitement remplacé une décision existante.
 
-## 2. Principes non négociables
+## 2. Règle de branches
+
+- `migration/secure-agentcore-v1` reste la baseline V1 et ne reçoit aucun document V2 ;
+- `migration/secure-agentcore-v2` est la branche d’intégration V2 ;
+- chaque lot V2 est développé sur une branche de travail créée depuis `migration/secure-agentcore-v2` ;
+- toute pull request V2 cible `migration/secure-agentcore-v2` ;
+- aucune PR V2 ne doit cibler la branche V1.
+
+## 3. Principes non négociables
 
 La V2 respecte les choix techniques suivants :
 
@@ -37,17 +45,17 @@ Sont exclus :
 - Bedrock Knowledge Bases ;
 - OpenSearch Serverless.
 
-## 3. Documents de cadrage
+## 4. Documents de cadrage
 
 | Document | Finalité | Statut initial |
 |---|---|---|
 | [`V2-CHARTER-FR.md`](V2-CHARTER-FR.md) | Vision, périmètre, exigences, principes et Definition of Done | Draft |
 | [`V2-ROADMAP-FR.md`](V2-ROADMAP-FR.md) | Phases, dépendances, gates HLD/LLD et livrables | Draft |
 | [`../hld/HLD-Secure-AgentCore-V2-FR.md`](../hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
-| [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue des LLD obligatoires et critères de validation | Draft |
+| [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD et de leurs dépendances ADR | Draft |
 | [`../adr/V2-ADR-BACKLOG-FR.md`](../adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
 
-## 4. Cycle de gouvernance
+## 5. Cycle de gouvernance
 
 ```text
 Exigences
@@ -64,7 +72,7 @@ Exigences
 
 Aucun composant structurant ne doit être implémenté avant validation du HLD et du LLD qui le gouvernent. Une divergence significative entre conception et implémentation exige un ADR nouveau ou amendé.
 
-## 5. Statuts documentaires
+## 6. Statuts documentaires
 
 - `Draft` : document en construction, non utilisable comme autorisation d’implémenter ;
 - `In Review` : contenu complet soumis à revue ;
@@ -72,14 +80,15 @@ Aucun composant structurant ne doit être implémenté avant validation du HLD e
 - `As-Built` : document aligné sur l’implémentation réceptionnée ;
 - `Superseded` : remplacé par une décision ou une version ultérieure.
 
-## 6. Premières gates
+## 7. Gates documentaires
 
 ### Gate V2-G0 — Baseline et cadrage
 
 - baseline V1 identifiée ;
 - périmètre V2 défini ;
 - contraintes et exclusions enregistrées ;
-- roadmap et backlog ADR disponibles.
+- roadmap et backlog ADR disponibles ;
+- catalogue canonique des dix LLD disponible.
 
 ### Gate V2-G1 — Architecture HLD
 
@@ -90,11 +99,22 @@ Aucun composant structurant ne doit être implémenté avant validation du HLD e
 
 ### Gate V2-G2 — Conception LLD
 
-- LLD plateforme, RAG, agents, MCP, sécurité, observabilité et CI/CD approuvés ;
-- contrats techniques et exigences de test traçables ;
-- risques résiduels acceptés ou traités.
+Les dix LLD canoniques sont :
 
-## 7. Discipline de livraison
+1. `V2-LLD-001` — plateforme AWS, réseau, EKS et FastAPI ;
+2. `V2-LLD-002` — RAG et ingestion documentaire ;
+3. `V2-LLD-003` — agents et orchestration ;
+4. `V2-LLD-004` — AgentCore Gateway MCP et tools ;
+5. `V2-LLD-005` — identité, sécurité et conformité ;
+6. `V2-LLD-006` — données, mémoire, rétention et restauration ;
+7. `V2-LLD-007` — observabilité, SLO et FinOps ;
+8. `V2-LLD-008` — CI/CD, Terraform, Helm et promotion ;
+9. `V2-LLD-009` — stratégie de tests et preuves ;
+10. `V2-LLD-010` — frontend React V2.
+
+La gate est franchie lorsque les LLD nécessaires à la tranche sont `Approved`, que leurs contrats et exigences de test sont traçables et que les risques résiduels sont acceptés ou traités.
+
+## 8. Discipline de livraison
 
 Chaque phase doit produire :
 
