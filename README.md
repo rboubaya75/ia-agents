@@ -185,7 +185,8 @@ L’implémentation du code et de l’IaC V1 est présente sur la branche. La V1
 - `docs/lld/LLD-WildRydes-Agentic-AI-FR.md` ;
 - `docs/migration/REMEDIATION-Gateway-First-APIGW.md` ;
 - `docs/runbooks/ci-cd-rationalisation-test.md` ;
-- `docs/validation/V1-MEMORY-SECURITY-TESTS-FR.md` — synthèse des blocages, correctifs, tests et preuves V1.
+- `docs/validation/V1-MEMORY-SECURITY-SUMMARY-FR.md` — synthèse entretien et onboarding ;
+- `docs/validation/V1-MEMORY-SECURITY-TESTS-FR.md` — annexe des protocoles, statuts et preuves.
 
 ## Gouvernance
 
