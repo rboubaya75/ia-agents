@@ -1,7 +1,7 @@
 # Roadmap de transition — Secure AgentCore V2
 
-- **Version :** 0.1
-- **Branche :** `migration/secure-agentcore-v2`
+- **Version :** 0.2
+- **Branche cible :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
 - **Principe :** aucune implémentation structurante avant validation du HLD et du LLD correspondant
 
@@ -20,43 +20,53 @@ V2-G0 Baseline et cadrage
   -> V2-G9 Documentation As-Built et clôture
 ```
 
-Les gates sont cumulatives. Une phase ne doit pas masquer un écart ouvert dans une phase antérieure.
+Les gates sont cumulatives. Une phase ne masque jamais un écart ouvert dans une phase antérieure.
 
-## 2. Phase 0 — Baseline V1 et cadrage V2
+## 2. Règle de branches
+
+- la baseline V1 reste sur `migration/secure-agentcore-v1` ;
+- la branche d’intégration V2 est `migration/secure-agentcore-v2` ;
+- chaque lot V2 utilise une branche de travail créée depuis la V2 ;
+- chaque pull request V2 cible la V2 et jamais la V1.
+
+## 3. Phase 0 — Baseline V1 et cadrage V2
 
 ### Travaux
 
 - figer la baseline V1 ;
-- établir l’inventaire des composants réutilisés, remplacés et supprimés ;
+- inventorier les composants réutilisés, remplacés et supprimés ;
 - documenter l’As-Is ;
 - définir le périmètre, les exclusions et les exigences initiales ;
 - créer la branche V2 ;
 - ouvrir le backlog ADR ;
-- définir la gouvernance documentaire.
+- définir la gouvernance documentaire et des branches.
 
 ### Livrables
 
 - `docs/v2/README.md` ;
 - `docs/v2/V2-CHARTER-FR.md` ;
 - `docs/v2/V2-ROADMAP-FR.md` ;
-- baseline V1 référencée par SHA.
+- baseline V1 référencée par SHA ;
+- catalogue canonique des dix LLD ;
+- backlog ADR.
 
 ### Gate V2-G0
 
-- documents disponibles ;
+- documents disponibles et revus ;
 - exclusions techniques enregistrées ;
 - aucun changement applicatif actif ;
+- branche V1 préservée ;
 - backlog ADR et catalogue LLD initialisés.
 
-## 3. Phase 1 — Exigences détaillées et ADR structurants
+## 4. Phase 1 — Exigences détaillées et ADR structurants
 
 ### Travaux
 
 - consolider les cas d’usage et parcours ;
-- définir volumétrie, classification des données et contraintes de conservation ;
+- définir volumétrie, classification et conservation ;
 - définir SLO, RTO/RPO, performance et budgets de coût ;
 - instruire les options d’ingress ;
-- arbitrer le rôle FastAPI/EKS, AgentCore Runtime et Gateway MCP ;
+- arbitrer les responsabilités FastAPI, Runtime et Gateway MCP ;
 - arbitrer mono-agent ou multi-agent ;
 - arbitrer le workflow d’ingestion ;
 - définir le modèle d’isolation utilisateur ou tenant ;
@@ -65,19 +75,14 @@ Les gates sont cumulatives. Une phase ne doit pas masquer un écart ouvert dans 
 ### Livrables
 
 - catalogue d’exigences versionné ;
-- ADR d’ingress ;
-- ADR plateforme EKS/FastAPI ;
-- ADR RAG/S3 Vectors ;
-- ADR agents et orchestration ;
-- ADR données et mémoire ;
-- ADR CI/CD ;
-- ADR observabilité et résilience.
+- ADR `V2-ADR-001` à `V2-ADR-010` ;
+- plans d’expérimentation bornés lorsque nécessaires.
 
 ### Gate
 
-Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentation.
+Aucun ADR structurant critique ne reste ambigu, sans décision ou sans expérimentation assortie de critères de sortie.
 
-## 4. Phase 2 — HLD V2
+## 5. Phase 2 — HLD V2
 
 ### Travaux
 
@@ -93,66 +98,51 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - trajectoire de migration et rollback ;
 - estimation des coûts et risques.
 
-### Livrable
-
-- `docs/hld/HLD-Secure-AgentCore-V2-FR.md` en statut `Approved`.
-
 ### Gate V2-G1
 
-- HLD revu ;
+- HLD en statut `Approved` ;
 - composants et responsabilités non ambigus ;
 - flux sensibles et frontières de confiance couverts ;
 - risques majeurs associés à des contrôles ;
-- aucun développement structurant autorisé avant cette validation.
+- aucun développement structurant autorisé avant validation.
 
-## 5. Phase 3 — LLD par domaine
+## 6. Phase 3 — LLD par domaine
 
-### LLD obligatoires
+### Catalogue canonique
 
-1. plateforme AWS, réseau, EKS et FastAPI ;
-2. RAG et ingestion documentaire ;
-3. agents et orchestration ;
-4. Gateway MCP et tools ;
-5. identité, sécurité et conformité ;
-6. données, mémoire, rétention et restauration ;
-7. observabilité, SLO et FinOps ;
-8. CI/CD, Terraform, Helm et promotion ;
-9. stratégie de tests et preuves.
+1. `V2-LLD-001` — plateforme AWS, réseau, EKS et FastAPI ;
+2. `V2-LLD-002` — RAG et ingestion documentaire ;
+3. `V2-LLD-003` — agents et orchestration ;
+4. `V2-LLD-004` — AgentCore Gateway MCP et tools ;
+5. `V2-LLD-005` — identité, sécurité et conformité ;
+6. `V2-LLD-006` — données, mémoire, rétention et restauration ;
+7. `V2-LLD-007` — observabilité, SLO et FinOps ;
+8. `V2-LLD-008` — CI/CD, Terraform, Helm et promotion ;
+9. `V2-LLD-009` — stratégie de tests et preuves ;
+10. `V2-LLD-010` — frontend React V2.
 
-### Contenu minimal de chaque LLD
+### Contenu minimal
 
-- périmètre et dépendances ;
-- composants et responsabilités ;
-- séquences détaillées ;
-- contrats d’API ou d’événements ;
-- configuration ;
-- IAM et secrets ;
-- erreurs, timeouts et retries ;
-- capacité, performance et coûts ;
-- logs, métriques et traces ;
-- tests et critères d’acceptation ;
-- rollback et exploitation ;
-- risques résiduels.
+Chaque LLD couvre : périmètre, dépendances ADR exactes, architecture détaillée, contrats, configuration, IAM, secrets, timeouts, retries, capacité, coûts, observabilité, tests, rollback, exploitation et risques résiduels.
 
 ### Gate V2-G2
 
-- tous les LLD nécessaires à la première tranche sont `Approved` ;
-- exigences et tests sont traçables ;
+- tous les LLD nécessaires à la tranche sont `Approved` ;
+- les dix LLD sont suivis dans le catalogue, même lorsqu’ils ne sont pas encore applicables à la tranche ;
+- exigences, risques, ADR et tests sont traçables ;
 - les choix non tranchés sont bloquants ou explicitement différés.
 
-## 6. Phase 4 — Socle plateforme EKS et FastAPI
+## 7. Phase 4 — Socle plateforme EKS et FastAPI
 
 ### Travaux
 
 - modules Terraform ;
-- réseau et endpoints nécessaires ;
-- cluster EKS ;
-- namespaces, politiques et identités de workloads ;
-- ECR ;
-- Secrets Manager et KMS ;
+- réseau et endpoints ;
+- EKS, namespaces, politiques et identités de workloads ;
+- ECR, Secrets Manager et KMS ;
 - Helm charts ;
 - FastAPI avec health, readiness et graceful shutdown ;
-- WAF, API Gateway et intégration d’ingress selon ADR ;
+- WAF, API Gateway et ingress selon ADR ;
 - observabilité minimale ;
 - gates CI de compilation, sécurité et plan.
 
@@ -164,31 +154,31 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - contrôles réseau et IAM testés hors ligne ;
 - aucun déploiement sans autorisation explicite.
 
-## 7. Phase 5 — RAG et ingestion documentaire
+## 8. Phase 5 — RAG et ingestion documentaire
 
 ### Travaux
 
 - stockage source S3 ;
 - validation, parsing et chunking ;
 - embeddings Bedrock configurables ;
-- index S3 Vectors ;
+- S3 Vectors ;
 - métadonnées DynamoDB ;
 - ingestion idempotente ;
 - réindexation et suppression ;
 - isolation ;
 - citations et provenance ;
-- protection contre prompt injection et data poisoning ;
+- protections contre prompt injection et data poisoning ;
 - dataset d’évaluation versionné.
 
 ### Gate V2-G4
 
 - ingestion rejouable sans doublon ;
-- suppression cohérente source/index/métadonnées ;
+- suppression cohérente source, index et métadonnées ;
 - métriques de retrieval calculées ;
 - citations vérifiables ;
 - tests adversariaux disponibles.
 
-## 8. Phase 6 — Agents custom et Gateway MCP
+## 9. Phase 6 — Agents custom et Gateway MCP
 
 ### Travaux
 
@@ -198,28 +188,26 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - Bedrock Converse API ;
 - orchestrateur minimal ;
 - agents spécialisés justifiés ;
-- budgets de tours et de tokens ;
-- tool allowlists par agent ;
+- budgets de tours et tokens ;
+- allowlists de tools ;
 - Gateway MCP et tools versionnés ;
-- confirmation, idempotence et non-rejeu ;
-- resilience et circuit breaker.
+- confirmation, idempotence, non-rejeu et circuit breaker.
 
 ### Gate V2-G5
 
 - agents testables sans service externe ;
 - aucun tool non gouverné ;
-- mutation protégée et rejouable ;
+- mutations protégées et rejouables ;
 - retrieval traité comme donnée non fiable ;
 - appels modèle et tools traçables.
 
-## 9. Phase 7 — Frontend V2
+## 10. Phase 7 — Frontend V2
 
 ### Travaux
 
 - streaming ;
-- affichage des sources ;
-- upload documentaire ;
-- état d’ingestion ;
+- sources et citations ;
+- upload et suivi d’ingestion ;
 - historique et préférences ;
 - confirmations ;
 - reprise après 401 et erreur ambiguë ;
@@ -233,19 +221,17 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - parcours nominaux et erreurs testés ;
 - sources et confirmations compréhensibles.
 
-## 10. Phase 8 — Sécurité, observabilité, FinOps et CI/CD
+## 11. Phase 8 — Sécurité, observabilité, FinOps et CI/CD
 
 ### Travaux
 
 - threat model ;
-- WAF et règles de protection ;
-- Pod Security et Network Policies ;
+- WAF, Pod Security et Network Policies ;
 - SBOM, scans et signature d’images ;
-- OpenTelemetry ;
-- dashboards CloudWatch ;
+- OpenTelemetry et CloudWatch ;
 - SLO, alertes et error budgets ;
 - métriques de tokens, embeddings, stockage et calcul ;
-- pipeline GitLab CI OIDC ;
+- GitLab CI OIDC ;
 - parité avec les gates existantes avant retrait de GitHub Actions.
 
 ### Gate V2-G7
@@ -256,18 +242,16 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - parité CI prouvée ;
 - rollback documenté.
 
-## 11. Phase 9 — Tests industriels et réception
+## 12. Phase 9 — Tests industriels et réception
 
 ### Travaux
 
-- unitaires, contrats et intégration ;
-- E2E ;
+- tests unitaires, contrats, intégration et E2E ;
 - isolation multi-utilisateur ou multi-tenant ;
 - prompt injection et data poisoning ;
-- charge et soak tests ;
-- chaos contrôlé ;
+- charge, soak et chaos contrôlé ;
 - restauration ;
-- mesure SLO ;
+- mesure des SLO ;
 - preuves immuables et redacted.
 
 ### Gate V2-G8
@@ -278,15 +262,14 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - restauration et rollback prouvés ;
 - rapport de réception disponible.
 
-## 12. Phase 10 — As-Built et clôture
+## 13. Phase 10 — As-Built et clôture
 
 ### Travaux
 
 - mettre à jour HLD et LLD selon l’implémentation ;
 - clôturer ou superseder les ADR ;
 - finaliser runbooks, standards et procédures ;
-- produire la matrice de coûts ;
-- produire le rapport de réception ;
+- produire la matrice de coûts et le rapport de réception ;
 - préparer release et tag V2.
 
 ### Gate V2-G9
@@ -296,12 +279,12 @@ Aucun ADR structurant critique ne reste sans décision ou plan d’expérimentat
 - dette et risques résiduels acceptés ;
 - release autorisée explicitement.
 
-## 13. Règles de passage entre phases
+## 14. Règles de passage entre phases
 
 - plan présenté avant chaque phase ;
 - modification limitée au périmètre validé ;
 - fichiers changés résumés ;
-- lint, typecheck et tests exécutés ;
+- lint, typecheck et tests pertinents exécutés ;
 - tous les échecs signalés ;
 - validation explicite avant la phase suivante ;
 - aucun `terraform apply`, déploiement, merge ou destruction implicite.
