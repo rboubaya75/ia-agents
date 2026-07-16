@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from botocore.exceptions import ClientError
 
@@ -38,8 +38,17 @@ os.environ.update(
         "MAX_BODY_BYTES": "16384",
     }
 )
-FACADE_PATH = ROOT / "infra" / "modules" / "agent_api_facade" / "src" / "lambda_function.py"
-FACADE_SPEC = importlib.util.spec_from_file_location("phase3_agent_api_facade", FACADE_PATH)
+FACADE_PATH = (
+    ROOT
+    / "infra"
+    / "modules"
+    / "agent_api_facade"
+    / "src"
+    / "lambda_function.py"
+)
+FACADE_SPEC = importlib.util.spec_from_file_location(
+    "phase3_agent_api_facade", FACADE_PATH
+)
 if FACADE_SPEC is None or FACADE_SPEC.loader is None:
     raise RuntimeError(f"Unable to load {FACADE_PATH}")
 facade = importlib.util.module_from_spec(FACADE_SPEC)
@@ -130,6 +139,25 @@ class SecurityNegativeHarnessTests(unittest.TestCase):
         self.assertNotIn(ID_TOKEN, serialized)
         self.assertNotIn("security-probe-actor", serialized)
         self.assertNotIn("security-probe-user", serialized)
+
+    def test_network_failure_becomes_redacted_status_zero(self) -> None:
+        with patch.object(
+            security.request,
+            "urlopen",
+            side_effect=security.error.URLError("private-network-detail"),
+        ):
+            response = security.urllib_transport(
+                "POST",
+                API_URL,
+                {"authorization": f"Bearer {ACCESS_TOKEN}"},
+                b'{}',
+                1.0,
+            )
+        self.assertEqual(response.status, 0)
+        self.assertEqual(response.headers, {})
+        self.assertEqual(response.body, b"")
+        self.assertNotIn("private-network-detail", json.dumps(security.asdict(response)))
+        self.assertNotIn(ACCESS_TOKEN, json.dumps(security.asdict(response)))
 
     def test_forbidden_origin_echo_is_a_failure(self) -> None:
         results = security.run_http_probes(
