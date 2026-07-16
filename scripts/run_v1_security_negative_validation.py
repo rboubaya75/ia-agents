@@ -379,7 +379,7 @@ def run_runtime_deny_probe(
             level="E2E IAM",
             status="PASS" if code in ACCESS_DENIED_CODES else "FAIL",
             detail=(
-                "Runtime resource policy denied the non-facade principal"
+                "test principal was denied direct Runtime invocation"
                 if code in ACCESS_DENIED_CODES
                 else "Runtime invocation failed with an unexpected safe error code"
             ),
