@@ -156,8 +156,9 @@ class SecurityNegativeHarnessTests(unittest.TestCase):
         self.assertEqual(response.status, 0)
         self.assertEqual(response.headers, {})
         self.assertEqual(response.body, b"")
-        self.assertNotIn("private-network-detail", json.dumps(security.asdict(response)))
-        self.assertNotIn(ACCESS_TOKEN, json.dumps(security.asdict(response)))
+        serialized = repr(security.asdict(response))
+        self.assertNotIn("private-network-detail", serialized)
+        self.assertNotIn(ACCESS_TOKEN, serialized)
 
     def test_forbidden_origin_echo_is_a_failure(self) -> None:
         results = security.run_http_probes(
