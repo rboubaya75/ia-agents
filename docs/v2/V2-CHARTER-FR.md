@@ -1,34 +1,26 @@
 # Charte de cadrage — Secure AgentCore V2
 
-- **Version :** 0.1
-- **Branche :** `migration/secure-agentcore-v2`
+- **Version :** 0.2
+- **Branche cible :** `migration/secure-agentcore-v2`
 - **Baseline :** V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
 - **Statut :** Draft
 
 ## 1. Finalité
 
-La V2 transforme le socle agentique V1 en plateforme applicative Data et IA générative plus complète, exploitable et gouvernable. Elle ajoute un backend applicatif sur EKS, un RAG applicatif fondé sur S3 Vectors, une architecture d’agents custom, une observabilité distribuée et une chaîne CI/CD cible GitLab CI avec OIDC AWS.
+La V2 transforme le socle agentique V1 en plateforme applicative Data et IA générative exploitable et gouvernable. Elle ajoute un backend applicatif sur EKS, un RAG applicatif fondé sur S3 Vectors, une architecture d’agents custom, une observabilité distribuée et une chaîne CI/CD cible GitLab CI avec OIDC AWS.
 
-La V2 doit conserver les garanties acquises en V1 : frontière d’identité serveur, IAM least privilege, tools gouvernés, idempotence des mutations, redaction des logs et traçabilité des preuves.
+La V2 conserve les garanties acquises en V1 : frontière d’identité serveur, IAM least privilege, tools gouvernés, idempotence des mutations, redaction des logs et traçabilité des preuves.
 
-## 2. Baseline V1 réutilisée
+## 2. Baseline V1 et gouvernance des branches
 
-La baseline comprend notamment :
+La baseline comprend notamment React/TypeScript/Vite, S3 privé, CloudFront, Cognito, API Gateway, Lambda Security Facade, AgentCore Runtime IAM-only, Bedrock, AgentCore Memory, AgentCore Gateway MCP, Trip Tools, DynamoDB, Terraform et les tests industriels V1.
 
-- frontend React/TypeScript/Vite sur S3 privé et CloudFront ;
-- Cognito ;
-- API Gateway ;
-- Lambda Security Facade ;
-- AgentCore Runtime IAM-only ;
-- Bedrock via modèle européen ;
-- AgentCore Memory ;
-- AgentCore Gateway MCP ;
-- tools Trips ;
-- DynamoDB ;
-- Terraform ;
-- tests unitaires, sécurité et qualité industrielle.
+La V1 n’est pas modifiée rétroactivement :
 
-La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits sur une branche dédiée et par décisions explicites.
+- `migration/secure-agentcore-v1` reste la branche de référence V1 ;
+- `migration/secure-agentcore-v2` est la branche d’intégration V2 ;
+- les branches de travail V2 partent de la branche V2 ;
+- les pull requests V2 ciblent exclusivement `migration/secure-agentcore-v2`.
 
 ## 3. Objectifs V2
 
@@ -37,7 +29,7 @@ La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits
 - ingérer et administrer des documents ;
 - indexer les documents dans S3 Vectors ;
 - répondre avec retrieval, citations et provenance ;
-- orchestrer des agents custom spécialisés ;
+- orchestrer des agents custom spécialisés lorsque leur valeur est démontrée ;
 - étendre les tools MCP sans dégrader les garanties V1 ;
 - fournir une expérience frontend avec streaming, sources, suivi d’ingestion et confirmations ;
 - gérer mémoire, documents et données métier selon des politiques distinctes.
@@ -58,7 +50,7 @@ La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits
 - fournir des architectures de référence réutilisables ;
 - expliciter les compromis de sécurité, disponibilité, complexité et coûts ;
 - produire une trajectoire As-Is vers To-Be ;
-- maintenir des ADR et des runbooks exploitables ;
+- maintenir des ADR et runbooks exploitables ;
 - définir des standards de développement, de tests et d’exploitation.
 
 ## 4. Périmètre
@@ -66,7 +58,7 @@ La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits
 ### 4.1 Inclus
 
 - cadrage et gouvernance V2 ;
-- HLD et LLD par domaine ;
+- HLD et dix LLD canoniques ;
 - backend FastAPI sur EKS ;
 - agents custom sous `/agents` ;
 - adapter optionnel Strands ou LangGraph ;
@@ -75,7 +67,7 @@ La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits
 - RAG applicatif S3, S3 Vectors et DynamoDB ;
 - pipeline d’ingestion documentaire ;
 - AgentCore Gateway MCP et tools V2 ;
-- frontend V2 ;
+- frontend React V2 ;
 - WAF ;
 - observabilité OpenTelemetry/CloudWatch ;
 - sécurité, FinOps, sauvegarde et restauration ;
@@ -89,7 +81,7 @@ La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits
 - OpenSearch Serverless ;
 - engagement de production réel ;
 - organisation ou gouvernance client inventée ;
-- multi-région actif/actif tant qu’aucune exigence ne le justifie ;
+- multi-région actif/actif sans exigence justificative ;
 - intégration à un système de paiement ou de réservation externe ;
 - migration irréversible de la V1 sans stratégie de rollback.
 
@@ -107,10 +99,11 @@ La V1 n’est pas modifiée rétroactivement. Les changements V2 sont introduits
 | V2-ARCH-008 | Les tools sont exposés et gouvernés via AgentCore Gateway MCP. |
 | V2-ARCH-009 | Terraform et Helm sont les mécanismes déclaratifs de référence. |
 | V2-ARCH-010 | GitLab CI avec OIDC AWS est la cible de CI/CD V2. |
+| V2-ARCH-011 | Toute PR V2 cible `migration/secure-agentcore-v2` et ne modifie pas la baseline V1. |
 
 ## 6. Exigences non fonctionnelles initiales
 
-Ces valeurs sont des exigences à instruire dans le HLD et les LLD. Elles ne constituent pas encore des engagements de production.
+Ces exigences doivent être précisées dans le HLD et les LLD ; elles ne constituent pas encore des engagements de production.
 
 ### Sécurité
 
@@ -130,19 +123,14 @@ Ces valeurs sont des exigences à instruire dans le HLD et les LLD. Elles ne con
 - dégradation contrôlée en cas d’indisponibilité RAG, Memory, Gateway ou modèle ;
 - sauvegarde et restauration testées.
 
-### Performance
+### Performance et FinOps
 
 - budgets de timeout explicites par composant ;
 - mesure du time-to-first-token et de la durée totale ;
-- limitation des tours agentiques et des appels de tools ;
-- objectifs de latence définis par parcours dans le HLD.
-
-### FinOps
-
+- limitation des tours agentiques et appels de tools ;
 - mesure des tokens, appels modèle, embeddings, stockage et calcul ;
 - quotas et limites configurables ;
-- dashboards de coût estimé par parcours ou environnement ;
-- arbitrages modèle/qualité/coût documentés.
+- arbitrages modèle, qualité, latence et coût documentés.
 
 ### Exploitabilité
 
@@ -154,16 +142,22 @@ Ces valeurs sont des exigences à instruire dans le HLD et les LLD. Elles ne con
 ## 7. Livrables obligatoires
 
 - charte et roadmap V2 ;
-- architecture As-Is V1 ;
-- architecture To-Be V2 ;
-- analyse des écarts ;
+- architecture As-Is V1, To-Be V2 et analyse des écarts ;
 - ADR structurants ;
 - HLD V2 approuvé ;
-- LLD plateforme, RAG, agents, MCP, sécurité, observabilité et CI/CD ;
+- `V2-LLD-001` — plateforme AWS, réseau, EKS et FastAPI ;
+- `V2-LLD-002` — RAG et ingestion documentaire ;
+- `V2-LLD-003` — agents et orchestration ;
+- `V2-LLD-004` — AgentCore Gateway MCP et tools ;
+- `V2-LLD-005` — identité, sécurité et conformité ;
+- `V2-LLD-006` — données, mémoire, rétention et restauration ;
+- `V2-LLD-007` — observabilité, SLO et FinOps ;
+- `V2-LLD-008` — CI/CD, Terraform, Helm et promotion ;
+- `V2-LLD-009` — stratégie de tests et preuves ;
+- `V2-LLD-010` — frontend React V2 ;
 - modèle de données ;
 - contrats OpenAPI et MCP ;
 - threat model ;
-- stratégie de tests ;
 - matrice de traçabilité ;
 - stratégie de migration et rollback ;
 - runbooks ;
@@ -173,10 +167,10 @@ Ces valeurs sont des exigences à instruire dans le HLD et les LLD. Elles ne con
 
 La V2 est clôturable lorsque :
 
-- le HLD et les LLD sont en statut `As-Built` ;
+- le HLD et les dix LLD sont en statut `As-Built` ou explicitement non applicables avec justification ;
 - les ADR structurants sont approuvés ;
 - l’environnement est reproductible par Terraform et Helm ;
-- les agents custom, le RAG et les tools respectent leurs contrats ;
+- les agents custom, le RAG, le frontend et les tools respectent leurs contrats ;
 - les tests de qualité, sécurité, isolation, charge, résilience et restauration sont passés ;
 - les évaluations RAG utilisent un dataset versionné ;
 - la traçabilité bout en bout est démontrée ;
@@ -195,7 +189,8 @@ La V2 est clôturable lorsque :
 | Ingestion non idempotente | Doublons et index incohérent | Identifiants déterministes, état DynamoDB et reprise contrôlée. |
 | Dérive des coûts Bedrock/EKS | Budget imprévisible | Quotas, télémétrie de coût et tests de charge. |
 | Migration CI/CD prématurée | Perte des gates V1 | Parité démontrée avant retrait des workflows existants. |
+| Mauvaise cible de PR | Pollution de la baseline V1 | Branches V2 créées depuis et fusionnées vers `migration/secure-agentcore-v2`. |
 
 ## 10. Gate de sortie du cadrage
 
-La Gate `V2-G0` est franchie lorsque cette charte, la roadmap, le HLD initial, le catalogue LLD et le backlog ADR sont disponibles et revus. Le franchissement de cette gate n’autorise pas encore l’implémentation des composants structurants ; il autorise l’instruction détaillée des ADR et du HLD.
+La Gate `V2-G0` est franchie lorsque cette charte, la roadmap, le HLD initial, le catalogue canonique des dix LLD et le backlog ADR sont disponibles et revus. Elle autorise l’instruction détaillée des ADR et du HLD, pas l’implémentation des composants structurants.
