@@ -198,6 +198,16 @@ class SecurityNegativeHarnessTests(unittest.TestCase):
         self.assertIn('authorization_type = "JWT"', source)
         self.assertNotIn('allow_origins     = ["*"]', source)
 
+    def test_runtime_resource_policy_contract_is_explicit(self) -> None:
+        source = (
+            ROOT / "infra" / "environments" / "test" / "agentcore_native.tf"
+        ).read_text(encoding="utf-8")
+        self.assertIn('sid     = "AllowOnlySecurityFacadeRole"', source)
+        self.assertIn('sid     = "DenyOtherRuntimeInvokers"', source)
+        self.assertIn('actions = ["bedrock-agentcore:InvokeAgentRuntime"]', source)
+        self.assertIn('variable = "aws:PrincipalArn"', source)
+        self.assertIn("values   = [module.agent_api_facade.role_arn]", source)
+
     def test_runtime_direct_invoke_access_denied_passes(self) -> None:
         client = Mock()
         client.invoke_agent_runtime.side_effect = ClientError(
