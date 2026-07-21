@@ -1,5 +1,6 @@
 # V2-ADR-002 — Répartition FastAPI et AgentCore Runtime
 
+- **Version :** 0.2
 - **Statut :** Proposed
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
@@ -7,15 +8,62 @@
 
 ## Contexte
 
-La V2 ajoute un backend FastAPI sur EKS tout en conservant AgentCore Runtime comme runtime d’exécution des agents custom. Une séparation explicite est nécessaire pour éviter la duplication de l’orchestration, du retrieval, des sessions et des contrôles de sécurité.
+La V2 ajoute un backend FastAPI sur EKS tout en conservant AgentCore Runtime comme runtime
+d'exécution des agents custom. Une séparation explicite est nécessaire pour éviter la duplication
+de l'orchestration, du retrieval, des sessions et des contrôles de sécurité.
 
-## Principes
+Cet ADR introduit une **Capability Allocation Matrix (CAM)** comme référentiel d'autorité pour
+l'attribution des capacités. La CAM remplace les listes de responsabilités narratives et devient
+le document de référence cité dans les LLD, les tests d'architecture et les analyses d'impact.
+Toute modification d'un propriétaire de capacité constitue un amendement à cet ADR.
 
-- FastAPI porte les responsabilités applicatives et non agentiques ;
-- AgentCore Runtime porte l’exécution bornée de l’agent ;
-- le domaine métier ne dépend directement ni de Strands ni de LangGraph ;
-- les contrats entre FastAPI et Runtime sont versionnés ;
-- le retrieval et les documents restent des capacités applicatives, pas des Knowledge Bases managées.
+## Principes d'architecture (non négociables)
+
+Ces principes gouvernent la construction et l'évolution de la CAM. Tout changement qui les viole
+exige un nouvel ADR explicitement approuvé.
+
+| ID | Principe | Règle d'application |
+|---|---|---|
+| P-01 | **Single Capability Ownership** | Chaque capacité est attribuée à un seul propriétaire. En cas de litige, le propriétaire est déterminé par l'ADR, pas par l'implémentation en place. |
+| P-02 | **No Capability Duplication** | Aucune capacité ne peut être implémentée par deux composants. La duplication détectée en revue de code est un blocant. |
+| P-03 | **Explicit Contracts** | Toutes les interactions entre composants passent par des contrats versionnés (OpenAPI, schéma d'événement ou contrat MCP). Aucune dépendance implicite sur un comportement interne n'est autorisée. |
+| P-04 | **Technology Independence** | Les capacités sont décrites indépendamment de leur implémentation technique. Un changement de technologie (Lambda → FastAPI, Strands → LangGraph) n'impose pas de réécriture de la CAM si le propriétaire reste identique. |
+| P-05 | **Traceability** | Chaque capacité est reliée aux ADR, au HLD, aux LLD, aux tests et aux exigences métier qui la justifient. Une capacité non traçable est un écart de gouvernance bloquant. |
+
+## Hiérarchie de traçabilité
+
+La CAM occupe un niveau intermédiaire dans la chaîne de traçabilité V2. Elle traduit les principes
+d'architecture en attributions concrètes, et ces attributions alimentent directement les ADR, le
+HLD et les LLD.
+
+```text
+Business Requirements
+        │
+        ▼
+Architecture Principles          (P-01 à P-05 ci-dessus)
+        │
+        ▼
+Capability Model                 (domaines fonctionnels)
+        │
+        ▼
+Capability Allocation Matrix     (ce document — ADR-002 v0.2)
+        │
+        ├──► Architecture Decision Records   (V2-ADR-001 à V2-ADR-018)
+        │
+        ├──► High Level Design               (HLD-Secure-AgentCore-V2-FR.md)
+        │
+        ├──► Low Level Design par domaine    (V2-LLD-001 à V2-LLD-010)
+        │
+        ├──► Implementation
+        │
+        ├──► Industrial Test Suite
+        │
+        └──► Acceptance Evidence
+```
+
+Chaque LLD doit référencer les capacités de la CAM dont il est la conception détaillée. Chaque
+test d'architecture doit vérifier qu'un composant n'implémente pas une capacité dont il n'est pas
+propriétaire.
 
 ## Options
 
@@ -23,57 +71,245 @@ La V2 ajoute un backend FastAPI sur EKS tout en conservant AgentCore Runtime com
 
 FastAPI appelle directement Bedrock Converse API et les tools, Runtime devenant marginal.
 
-**Rejet proposé :** incompatible avec le rôle retenu pour AgentCore Runtime et risque de dupliquer les capacités d’exécution agentique.
+**Rejet proposé :** incompatible avec le rôle retenu pour AgentCore Runtime et risque de dupliquer
+les capacités d'exécution agentique (violation de P-02).
 
 ### Option B — Orchestration complète dans Runtime
 
 FastAPI transmet seulement le message et Runtime réalise retrieval, autorisation, modèle et tools.
 
-**Rejet proposé :** mélange les responsabilités applicatives, documentaires et agentiques ; complique les APIs d’administration et la testabilité.
+**Rejet proposé :** mélange les responsabilités applicatives, documentaires et agentiques ;
+complique les APIs d'administration et la testabilité ; concentre trop de propriétés dans un
+composant non testable sans service externe (violation de P-01 et P-02).
 
 ### Option C — Orchestration en deux niveaux
 
-FastAPI décide du parcours, réalise l’autorisation et le retrieval, puis invoque Runtime avec un contexte contrôlé. Runtime exécute l’agent, le modèle, Memory et les tools MCP autorisés.
+FastAPI décide du parcours, réalise l'autorisation et le retrieval, puis invoque Runtime avec un
+contexte contrôlé. Runtime exécute l'agent, le modèle, Memory et les tools MCP autorisés.
 
 ## Décision proposée
 
-Retenir **l’option C**.
+Retenir **l'option C**. La CAM ci-dessous est l'expression formelle de cette décision.
 
-### Responsabilités FastAPI
+---
 
-- API conversation, documents, ingestion et administration ;
-- validation du contrat externe ;
-- identité et autorisation ;
-- gestion des quotas, deadlines et annulations ;
-- sélection du parcours applicatif ;
-- retrieval S3 Vectors et résolution des sources ;
-- construction d’un contexte RAG borné et marqué comme non fiable ;
-- invocation IAM de Runtime ;
-- streaming vers le navigateur et normalisation des erreurs ;
-- persistance des états non agentiques et observabilité distribuée.
+## Capability Allocation Matrix (CAM)
 
-### Responsabilités AgentCore Runtime
+La CAM liste les capacités par domaine fonctionnel, désigne un unique propriétaire par capacité et
+indique les consommateurs déclarés. Le propriétaire est l'unique composant autorisé à implémenter
+la capacité. Les consommateurs sont les composants autorisés à l'invoquer via un contrat explicite.
 
-- chargement de l’agent custom sous `/agents` ;
-- adapter Strands ou LangGraph ;
-- boucle agentique bornée ;
-- Bedrock Converse API ;
-- usage contrôlé d’AgentCore Memory ;
-- sélection des tools dans une allowlist ;
-- appels AgentCore Gateway MCP signés IAM ;
-- injection serveur de l’identité et du contexte d’opération ;
-- retour d’événements et résultats structurés.
+> **Convention :** `—` indique que les consommateurs seront précisés dans le LLD du domaine
+> concerné. Une capacité sans consommateurs déclarés est interne à son propriétaire.
 
-### Responsabilités interdites dans Runtime
+---
 
-- ingestion documentaire ;
-- administration des documents ;
-- calcul de l’autorisation tenant ;
-- exposition directe au navigateur ;
-- stockage transactionnel des données métier dans Memory ;
-- dépendance à Bedrock Knowledge Bases ou managed Agents.
+### Domaine 1 — Identity & Access Management
 
-## Contrat interne minimal
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| User Authentication | Cognito | API Gateway |
+| MFA | Cognito | Utilisateur |
+| Identity Federation | Cognito | API Gateway |
+| JWT Signature Validation | Cognito Authorizer | API Gateway |
+| JWT Expiration Validation | Cognito Authorizer | API Gateway |
+| JWT Audience Validation | Cognito Authorizer | API Gateway |
+| JWT Issuer Validation | Cognito Authorizer | API Gateway |
+| Claims Extraction | API Gateway | FastAPI |
+| Claims Propagation | API Gateway | FastAPI |
+| Business Authorization (RBAC/ABAC) | FastAPI | AgentCore Runtime |
+| Actor Identity Resolution | FastAPI | AgentCore Runtime |
+| Tenant Resolution | FastAPI | AgentCore Runtime |
+
+**Note d'architecture :** aucun token Cognito ne doit être transmis au-delà de FastAPI. Les
+revendications sensibles (actorId, tenantId, rôles) sont résolues par FastAPI et propagées via
+la `trustedIdentity` du contrat interne. AgentCore Runtime ne reçoit jamais de JWT.
+
+---
+
+### Domaine 2 — API Platform
+
+| Capacité | Propriétaire |
+|---|---|
+| REST API | FastAPI |
+| Streaming API | FastAPI |
+| Request Validation | FastAPI |
+| Response Validation | FastAPI |
+| API Versioning | FastAPI |
+| OpenAPI Documentation | FastAPI |
+| Error Translation | FastAPI |
+| Pagination | FastAPI |
+| Rate Limiting Configuration | API Gateway |
+
+**LLD de référence :** V2-LLD-001 (plateforme), V2-LLD-010 (frontend).
+
+---
+
+### Domaine 3 — Business Layer
+
+| Capacité | Propriétaire |
+|---|---|
+| Trip Management | FastAPI |
+| User Profile | FastAPI |
+| Business Rules | FastAPI |
+| Domain Validation | FastAPI |
+| Workflow Coordination | FastAPI |
+| DTO Mapping | FastAPI |
+
+**Note d'architecture :** les données métier transactionnelles restent exclusivement sous FastAPI
+et DynamoDB. AgentCore Memory n'est pas un store de données métier (P-01, P-02).
+
+**LLD de référence :** V2-LLD-003 (agents), V2-LLD-006 (données).
+
+---
+
+### Domaine 4 — Retrieval
+
+| Capacité | Propriétaire |
+|---|---|
+| Document Ingestion | FastAPI |
+| Metadata Extraction | FastAPI |
+| Embedding Generation | FastAPI |
+| S3 Vectors Indexing | FastAPI |
+| Retrieval Pipeline | FastAPI |
+| Metadata Filtering | FastAPI |
+| Context Construction | FastAPI |
+| Prompt Context Assembly | FastAPI |
+
+**Note d'architecture :** l'ensemble du pipeline RAG est une capacité applicative portée par
+FastAPI. AgentCore Runtime reçoit un contexte RAG borné et préassemblé — il ne réalise ni
+retrieval ni indexation (P-01). Le contenu documentaire est traité comme donnée non fiable à tous
+les niveaux.
+
+**LLD de référence :** V2-LLD-002 (RAG).
+
+---
+
+### Domaine 5 — Agentic AI
+
+| Capacité | Propriétaire |
+|---|---|
+| Conversation Orchestration | AgentCore Runtime |
+| Planning | AgentCore Runtime |
+| Reasoning | AgentCore Runtime |
+| Agent Routing | AgentCore Runtime |
+| Multi-Agent Coordination | AgentCore Runtime |
+| Tool Selection | AgentCore Runtime |
+| Tool Retry | AgentCore Runtime |
+| Prompt Construction | AgentCore Runtime |
+| Bedrock Converse Invocation | AgentCore Runtime |
+
+**Note d'architecture :** la boucle agentique, le raisonnement et la sélection des tools sont
+exclusivement sous AgentCore Runtime. FastAPI ne peut pas contourner Runtime pour appeler
+directement Bedrock Converse API sur le chemin conversationnel (P-01, P-02).
+
+**LLD de référence :** V2-LLD-003 (agents et orchestration).
+
+---
+
+### Domaine 6 — Memory
+
+| Capacité | Propriétaire |
+|---|---|
+| Conversation Memory | AgentCore Runtime |
+| Session State | AgentCore Runtime |
+| Conversation Summary | AgentCore Runtime |
+| Preference Extraction | AgentCore Runtime |
+| Memory Retrieval | AgentCore Runtime |
+| Memory Persistence | AgentCore Runtime |
+
+**Note d'architecture :** AgentCore Memory est utilisé uniquement pour les préférences et
+l'état conversationnel isolés par acteur et tenant. Memory ne stocke pas les données métier
+transactionnelles (violation de P-02 avec DynamoDB). L'isolation multi-tenant des namespaces
+Memory doit être vérifiée par les tests industriels.
+
+**LLD de référence :** V2-LLD-006 (données, mémoire, rétention).
+
+---
+
+### Domaine 7 — MCP
+
+| Capacité | Propriétaire |
+|---|---|
+| Tool Discovery | MCP Gateway |
+| Tool Authentication | MCP Gateway |
+| Tool Authorization | MCP Gateway |
+| Tool Transport | MCP Gateway |
+| Tool Registration | MCP Gateway |
+| Tool Version Negotiation | MCP Gateway |
+
+**Note d'architecture :** AgentCore Gateway MCP est le seul point d'entrée des tools. Aucun
+tool ne peut être appelé directement par FastAPI ou par le code agent sans passer par la Gateway.
+L'identité injectée côté Runtime écrase tout contexte produit par le modèle avant l'appel à la
+Gateway.
+
+**LLD de référence :** V2-LLD-004 (AgentCore Gateway MCP et tools).
+
+---
+
+### Domaine 8 — Data Platform
+
+| Capacité | Propriétaire |
+|---|---|
+| Object Storage | Amazon S3 |
+| Vector Storage | S3 Vectors |
+| Operational Data | DynamoDB |
+| Secrets | Secrets Manager |
+| Identity Store | Cognito |
+| Configuration | Parameter Store |
+
+**Note d'architecture :** chaque store a un rôle exclusif. Aucune capacité d'un store ne peut
+être substituée par un autre sans ADR explicite. En particulier, DynamoDB n'est pas un vecteur
+et S3 Vectors n'est pas un store transactionnel.
+
+**LLD de référence :** V2-LLD-006 (données).
+
+---
+
+### Domaine 9 — Observability
+
+| Capacité | Propriétaire |
+|---|---|
+| Metrics | OpenTelemetry |
+| Distributed Tracing | OpenTelemetry |
+| Correlation IDs | OpenTelemetry |
+| Structured Logging | CloudWatch |
+| Audit Logs | CloudWatch |
+| Dashboards | CloudWatch |
+| Alerts | CloudWatch |
+
+**Note d'architecture :** la propagation du contexte W3C Trace Context est obligatoire de
+FastAPI jusqu'à AgentCore Runtime et aux tools MCP. Les identifiants de corrélation (traceId,
+requestId, operationId hashé, sessionId hashé) ne doivent pas exposer de données en clair dans
+les logs.
+
+**LLD de référence :** V2-LLD-007 (observabilité, SLO et FinOps).
+
+---
+
+### Domaine 10 — Security
+
+| Capacité | Propriétaire |
+|---|---|
+| TLS Termination | CloudFront |
+| DDoS Protection | AWS Shield |
+| WAF Rules | AWS WAF |
+| Network Isolation | Amazon VPC |
+| Pod Identity | EKS |
+| IAM Authorization | IAM |
+
+**Note d'architecture :** les contrôles de sécurité sont en défense en profondeur. Aucune couche
+ne suppose que la précédente a filtré entièrement. FastAPI valide les contrats même si API Gateway
+a déjà validé le JWT. Les tools valident l'identité injectée même si Runtime l'a déjà construite.
+
+**LLD de référence :** V2-LLD-005 (identité, sécurité et conformité).
+
+---
+
+## Contrat interne FastAPI → AgentCore Runtime
+
+Le contrat est dérivé directement des capacités de la CAM. Il ne contient aucune capacité que
+Runtime n'est pas propriétaire de traiter. Le token Cognito est absent par construction (P-03).
 
 ```json
 {
@@ -90,32 +326,59 @@ Retenir **l’option C**.
   },
   "retrievalContext": {
     "chunks": [],
-    "policy": "v1"
+    "chunkCount": 0,
+    "policy": "v1",
+    "trust": "untrusted"
   }
 }
 ```
 
-Le contrat final sera défini dans les LLD et ne doit contenir aucun token Cognito.
+Champs interdits dans ce contrat : `cognitoToken`, `authorizationHeader`, `modelOverride`,
+`systemPromptOverride`, `toolName`, `actorIdRaw`, `tenantIdRaw`.
+
+Le contrat final, y compris les limites de taille de `retrievalContext.chunks`, sera défini
+dans les LLD V2-LLD-003 et V2-LLD-005.
+
+## Responsabilités interdites dans AgentCore Runtime
+
+Ces interdictions sont la traduction directe des principes P-01 et P-02 appliqués à la CAM.
+Elles constituent des violations de gouvernance bloquantes en revue de code.
+
+- Ingestion documentaire (propriétaire : FastAPI — Domaine 4) ;
+- administration des documents (propriétaire : FastAPI — Domaine 3) ;
+- calcul de l'autorisation tenant (propriétaire : FastAPI — Domaine 1) ;
+- exposition directe au navigateur (propriétaire : API Gateway / FastAPI — Domaines 1 et 2) ;
+- stockage transactionnel des données métier dans Memory (propriétaire : DynamoDB — Domaine 8) ;
+- dépendance directe à Bedrock Knowledge Bases ou managed Agents (exclus par V2-CHARTER) ;
+- retrieval ou indexation vectorielle (propriétaire : FastAPI — Domaine 4).
 
 ## Dégradation contrôlée
 
-- RAG indisponible : réponse sans retrieval uniquement pour les parcours explicitement autorisés ;
-- Memory indisponible : poursuite sans mémoire durable ;
-- Gateway MCP indisponible : réponse sans mutation et erreur explicite pour les actions requises ;
-- Runtime indisponible : FastAPI retourne une erreur normalisée et ne tente aucun replay ambigu de mutation.
+| Composant indisponible | Comportement attendu | Capacités impactées (CAM) |
+|---|---|---|
+| RAG (S3 Vectors) | Réponse sans retrieval pour les parcours explicitement autorisés | Domaine 4 — Retrieval Pipeline, Context Construction |
+| AgentCore Memory | Poursuite sans mémoire durable | Domaine 6 — tous |
+| Gateway MCP | Réponse sans mutation, erreur explicite pour les actions requises | Domaine 7 — tous |
+| AgentCore Runtime | FastAPI retourne une erreur normalisée, aucun replay de mutation | Domaine 5 et 6 — tous |
 
 ## Conséquences
 
-- deux niveaux d’orchestration existent, mais avec responsabilités différentes ;
-- le contexte RAG doit être limité en taille et versionné ;
-- le tracing W3C doit être propagé jusqu’au Runtime et aux tools ;
-- les tests doivent pouvoir remplacer Runtime, Bedrock, S3 Vectors et MCP par des adapters de test.
+- la CAM est le référentiel d'autorité pour l'attribution des capacités ; les LLD en découlent ;
+- toute capacité hors CAM découverte en implémentation doit être soumise à amendement ADR ;
+- le contexte RAG dans le contrat interne doit être limité en taille (à définir en LLD-003) ;
+- le tracing W3C doit être propagé de FastAPI jusqu'aux tools via Runtime ;
+- les tests doivent pouvoir remplacer Runtime, Bedrock, S3 Vectors et MCP par des adapters de
+  test (P-04 : Technology Independence) ;
+- un test d'architecture automatisé doit détecter toute violation de propriété de capacité (P-05).
 
 ## Preuves attendues
 
-- tests de contrats FastAPI/Runtime ;
-- absence de dépendance framework dans le domaine ;
-- budgets de tours, tokens, outils et temps ;
-- test de dégradation pour RAG, Memory et Gateway ;
-- absence de token ou identité client dans le payload Runtime ;
-- traçabilité d’une conversation jusqu’aux sources et tools.
+- tests de contrats FastAPI/Runtime avec les champs interdits refusés ;
+- absence de dépendance framework agentique dans le code du domaine métier (P-04) ;
+- budgets de tours, tokens, outils et temps définis et vérifiés en test ;
+- test de dégradation pour RAG, Memory et Gateway (tableau ci-dessus) ;
+- absence de token ou identité client dans le payload Runtime (P-03) ;
+- traçabilité d'une conversation jusqu'aux sources et tools via les IDs de corrélation ;
+- test d'architecture : aucun composant n'implémente une capacité dont il n'est pas propriétaire
+  dans la CAM (P-01, P-02) ;
+- chaque LLD référence explicitement les capacités CAM qu'il conçoit en détail (P-05).
