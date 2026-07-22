@@ -49,14 +49,14 @@ Sont exclus :
 
 | Document | Finalité | Statut initial |
 |---|---|---|
-| [`V2-CHARTER-FR.md`](V2-CHARTER-FR.md) | Vision, périmètre, exigences, principes et Definition of Done | Draft |
-| [`V2-ROADMAP-FR.md`](V2-ROADMAP-FR.md) | Phases, dépendances, gates HLD/LLD et livrables | Draft |
-| [`../hld/HLD-Secure-AgentCore-V2-FR.md`](../hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
-| [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD et de leurs dépendances ADR | Draft |
-| [`../adr/V2-ADR-BACKLOG-FR.md`](../adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
-| [`../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) | Décision : répartition FastAPI / AgentCore Runtime (option retenue, principes, conséquences) | Draft 0.4 |
-| [`../hld/capability-allocation-matrix.md`](../hld/capability-allocation-matrix.md) | **Capability Allocation Matrix (CAM)** — attribution des capacités par domaine, portée par V2-ADR-002 | Draft 0.1 |
-| [`../hld/runtime-contract.md`](../hld/runtime-contract.md) | Contrat interne FastAPI → AgentCore Runtime dérivé de la CAM | Draft 0.1 |
+| [`governance/V2-CHARTER-FR.md`](governance/V2-CHARTER-FR.md) | Vision, périmètre, exigences, principes et Definition of Done | Draft |
+| [`governance/V2-ROADMAP-FR.md`](governance/V2-ROADMAP-FR.md) | Phases, dépendances, gates HLD/LLD et livrables | Draft |
+| [`hld/HLD-Secure-AgentCore-V2-FR.md`](hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
+| [`lld/LLD-V2-INDEX-FR.md`](lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD et de leurs dépendances ADR | Draft |
+| [`adr/V2-ADR-BACKLOG-FR.md`](adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
+| [`adr/V2-ADR-002-fastapi-agentcore-responsibilities.md`](adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) | Décision : répartition FastAPI / AgentCore Runtime (option retenue, principes, conséquences) | Draft 0.4 |
+| [`hld/capability-allocation-matrix.md`](hld/capability-allocation-matrix.md) | **Capability Allocation Matrix (CAM)** — attribution des capacités par domaine, portée par V2-ADR-002 | Draft 0.1 |
+| [`hld/runtime-contract.md`](hld/runtime-contract.md) | Contrat interne FastAPI → AgentCore Runtime dérivé de la CAM | Draft 0.1 |
 
 > V2-ADR-002 est le seul ADR listé individuellement ci-dessus : c'est la décision qui institue la
 > CAM comme référentiel d'autorité. La CAM et le contrat qui en découlent sont désormais des
@@ -75,17 +75,17 @@ doit être traçable jusqu'à une exigence métier et jusqu'à un test de récep
 Business Requirements
         │
         ▼
-Architecture Principles          (V2-CHARTER-FR.md — section 5)
+Architecture Principles          (governance/V2-CHARTER-FR.md — section 5)
         │
         ▼
 Capability Model                 (domaines fonctionnels)
         │
         ▼
-Capability Allocation Matrix     (../hld/capability-allocation-matrix.md, décidée par V2-ADR-002)
+Capability Allocation Matrix     (hld/capability-allocation-matrix.md, décidée par V2-ADR-002)
         │
         ├──► Architecture Decision Records   (V2-ADR-001 à V2-ADR-018)
         │
-        ├──► High Level Design               (HLD-Secure-AgentCore-V2-FR.md)
+        ├──► High Level Design               (hld/HLD-Secure-AgentCore-V2-FR.md)
         │
         ├──► Low Level Design par domaine    (V2-LLD-001 à V2-LLD-010)
         │

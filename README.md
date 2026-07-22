@@ -12,12 +12,12 @@ La V1 est considérée close par décision projet et devient la baseline de la V
 
 Le référentiel V2 commence ici :
 
-- [`docs/v2/README.md`](docs/v2/README.md) — index et gouvernance documentaire ;
-- [`docs/v2/V2-CHARTER-FR.md`](docs/v2/V2-CHARTER-FR.md) — vision, périmètre, exigences et Definition of Done ;
-- [`docs/v2/V2-ROADMAP-FR.md`](docs/v2/V2-ROADMAP-FR.md) — phases et gates ;
-- [`docs/hld/HLD-Secure-AgentCore-V2-FR.md`](docs/hld/HLD-Secure-AgentCore-V2-FR.md) — HLD initial ;
-- [`docs/lld/LLD-V2-INDEX-FR.md`](docs/lld/LLD-V2-INDEX-FR.md) — catalogue des LLD obligatoires ;
-- [`docs/adr/V2-ADR-BACKLOG-FR.md`](docs/adr/V2-ADR-BACKLOG-FR.md) — backlog des décisions structurantes.
+- [`architecture/README.md`](architecture/README.md) — index et gouvernance documentaire ;
+- [`architecture/governance/V2-CHARTER-FR.md`](architecture/governance/V2-CHARTER-FR.md) — vision, périmètre, exigences et Definition of Done ;
+- [`architecture/governance/V2-ROADMAP-FR.md`](architecture/governance/V2-ROADMAP-FR.md) — phases et gates ;
+- [`architecture/hld/HLD-Secure-AgentCore-V2-FR.md`](architecture/hld/HLD-Secure-AgentCore-V2-FR.md) — HLD initial ;
+- [`architecture/lld/LLD-V2-INDEX-FR.md`](architecture/lld/LLD-V2-INDEX-FR.md) — catalogue des LLD obligatoires ;
+- [`architecture/adr/V2-ADR-BACKLOG-FR.md`](architecture/adr/V2-ADR-BACKLOG-FR.md) — backlog des décisions structurantes.
 
 ## Cycle de gouvernance V2
 
