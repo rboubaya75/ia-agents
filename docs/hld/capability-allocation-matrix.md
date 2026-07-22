@@ -1,109 +1,27 @@
-# V2-ADR-002 — Répartition FastAPI et AgentCore Runtime
+# Capability Allocation Matrix — Secure AgentCore V2
 
-- **Version :** 0.3
-- **Statut :** Proposed
+- **Version :** 0.1
 - **Branche cible :** `migration/secure-agentcore-v2`
-- **Gate :** V2-G1
-- **Dépendances :** V2-ADR-001, V2-ADR-003, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011
-- **Artefacts dérivés :** [`../hld/capability-allocation-matrix.md`](../hld/capability-allocation-matrix.md), [`../hld/runtime-contract.md`](../hld/runtime-contract.md)
+- **Décision de référence :** [`V2-ADR-002`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) — principes P-01 à P-05
+- **Contrat associé :** [`runtime-contract.md`](runtime-contract.md)
+- **Statut :** Draft
 
-## Contexte
+## 1. Objet
 
-La V2 ajoute un backend FastAPI sur EKS tout en conservant AgentCore Runtime comme runtime
-d'exécution des agents custom. Une séparation explicite est nécessaire pour éviter la duplication
-de l'orchestration, du retrieval, des sessions et des contrôles de sécurité.
+La CAM liste les capacités du système par domaine fonctionnel, désigne un unique propriétaire par
+capacité et indique les consommateurs déclarés. Le propriétaire est l'unique composant autorisé à
+implémenter la capacité. Les consommateurs sont les composants autorisés à l'invoquer via un
+contrat explicite.
 
-Cet ADR introduit une **Capability Allocation Matrix (CAM)** comme référentiel d'autorité pour
-l'attribution des capacités. La CAM remplace les listes de responsabilités narratives et devient
-le document de référence cité dans les LLD, les tests d'architecture et les analyses d'impact.
-Toute modification d'un propriétaire de capacité constitue un amendement à cet ADR.
-
-## Principes d'architecture (non négociables)
-
-Ces principes gouvernent la construction et l'évolution de la CAM. Tout changement qui les viole
-exige un nouvel ADR explicitement approuvé.
-
-| ID | Principe | Règle d'application |
-|---|---|---|
-| P-01 | **Single Capability Ownership** | Chaque capacité est attribuée à un seul propriétaire. En cas de litige, le propriétaire est déterminé par l'ADR, pas par l'implémentation en place. |
-| P-02 | **No Capability Duplication** | Aucune capacité ne peut être implémentée par deux composants. La duplication détectée en revue de code est un blocant. |
-| P-03 | **Explicit Contracts** | Toutes les interactions entre composants passent par des contrats versionnés (OpenAPI, schéma d'événement ou contrat MCP). Aucune dépendance implicite sur un comportement interne n'est autorisée. |
-| P-04 | **Technology Independence** | Les capacités sont décrites indépendamment de leur implémentation technique. Un changement de technologie (Lambda → FastAPI, Strands → LangGraph) n'impose pas de réécriture de la CAM si le propriétaire reste identique. |
-| P-05 | **Traceability** | Chaque capacité est reliée aux ADR, au HLD, aux LLD, aux tests et aux exigences métier qui la justifient. Une capacité non traçable est un écart de gouvernance bloquant. |
-
-## Hiérarchie de traçabilité
-
-La CAM occupe un niveau intermédiaire dans la chaîne de traçabilité V2. Elle traduit les principes
-d'architecture en attributions concrètes, et ces attributions alimentent directement les ADR, le
-HLD et les LLD.
-
-```text
-Business Requirements
-        │
-        ▼
-Architecture Principles          (P-01 à P-05 ci-dessus)
-        │
-        ▼
-Capability Model                 (domaines fonctionnels)
-        │
-        ▼
-Capability Allocation Matrix     (ce document — ADR-002 v0.3)
-        │
-        ├──► Architecture Decision Records   (V2-ADR-001 à V2-ADR-018)
-        │
-        ├──► High Level Design               (HLD-Secure-AgentCore-V2-FR.md)
-        │
-        ├──► Low Level Design par domaine    (V2-LLD-001 à V2-LLD-010)
-        │
-        ├──► Implementation
-        │
-        ├──► Industrial Test Suite
-        │
-        └──► Acceptance Evidence
-```
-
-Chaque LLD doit référencer les capacités de la CAM dont il est la conception détaillée. Chaque
-test d'architecture doit vérifier qu'un composant n'implémente pas une capacité dont il n'est pas
-propriétaire.
-
-## Options
-
-### Option A — Orchestration complète dans FastAPI
-
-FastAPI appelle directement Bedrock Converse API et les tools, Runtime devenant marginal.
-
-**Rejet proposé :** incompatible avec le rôle retenu pour AgentCore Runtime et risque de dupliquer
-les capacités d'exécution agentique (violation de P-02).
-
-### Option B — Orchestration complète dans Runtime
-
-FastAPI transmet seulement le message et Runtime réalise retrieval, autorisation, modèle et tools.
-
-**Rejet proposé :** mélange les responsabilités applicatives, documentaires et agentiques ;
-complique les APIs d'administration et la testabilité ; concentre trop de propriétés dans un
-composant non testable sans service externe (violation de P-01 et P-02).
-
-### Option C — Orchestration en deux niveaux
-
-FastAPI décide du parcours, réalise l'autorisation et le retrieval, puis invoque Runtime avec un
-contexte contrôlé. Runtime exécute l'agent, le modèle, Memory et les tools MCP autorisés.
-
-## Décision proposée
-
-Retenir **l'option C**. La CAM ci-dessous est l'expression formelle de cette décision.
-
----
-
-## Capability Allocation Matrix (CAM)
-
-La CAM liste les capacités par domaine fonctionnel, désigne un unique propriétaire par capacité et
-indique les consommateurs déclarés. Le propriétaire est l'unique composant autorisé à implémenter
-la capacité. Les consommateurs sont les composants autorisés à l'invoquer via un contrat explicite.
+Ce document traduit en attributions concrètes les principes d'architecture non négociables
+décidés par [`V2-ADR-002`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) (P-01 Single
+Capability Ownership à P-05 Traceability). Toute modification d'un propriétaire de capacité
+constitue un amendement à cet ADR.
 
 > **Convention :** `—` indique que les consommateurs seront précisés dans le LLD du domaine
 > concerné. Une capacité sans consommateurs déclarés est interne à son propriétaire.
 
----
+## 2. Domaines
 
 ### Domaine 1 — Identity & Access Management
 
@@ -124,7 +42,8 @@ la capacité. Les consommateurs sont les composants autorisés à l'invoquer via
 
 **Note d'architecture :** aucun token Cognito ne doit être transmis au-delà de FastAPI. Les
 revendications sensibles (actorId, tenantId, rôles) sont résolues par FastAPI et propagées via
-la `trustedIdentity` du contrat interne. AgentCore Runtime ne reçoit jamais de JWT.
+la `trustedIdentity` du contrat interne (voir [`runtime-contract.md`](runtime-contract.md)).
+AgentCore Runtime ne reçoit jamais de JWT.
 
 **Claims Extraction vs Claims Propagation :** Extraction désigne le parsing du JWT validé et la
 lecture des claims Cognito (`sub`, `custom:tenantId`, rôles) par API Gateway. Propagation désigne
@@ -132,6 +51,8 @@ le forwarding de ces claims vers FastAPI via des en-têtes HTTP dédiés inject�
 (distincts de l'en-tête `Authorization`), jamais dans le corps de la requête. FastAPI ne fait donc
 jamais confiance à un claim porté par le payload applicatif — seuls les en-têtes injectés par API
 Gateway sont une source valide (P-03). Le format exact des en-têtes est défini en LLD-005.
+
+**LLD de référence :** V2-LLD-005 (identité, sécurité et conformité).
 
 ---
 
@@ -319,52 +240,7 @@ a déjà validé le JWT. Les tools valident l'identité injectée même si Runti
 
 **LLD de référence :** V2-LLD-005 (identité, sécurité et conformité).
 
----
-
-## Contrat interne FastAPI → AgentCore Runtime
-
-Le contrat est dérivé directement des capacités de la CAM. Il ne contient aucune capacité que
-Runtime n'est pas propriétaire de traiter. Le token Cognito est absent par construction (P-03).
-
-```json
-{
-  "message": "...",
-  "runtimeSessionId": "...",
-  "trustedIdentity": {
-    "actorId": "...",
-    "tenantId": "..."
-  },
-  "operationContext": {
-    "operationId": "...",
-    "requestId": "...",
-    "deadlineEpochMs": 0
-  },
-  "retrievalContext": {
-    "status": "ok",
-    "chunks": [],
-    "chunkCount": 0,
-    "policy": "v1",
-    "trust": "untrusted"
-  }
-}
-```
-
-`retrievalContext.status` distingue explicitement les scénarios que `chunks: []` seul ne permet
-pas de discriminer : `ok` (retrieval exécuté, résultat éventuellement vide), `degraded` (RAG
-indisponible, réponse sans retrieval au sens du tableau de dégradation) ou `skipped` (retrieval
-non requis pour ce parcours). Runtime adapte le comportement agentique — notamment le message
-renvoyé à l'utilisateur en cas d'absence de documents — selon cette valeur plutôt que sur le seul
-`chunkCount`. `retrievalContext.chunkCount` est une valeur dérivée de `chunks.length` fournie pour
-permettre à Runtime d'appliquer les budgets de contexte (LLD-003) sans désérialiser `chunks` ;
-elle n'introduit aucune capacité nouvelle et doit rester strictement égale à la taille du tableau.
-
-Champs interdits dans ce contrat : `cognitoToken`, `authorizationHeader`, `modelOverride`,
-`systemPromptOverride`, `toolName`, `actorIdRaw`, `tenantIdRaw`.
-
-Le contrat final, y compris les limites de taille de `retrievalContext.chunks`, sera défini
-dans les LLD V2-LLD-003 et V2-LLD-005.
-
-## Responsabilités interdites dans AgentCore Runtime
+## 3. Responsabilités interdites dans AgentCore Runtime
 
 Ces interdictions sont la traduction directe des principes P-01 et P-02 appliqués à la CAM.
 Elles constituent des violations de gouvernance bloquantes en revue de code.
@@ -377,7 +253,7 @@ Elles constituent des violations de gouvernance bloquantes en revue de code.
 - dépendance directe à Bedrock Knowledge Bases ou managed Agents (exclus par V2-CHARTER) ;
 - retrieval ou indexation vectorielle (propriétaire : FastAPI — Domaine 4).
 
-## Dégradation contrôlée
+## 4. Dégradation contrôlée
 
 | Composant indisponible | Comportement attendu | Capacités impactées (CAM) |
 |---|---|---|
@@ -391,24 +267,9 @@ Elles constituent des violations de gouvernance bloquantes en revue de code.
 applicatif — elle est traitée par les mécanismes AWS (health checks, failover) documentés en
 LLD-001, pas par une logique de dégradation FastAPI/Runtime.
 
-## Conséquences
+## 5. Preuves attendues
 
-- la CAM est le référentiel d'autorité pour l'attribution des capacités ; les LLD en découlent ;
-- toute capacité hors CAM découverte en implémentation doit être soumise à amendement ADR ;
-- le contexte RAG dans le contrat interne doit être limité en taille (à définir en LLD-003) ;
-- le tracing W3C doit être propagé de FastAPI jusqu'aux tools via Runtime ;
-- les tests doivent pouvoir remplacer Runtime, Bedrock, S3 Vectors et MCP par des adapters de
-  test (P-04 : Technology Independence) ;
-- un test d'architecture automatisé doit détecter toute violation de propriété de capacité (P-05).
-
-## Preuves attendues
-
-- tests de contrats FastAPI/Runtime avec les champs interdits refusés ;
-- absence de dépendance framework agentique dans le code du domaine métier (P-04) ;
-- budgets de tours, tokens, outils et temps définis et vérifiés en test ;
-- test de dégradation pour RAG, Memory et Gateway (tableau ci-dessus) ;
-- absence de token ou identité client dans le payload Runtime (P-03) ;
-- traçabilité d'une conversation jusqu'aux sources et tools via les IDs de corrélation ;
+- test de dégradation pour API Gateway, RAG, Memory et Gateway MCP (tableau ci-dessus) ;
 - test d'architecture : aucun composant n'implémente une capacité dont il n'est pas propriétaire
-  dans la CAM (P-01, P-02) ;
+  dans cette CAM (P-01, P-02) ;
 - chaque LLD référence explicitement les capacités CAM qu'il conçoit en détail (P-05).
