@@ -3,7 +3,7 @@
 - **Version :** 0.1
 - **Branche :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
-- **HLD :** `docs/hld/HLD-Secure-AgentCore-V2-FR.md`
+- **HLD :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md`
 
 ## 1. Objet
 

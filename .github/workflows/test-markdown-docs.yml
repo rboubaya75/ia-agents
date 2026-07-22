@@ -8,6 +8,7 @@ on:
     paths:
       - "README.md"
       - "docs/**/*.md"
+      - "architecture/**/*.md"
       - "scripts/validate_markdown_docs.py"
       - ".github/workflows/test-markdown-docs.yml"
   pull_request:
@@ -17,6 +18,7 @@ on:
     paths:
       - "README.md"
       - "docs/**/*.md"
+      - "architecture/**/*.md"
       - "scripts/validate_markdown_docs.py"
       - ".github/workflows/test-markdown-docs.yml"
   workflow_dispatch:
@@ -58,12 +60,12 @@ jobs:
         run: |
           python scripts/validate_markdown_docs.py \
             README.md \
-            docs/v2/README.md \
-            docs/v2/V2-CHARTER-FR.md \
-            docs/v2/V2-ROADMAP-FR.md \
-            docs/hld/HLD-Secure-AgentCore-V2-FR.md \
-            docs/hld/capability-allocation-matrix.md \
-            docs/hld/runtime-contract.md \
-            docs/lld/LLD-V2-INDEX-FR.md \
-            docs/adr/V2-ADR-BACKLOG-FR.md \
-            docs/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md
+            architecture/README.md \
+            architecture/governance/V2-CHARTER-FR.md \
+            architecture/governance/V2-ROADMAP-FR.md \
+            architecture/hld/HLD-Secure-AgentCore-V2-FR.md \
+            architecture/hld/capability-allocation-matrix.md \
+            architecture/hld/runtime-contract.md \
+            architecture/lld/LLD-V2-INDEX-FR.md \
+            architecture/adr/V2-ADR-BACKLOG-FR.md \
+            architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md
