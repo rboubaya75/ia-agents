@@ -1,6 +1,6 @@
 # HLD — Secure AgentCore V2
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Branche :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
 - **Statut :** Draft — architecture cible à instruire par ADR
@@ -153,9 +153,97 @@ L’ingestion doit être idempotente, reprenable et capable de supprimer ou réi
 9. Aucun replay de l’agent après démarrage confirmé de la mutation
 ```
 
+### 6.4 Diagramme de flux de données (question → réponse)
+
+Vue de bout en bout du flux 6.1, avec embranchement vers le flux 6.3 lorsqu'un tool est requis.
+
+```text
+Question utilisateur
+        │  FastAPI : validation du contrat, sélection du parcours
+        ▼
+Retrieval (S3 Vectors, filtres d'autorisation par tenant/acteur)
+        │  DynamoDB / S3 : résolution des métadonnées et extraits sources
+        ▼
+Prompt Context Assembly (FastAPI)
+        │  retrievalContext borné, trust=untrusted, status ∈ {ok, degraded, skipped}
+        ▼
+Contrat interne FastAPI → AgentCore Runtime
+        ▼
+AgentCore Runtime : Prompt Construction + Bedrock Converse Invocation
+        │
+        ├─ pas de tool requis ─────────────────────► Réponse : contenu, citations
+        │                                             operationId, référence de
+        │                                             corrélation
+        │
+        └─ tool requis (flux 6.3)
+                │  Tool Selection, confirmation si mutation
+                ▼
+        AgentCore Gateway MCP (identité injectée par Runtime)
+                ▼
+        Tool métier : lecture ou mutation confirmée et idempotente
+                ▼
+        Résultat structuré, redacted, corrélé
+                ▼
+        Réponse finale : contenu, citations, operationId, référence de corrélation
+```
+
+Chaque étape correspond à une capacité attribuée par la
+[CAM](capability-allocation-matrix.md) : Retrieval (Domaine 4), Prompt Context Assembly
+(Domaine 4), Prompt Construction et Bedrock Converse Invocation (Domaine 5), Tool Selection
+(Domaine 5), exécution du tool (Domaine 7).
+
 ## 7. Identité et zones de confiance
 
-### Zone non fiable
+### 7.1 Diagramme des zones de confiance
+
+```text
+┌──────────────── Zone non fiable ────────────────┐
+│ Browser / React                                  │
+└───────────────────────┬───────────────────────────┘
+                         │ HTTPS + JWT Cognito
+                         ▼
+┌──────────────── Zone périmétrique ──────────────┐
+│ CloudFront + WAF                                  │
+└───────────────────────┬───────────────────────────┘
+                         ▼
+┌──────────────── Zone contrôlée (edge) ──────────┐
+│ API Gateway                                       │
+│  - validation JWT (signature, exp, aud, iss)      │
+│  - extraction des claims                          │
+└───────────────────────┬───────────────────────────┘
+                         │ claims propagés par en-têtes serveur
+                         │ (jamais le JWT lui-même au-delà de ce point)
+                         ▼
+┌──────────────── Zone applicative ───────────────┐
+│ FastAPI sur EKS                                   │
+│  - autorisation métier (RBAC/ABAC)                │
+│  - retrieval, construction du contexte RAG        │
+└───────────────────────┬───────────────────────────┘
+                         │ contrat interne (trustedIdentity, sans JWT)
+                         ▼
+┌──────────────── Zone agentique (IAM-only) ──────┐
+│ AgentCore Runtime                                 │
+│  - boucle agentique, Memory, sélection de tools   │
+└──────┬─────────────────────────────────┬──────────┘
+       │ SigV4                           │ SigV4
+       ▼                                 ▼
+┌─────────────────┐              ┌─────────────────────┐
+│ Bedrock          │              │ AgentCore Gateway     │
+│ Converse API     │              │ MCP                   │
+└─────────────────┘              └──────────┬───────────┘
+                                             ▼
+                                  ┌─────────────────────┐
+                                  │ Tools métier           │
+                                  │ (ex. Trip Tools)       │
+                                  └─────────────────────┘
+```
+
+Aucune zone ne fait confiance à la validation réalisée par la zone amont (défense en profondeur,
+cf. Domaine 10 — Security de la [CAM](capability-allocation-matrix.md)) : FastAPI revalide les
+contrats même si API Gateway a déjà validé le JWT, et les tools valident l'identité injectée même
+si Runtime l'a déjà construite.
+
+### 7.2 Zone non fiable
 
 - navigateur ;
 - prompt utilisateur ;
@@ -164,7 +252,7 @@ L’ingestion doit être idempotente, reprenable et capable de supprimer ou réi
 - réponses de services externes ;
 - paramètres fournis aux tools avant écrasement serveur.
 
-### Zone contrôlée
+### 7.3 Zone contrôlée
 
 - API Gateway après validation JWT ;
 - couche d’ingress sécurisée ;
@@ -173,9 +261,39 @@ L’ingestion doit être idempotente, reprenable et capable de supprimer ou réi
 - Gateway MCP avec resource policy ;
 - tools autorisés et données filtrées par identité.
 
-### Règle d’identité
+### 7.4 Règle d’identité
 
 Le principe V1 reste la baseline : l’acteur provient d’un claim Cognito validé et n’est jamais accepté depuis le payload métier. Le modèle multi-tenant, les scopes et la représentation interne de l’identité doivent être décidés par ADR.
+
+### 7.5 Diagramme des flux d'identité
+
+```text
+JWT Cognito (id_token)
+        │  Cognito Authorizer : signature, expiration, audience, issuer
+        ▼
+Claims (sub, custom:tenantId, rôles)
+        │  API Gateway : extraction, puis propagation par en-têtes serveur
+        │  dédiés (jamais dans le corps de la requête, jamais l'en-tête
+        │  Authorization au-delà de ce point)
+        ▼
+FastAPI : Actor Identity Resolution + Tenant Resolution
+        │  + Business Authorization (RBAC/ABAC)
+        ▼
+trustedIdentity { actorId, tenantId }
+        │  contrat interne FastAPI -> AgentCore Runtime (sans JWT, sans claim brut)
+        ▼
+AgentCore Runtime : injection serveur de l'identité
+        │  écrase tout contexte d'identité produit par le modèle ou l'agent
+        ▼
+Tool Identity (identité injectée, jamais fournie par l'agent ou l'utilisateur)
+        │  appel signé IAM (SigV4)
+        ▼
+IAM Role scoping : resource policy Gateway -> rôle Runtime -> tool exact
+```
+
+Chaque flèche correspond à une capacité de la [CAM](capability-allocation-matrix.md) (Domaine 1 —
+Identity & Access Management) : ce diagramme est la vue dynamique de ce que la CAM attribue de
+façon statique.
 
 ## 8. Architecture EKS initiale
 

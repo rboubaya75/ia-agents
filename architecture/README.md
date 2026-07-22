@@ -49,28 +49,64 @@ Sont exclus :
 
 | Document | Finalité | Statut initial |
 |---|---|---|
-| [`V2-CHARTER-FR.md`](V2-CHARTER-FR.md) | Vision, périmètre, exigences, principes et Definition of Done | Draft |
-| [`V2-ROADMAP-FR.md`](V2-ROADMAP-FR.md) | Phases, dépendances, gates HLD/LLD et livrables | Draft |
-| [`../hld/HLD-Secure-AgentCore-V2-FR.md`](../hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
-| [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD et de leurs dépendances ADR | Draft |
-| [`../adr/V2-ADR-BACKLOG-FR.md`](../adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
+| [`governance/V2-CHARTER-FR.md`](governance/V2-CHARTER-FR.md) | Vision, périmètre, exigences, principes et Definition of Done | Draft |
+| [`governance/V2-ROADMAP-FR.md`](governance/V2-ROADMAP-FR.md) | Phases, dépendances, gates HLD/LLD et livrables | Draft |
+| [`hld/HLD-Secure-AgentCore-V2-FR.md`](hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
+| [`lld/LLD-V2-INDEX-FR.md`](lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD et de leurs dépendances ADR | Draft |
+| [`adr/V2-ADR-BACKLOG-FR.md`](adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
+| [`adr/V2-ADR-002-fastapi-agentcore-responsibilities.md`](adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) | Décision : répartition FastAPI / AgentCore Runtime (option retenue, principes, conséquences) | Draft 0.4 |
+| [`hld/capability-allocation-matrix.md`](hld/capability-allocation-matrix.md) | **Capability Allocation Matrix (CAM)** — attribution des capacités par domaine, portée par V2-ADR-002 | Draft 0.1 |
+| [`hld/runtime-contract.md`](hld/runtime-contract.md) | Contrat interne FastAPI → AgentCore Runtime dérivé de la CAM | Draft 0.1 |
+
+> V2-ADR-002 est le seul ADR listé individuellement ci-dessus : c'est la décision qui institue la
+> CAM comme référentiel d'autorité. La CAM et le contrat qui en découlent sont désormais des
+> artefacts de conception (HLD) séparés, pour que l'ADR reste centré sur le *pourquoi* et non sur
+> le détail d'implémentation. Les autres ADR déjà instruits (`V2-ADR-001`, `V2-ADR-006`, statut
+> `Proposed`) restent référencés dans le backlog ci-dessus jusqu'à leur passage en `Accepted`.
 
 ## 5. Cycle de gouvernance
 
+La hiérarchie de traçabilité V2 structure le corpus documentaire du cadrage jusqu'aux preuves
+de réception. La **Capability Allocation Matrix** (CAM, portée par V2-ADR-002) occupe le niveau
+intermédiaire entre les principes d'architecture et les décisions d'implémentation. Toute capacité
+doit être traçable jusqu'à une exigence métier et jusqu'à un test de réception.
+
 ```text
-Exigences
-  -> options et ADR
-  -> HLD
-  -> validation HLD
-  -> LLD par domaine
-  -> validation LLD
-  -> implémentation
-  -> tests et preuves
-  -> documentation As-Built
-  -> réception
+Business Requirements
+        │
+        ▼
+Architecture Principles          (governance/V2-CHARTER-FR.md — section 5)
+        │
+        ▼
+Capability Model                 (domaines fonctionnels)
+        │
+        ▼
+Capability Allocation Matrix     (hld/capability-allocation-matrix.md, décidée par V2-ADR-002)
+        │
+        ├──► Architecture Decision Records   (V2-ADR-001 à V2-ADR-018)
+        │
+        ├──► High Level Design               (hld/HLD-Secure-AgentCore-V2-FR.md)
+        │
+        ├──► Low Level Design par domaine    (V2-LLD-001 à V2-LLD-010)
+        │
+        ├──► Implementation
+        │
+        ├──► Industrial Test Suite
+        │
+        └──► Acceptance Evidence
 ```
 
-Aucun composant structurant ne doit être implémenté avant validation du HLD et du LLD qui le gouvernent. Une divergence significative entre conception et implémentation exige un ADR nouveau ou amendé.
+Règles découlant de la CAM :
+
+- chaque capacité a un unique propriétaire (Single Capability Ownership) ;
+- aucune capacité n'est implémentée par deux composants (No Capability Duplication) ;
+- toutes les interactions passent par des contrats versionnés (Explicit Contracts) ;
+- les capacités sont décrites indépendamment de leur technologie (Technology Independence) ;
+- chaque capacité est reliée aux ADR, HLD, LLD, tests et exigences (Traceability).
+
+Aucun composant structurant ne doit être implémenté avant validation du HLD et du LLD qui le
+gouvernent. Une divergence significative entre conception et implémentation exige un ADR nouveau
+ou amendé. Une capacité non attribuée dans la CAM est un écart de gouvernance bloquant.
 
 ## 6. Statuts documentaires
 

@@ -8,6 +8,7 @@ on:
     paths:
       - "README.md"
       - "docs/**/*.md"
+      - "architecture/**/*.md"
       - "scripts/validate_markdown_docs.py"
       - ".github/workflows/test-markdown-docs.yml"
   pull_request:
@@ -17,6 +18,7 @@ on:
     paths:
       - "README.md"
       - "docs/**/*.md"
+      - "architecture/**/*.md"
       - "scripts/validate_markdown_docs.py"
       - ".github/workflows/test-markdown-docs.yml"
   workflow_dispatch:
@@ -58,9 +60,18 @@ jobs:
         run: |
           python scripts/validate_markdown_docs.py \
             README.md \
-            docs/v2/README.md \
-            docs/v2/V2-CHARTER-FR.md \
-            docs/v2/V2-ROADMAP-FR.md \
-            docs/hld/HLD-Secure-AgentCore-V2-FR.md \
-            docs/lld/LLD-V2-INDEX-FR.md \
-            docs/adr/V2-ADR-BACKLOG-FR.md
+            architecture/README.md \
+            architecture/governance/V2-CHARTER-FR.md \
+            architecture/governance/V2-ROADMAP-FR.md \
+            architecture/hld/HLD-Secure-AgentCore-V2-FR.md \
+            architecture/hld/capability-allocation-matrix.md \
+            architecture/hld/runtime-contract.md \
+            architecture/lld/LLD-V2-INDEX-FR.md \
+            architecture/adr/V2-ADR-BACKLOG-FR.md \
+            architecture/adr/V2-ADR-001-ingress-security-boundary.md \
+            architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md \
+            architecture/adr/V2-ADR-003-rag-s3-vectors-retrieval.md \
+            architecture/adr/V2-ADR-004-document-ingestion-pipeline.md \
+            architecture/adr/V2-ADR-006-identity-authorization-isolation.md \
+            architecture/adr/V2-ADR-007-network-eks-platform.md \
+            architecture/adr/V2-ADR-010-backup-restore-rehydration.md
