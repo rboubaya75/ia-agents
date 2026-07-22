@@ -54,15 +54,12 @@ Sont exclus :
 | [`../hld/HLD-Secure-AgentCore-V2-FR.md`](../hld/HLD-Secure-AgentCore-V2-FR.md) | Architecture cible haut niveau | Draft 0.1 |
 | [`../lld/LLD-V2-INDEX-FR.md`](../lld/LLD-V2-INDEX-FR.md) | Catalogue canonique des dix LLD et de leurs dépendances ADR | Draft |
 | [`../adr/V2-ADR-BACKLOG-FR.md`](../adr/V2-ADR-BACKLOG-FR.md) | Backlog des décisions structurantes à instruire | Draft |
-| [`../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) | Décision : répartition FastAPI / AgentCore Runtime (option retenue, principes, conséquences) | Draft 0.4 |
-| [`../hld/capability-allocation-matrix.md`](../hld/capability-allocation-matrix.md) | **Capability Allocation Matrix (CAM)** — attribution des capacités par domaine, portée par V2-ADR-002 | Draft 0.1 |
-| [`../hld/runtime-contract.md`](../hld/runtime-contract.md) | Contrat interne FastAPI → AgentCore Runtime dérivé de la CAM | Draft 0.1 |
+| [`../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) | **Capability Allocation Matrix (CAM)** — attribution des capacités par domaine | Draft 0.3 |
 
-> V2-ADR-002 est le seul ADR listé individuellement ci-dessus : c'est la décision qui institue la
-> CAM comme référentiel d'autorité. La CAM et le contrat qui en découlent sont désormais des
-> artefacts de conception (HLD) séparés, pour que l'ADR reste centré sur le *pourquoi* et non sur
-> le détail d'implémentation. Les autres ADR déjà instruits (`V2-ADR-001`, `V2-ADR-006`, statut
-> `Proposed`) restent référencés dans le backlog ci-dessus jusqu'à leur passage en `Accepted`.
+> V2-ADR-002 est le seul ADR listé individuellement ci-dessus : il porte la CAM, un artefact de
+> gouvernance de premier niveau consulté par tous les LLD. Les autres ADR déjà instruits
+> (`V2-ADR-001`, `V2-ADR-006`, statut `Proposed`) restent référencés dans le backlog ci-dessus
+> jusqu'à leur passage en `Accepted`.
 
 ## 5. Cycle de gouvernance
 
@@ -81,7 +78,7 @@ Architecture Principles          (V2-CHARTER-FR.md — section 5)
 Capability Model                 (domaines fonctionnels)
         │
         ▼
-Capability Allocation Matrix     (../hld/capability-allocation-matrix.md, décidée par V2-ADR-002)
+Capability Allocation Matrix     (V2-ADR-002 v0.3)
         │
         ├──► Architecture Decision Records   (V2-ADR-001 à V2-ADR-018)
         │
