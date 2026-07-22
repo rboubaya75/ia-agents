@@ -68,4 +68,10 @@ jobs:
             architecture/hld/runtime-contract.md \
             architecture/lld/LLD-V2-INDEX-FR.md \
             architecture/adr/V2-ADR-BACKLOG-FR.md \
-            architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md
+            architecture/adr/V2-ADR-001-ingress-security-boundary.md \
+            architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md \
+            architecture/adr/V2-ADR-003-rag-s3-vectors-retrieval.md \
+            architecture/adr/V2-ADR-004-document-ingestion-pipeline.md \
+            architecture/adr/V2-ADR-006-identity-authorization-isolation.md \
+            architecture/adr/V2-ADR-007-network-eks-platform.md \
+            architecture/adr/V2-ADR-010-backup-restore-rehydration.md
