@@ -257,19 +257,31 @@ Elles constituent des violations de gouvernance bloquantes en revue de code.
 
 | Composant indisponible | Comportement attendu | Capacités impactées (CAM) |
 |---|---|---|
+| CloudFront | Frontend et API front-door inaccessibles depuis le navigateur ; échec au niveau DNS/client, aucun état applicatif partiel | Domaine 10 — TLS Termination |
+| WAF | CloudFront continue de servir sans filtrage L7 (comportement fail-open par défaut AWS sauf configuration contraire à documenter en LLD-005) ; dégradation de sécurité, pas de disponibilité | Domaine 10 — WAF Rules |
 | API Gateway | Aucune requête n'atteint FastAPI ; échec au niveau CloudFront/client, aucun état applicatif partiel | Domaine 1 — Claims Extraction, Claims Propagation ; Domaine 2 — Rate Limiting Configuration |
+| EKS / FastAPI | Aucune requête applicative traitée ; API Gateway retourne une erreur 5xx normalisée, aucune invocation Runtime tentée | Domaine 2 — tous ; Domaine 3 — tous |
 | RAG (S3 Vectors) | Réponse sans retrieval pour les parcours explicitement autorisés (`retrievalContext.status = degraded`) | Domaine 4 — Retrieval Pipeline, Context Construction |
 | AgentCore Memory | Poursuite sans mémoire durable | Domaine 6 — tous |
 | Gateway MCP | Réponse sans mutation, erreur explicite pour les actions requises | Domaine 7 — tous |
 | AgentCore Runtime | FastAPI retourne une erreur normalisée, aucun replay de mutation | Domaine 5 et 6 — tous |
+| Bedrock (Converse API) | AgentCore Runtime reste disponible mais retourne une erreur modèle structurée ; pas de retry infini ; fallback modèle si configuré (V2-ADR-012) | Domaine 5 — Bedrock Converse Invocation |
+| DynamoDB | FastAPI ne peut plus résoudre les métadonnées ni les opérations métier ; erreur normalisée, aucune mutation partielle | Domaine 3 — tous ; Domaine 4 — Metadata Filtering ; Domaine 8 — Operational Data |
 
-**Note :** l'indisponibilité d'API Gateway est un incident d'infrastructure hors contrôle
-applicatif — elle est traitée par les mécanismes AWS (health checks, failover) documentés en
-LLD-001, pas par une logique de dégradation FastAPI/Runtime.
+**Note :** l'indisponibilité de CloudFront, WAF ou API Gateway est un incident d'infrastructure
+hors contrôle applicatif — elle est traitée par les mécanismes AWS (health checks, failover)
+documentés en LLD-001 et LLD-005, pas par une logique de dégradation FastAPI/Runtime.
+
+**Note sur ALB :** ce tableau ne couvre volontairement pas de ligne « ALB » — aucun composant
+`ALB` n'est attribué dans cette CAM. Le mécanisme d'ingress interne à EKS reste une décision
+ouverte de `V2-ADR-001` (« couche d'ingress sécurisée ; forme à décider par ADR »). Une ligne de
+dégradation ne peut référencer qu'un propriétaire déjà acté par la CAM (P-01) ; elle sera ajoutée
+une fois `V2-ADR-001` accepté si le composant retenu l'exige.
 
 ## 5. Preuves attendues
 
-- test de dégradation pour API Gateway, RAG, Memory et Gateway MCP (tableau ci-dessus) ;
+- test de dégradation pour CloudFront, WAF, API Gateway, EKS/FastAPI, RAG, Memory, Gateway MCP,
+  AgentCore Runtime, Bedrock et DynamoDB (tableau ci-dessus) ;
 - test d'architecture : aucun composant n'implémente une capacité dont il n'est pas propriétaire
   dans cette CAM (P-01, P-02) ;
 - chaque LLD référence explicitement les capacités CAM qu'il conçoit en détail (P-05).
