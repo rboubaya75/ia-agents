@@ -1,6 +1,6 @@
 # V2-ADR-002 — Répartition FastAPI et AgentCore Runtime
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Statut :** Proposed
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
@@ -46,7 +46,7 @@ Architecture Principles          (P-01 à P-05 ci-dessus)
 Capability Model                 (domaines fonctionnels)
         │
         ▼
-Capability Allocation Matrix     (ce document — ADR-002 v0.2)
+Capability Allocation Matrix     (ce document — ADR-002 v0.3)
         │
         ├──► Architecture Decision Records   (V2-ADR-001 à V2-ADR-018)
         │
@@ -124,6 +124,13 @@ la capacité. Les consommateurs sont les composants autorisés à l'invoquer via
 **Note d'architecture :** aucun token Cognito ne doit être transmis au-delà de FastAPI. Les
 revendications sensibles (actorId, tenantId, rôles) sont résolues par FastAPI et propagées via
 la `trustedIdentity` du contrat interne. AgentCore Runtime ne reçoit jamais de JWT.
+
+**Claims Extraction vs Claims Propagation :** Extraction désigne le parsing du JWT validé et la
+lecture des claims Cognito (`sub`, `custom:tenantId`, rôles) par API Gateway. Propagation désigne
+le forwarding de ces claims vers FastAPI via des en-têtes HTTP dédiés injectés côté serveur
+(distincts de l'en-tête `Authorization`), jamais dans le corps de la requête. FastAPI ne fait donc
+jamais confiance à un claim porté par le payload applicatif — seuls les en-têtes injectés par API
+Gateway sont une source valide (P-03). Le format exact des en-têtes est défini en LLD-005.
 
 ---
 
@@ -271,17 +278,24 @@ et S3 Vectors n'est pas un store transactionnel.
 | Capacité | Propriétaire | Consommateurs |
 |---|---|---|
 | Metrics | OpenTelemetry | — |
-| Distributed Tracing | OpenTelemetry | — |
-| Correlation IDs | OpenTelemetry | — |
+| Distributed Tracing (traceId, spanId) | OpenTelemetry | — |
+| Business Correlation IDs (operationId, requestId) | FastAPI | AgentCore Runtime |
 | Structured Logging | CloudWatch | — |
 | Audit Logs | CloudWatch | — |
 | Dashboards | CloudWatch | — |
 | Alerts | CloudWatch | — |
 
-**Note d'architecture :** la propagation du contexte W3C Trace Context est obligatoire de
-FastAPI jusqu'à AgentCore Runtime et aux tools MCP. Les identifiants de corrélation (traceId,
-requestId, operationId hashé, sessionId hashé) ne doivent pas exposer de données en clair dans
-les logs.
+**Note d'architecture :** deux familles d'identifiants coexistent et ne doivent pas être
+confondues. Le **Distributed Tracing** (`traceId`, `spanId`, W3C Trace Context) est propriété
+d'OpenTelemetry : il est généré par l'instrumentation, propagé automatiquement de FastAPI jusqu'à
+AgentCore Runtime et aux tools MCP, et sert la corrélation technique inter-services. Les
+**Business Correlation IDs** (`operationId`, `requestId` du contrat interne) sont propriété de
+FastAPI : ils identifient une opération métier (une requête utilisateur, une mutation) et
+persistent au-delà d'une trace technique unique — par exemple pour retrouver toutes les traces
+liées à une même opération après un retry. AgentCore Runtime consomme les deux sans en générer
+aucun. Aucun de ces identifiants (`traceId`, `operationId`, `requestId`, `sessionId`) ne doit
+exposer de données en clair dans les logs ; ils sont hashés avant écriture (Domaine 9 —
+Structured Logging).
 
 **LLD de référence :** V2-LLD-007 (observabilité, SLO et FinOps).
 
@@ -325,6 +339,7 @@ Runtime n'est pas propriétaire de traiter. Le token Cognito est absent par cons
     "deadlineEpochMs": 0
   },
   "retrievalContext": {
+    "status": "ok",
     "chunks": [],
     "chunkCount": 0,
     "policy": "v1",
@@ -332,6 +347,15 @@ Runtime n'est pas propriétaire de traiter. Le token Cognito est absent par cons
   }
 }
 ```
+
+`retrievalContext.status` distingue explicitement les scénarios que `chunks: []` seul ne permet
+pas de discriminer : `ok` (retrieval exécuté, résultat éventuellement vide), `degraded` (RAG
+indisponible, réponse sans retrieval au sens du tableau de dégradation) ou `skipped` (retrieval
+non requis pour ce parcours). Runtime adapte le comportement agentique — notamment le message
+renvoyé à l'utilisateur en cas d'absence de documents — selon cette valeur plutôt que sur le seul
+`chunkCount`. `retrievalContext.chunkCount` est une valeur dérivée de `chunks.length` fournie pour
+permettre à Runtime d'appliquer les budgets de contexte (LLD-003) sans désérialiser `chunks` ;
+elle n'introduit aucune capacité nouvelle et doit rester strictement égale à la taille du tableau.
 
 Champs interdits dans ce contrat : `cognitoToken`, `authorizationHeader`, `modelOverride`,
 `systemPromptOverride`, `toolName`, `actorIdRaw`, `tenantIdRaw`.
@@ -356,10 +380,15 @@ Elles constituent des violations de gouvernance bloquantes en revue de code.
 
 | Composant indisponible | Comportement attendu | Capacités impactées (CAM) |
 |---|---|---|
-| RAG (S3 Vectors) | Réponse sans retrieval pour les parcours explicitement autorisés | Domaine 4 — Retrieval Pipeline, Context Construction |
+| API Gateway | Aucune requête n'atteint FastAPI ; échec au niveau CloudFront/client, aucun état applicatif partiel | Domaine 1 — Claims Extraction, Claims Propagation ; Domaine 2 — Rate Limiting Configuration |
+| RAG (S3 Vectors) | Réponse sans retrieval pour les parcours explicitement autorisés (`retrievalContext.status = degraded`) | Domaine 4 — Retrieval Pipeline, Context Construction |
 | AgentCore Memory | Poursuite sans mémoire durable | Domaine 6 — tous |
 | Gateway MCP | Réponse sans mutation, erreur explicite pour les actions requises | Domaine 7 — tous |
 | AgentCore Runtime | FastAPI retourne une erreur normalisée, aucun replay de mutation | Domaine 5 et 6 — tous |
+
+**Note :** l'indisponibilité d'API Gateway est un incident d'infrastructure hors contrôle
+applicatif — elle est traitée par les mécanismes AWS (health checks, failover) documentés en
+LLD-001, pas par une logique de dégradation FastAPI/Runtime.
 
 ## Conséquences
 
