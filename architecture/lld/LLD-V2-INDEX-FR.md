@@ -3,8 +3,8 @@
 - **Version :** 0.2
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
-- **HLD de référence :** `docs/hld/HLD-Secure-AgentCore-V2-FR.md`
-- **Backlog ADR :** `docs/adr/V2-ADR-BACKLOG-FR.md`
+- **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md`
+- **Backlog ADR :** `architecture/adr/V2-ADR-BACKLOG-FR.md`
 
 ## 1. Objet
 

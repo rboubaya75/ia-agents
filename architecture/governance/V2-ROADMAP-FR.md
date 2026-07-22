@@ -43,9 +43,9 @@ Les gates sont cumulatives. Une phase ne masque jamais un écart ouvert dans une
 
 ### Livrables
 
-- `docs/v2/README.md` ;
-- `docs/v2/V2-CHARTER-FR.md` ;
-- `docs/v2/V2-ROADMAP-FR.md` ;
+- `architecture/README.md` ;
+- `architecture/governance/V2-CHARTER-FR.md` ;
+- `architecture/governance/V2-ROADMAP-FR.md` ;
 - baseline V1 référencée par SHA ;
 - catalogue canonique des dix LLD ;
 - backlog ADR.
