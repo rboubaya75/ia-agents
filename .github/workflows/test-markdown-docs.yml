@@ -62,5 +62,8 @@ jobs:
             docs/v2/V2-CHARTER-FR.md \
             docs/v2/V2-ROADMAP-FR.md \
             docs/hld/HLD-Secure-AgentCore-V2-FR.md \
+            docs/hld/capability-allocation-matrix.md \
+            docs/hld/runtime-contract.md \
             docs/lld/LLD-V2-INDEX-FR.md \
-            docs/adr/V2-ADR-BACKLOG-FR.md
+            docs/adr/V2-ADR-BACKLOG-FR.md \
+            docs/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md
