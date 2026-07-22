@@ -72,6 +72,9 @@ jobs:
             architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md \
             architecture/adr/V2-ADR-003-rag-s3-vectors-retrieval.md \
             architecture/adr/V2-ADR-004-document-ingestion-pipeline.md \
+            architecture/adr/V2-ADR-005-agents-orchestration-framework.md \
             architecture/adr/V2-ADR-006-identity-authorization-isolation.md \
             architecture/adr/V2-ADR-007-network-eks-platform.md \
+            architecture/adr/V2-ADR-008-observability-distributed-context.md \
+            architecture/adr/V2-ADR-009-gitlab-ci-promotion.md \
             architecture/adr/V2-ADR-010-backup-restore-rehydration.md
