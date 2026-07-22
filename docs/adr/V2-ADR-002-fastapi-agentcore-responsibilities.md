@@ -129,17 +129,17 @@ la `trustedIdentity` du contrat interne. AgentCore Runtime ne reçoit jamais de 
 
 ### Domaine 2 — API Platform
 
-| Capacité | Propriétaire |
-|---|---|
-| REST API | FastAPI |
-| Streaming API | FastAPI |
-| Request Validation | FastAPI |
-| Response Validation | FastAPI |
-| API Versioning | FastAPI |
-| OpenAPI Documentation | FastAPI |
-| Error Translation | FastAPI |
-| Pagination | FastAPI |
-| Rate Limiting Configuration | API Gateway |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| REST API | FastAPI | — |
+| Streaming API | FastAPI | — |
+| Request Validation | FastAPI | — |
+| Response Validation | FastAPI | — |
+| API Versioning | FastAPI | — |
+| OpenAPI Documentation | FastAPI | — |
+| Error Translation | FastAPI | — |
+| Pagination | FastAPI | — |
+| Rate Limiting Configuration | API Gateway | — |
 
 **LLD de référence :** V2-LLD-001 (plateforme), V2-LLD-010 (frontend).
 
@@ -147,34 +147,34 @@ la `trustedIdentity` du contrat interne. AgentCore Runtime ne reçoit jamais de 
 
 ### Domaine 3 — Business Layer
 
-| Capacité | Propriétaire |
-|---|---|
-| Trip Management | FastAPI |
-| User Profile | FastAPI |
-| Business Rules | FastAPI |
-| Domain Validation | FastAPI |
-| Workflow Coordination | FastAPI |
-| DTO Mapping | FastAPI |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Trip Management | FastAPI | — |
+| User Profile | FastAPI | — |
+| Business Rules | FastAPI | — |
+| Domain Validation | FastAPI | — |
+| Workflow Coordination | FastAPI | — |
+| DTO Mapping | FastAPI | — |
 
 **Note d'architecture :** les données métier transactionnelles restent exclusivement sous FastAPI
 et DynamoDB. AgentCore Memory n'est pas un store de données métier (P-01, P-02).
 
-**LLD de référence :** V2-LLD-003 (agents), V2-LLD-006 (données).
+**LLD de référence :** V2-LLD-001 (plateforme AWS, réseau, EKS et FastAPI), V2-LLD-006 (données).
 
 ---
 
 ### Domaine 4 — Retrieval
 
-| Capacité | Propriétaire |
-|---|---|
-| Document Ingestion | FastAPI |
-| Metadata Extraction | FastAPI |
-| Embedding Generation | FastAPI |
-| S3 Vectors Indexing | FastAPI |
-| Retrieval Pipeline | FastAPI |
-| Metadata Filtering | FastAPI |
-| Context Construction | FastAPI |
-| Prompt Context Assembly | FastAPI |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Document Ingestion | FastAPI | — |
+| Metadata Extraction | FastAPI | — |
+| Embedding Generation | FastAPI | — |
+| S3 Vectors Indexing | FastAPI | — |
+| Retrieval Pipeline | FastAPI | — |
+| Metadata Filtering | FastAPI | — |
+| Context Construction | FastAPI | — |
+| Prompt Context Assembly | FastAPI | AgentCore Runtime |
 
 **Note d'architecture :** l'ensemble du pipeline RAG est une capacité applicative portée par
 FastAPI. AgentCore Runtime reçoit un contexte RAG borné et préassemblé — il ne réalise ni
@@ -187,17 +187,17 @@ les niveaux.
 
 ### Domaine 5 — Agentic AI
 
-| Capacité | Propriétaire |
-|---|---|
-| Conversation Orchestration | AgentCore Runtime |
-| Planning | AgentCore Runtime |
-| Reasoning | AgentCore Runtime |
-| Agent Routing | AgentCore Runtime |
-| Multi-Agent Coordination | AgentCore Runtime |
-| Tool Selection | AgentCore Runtime |
-| Tool Retry | AgentCore Runtime |
-| Prompt Construction | AgentCore Runtime |
-| Bedrock Converse Invocation | AgentCore Runtime |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Conversation Orchestration | AgentCore Runtime | FastAPI |
+| Planning | AgentCore Runtime | — |
+| Reasoning | AgentCore Runtime | — |
+| Agent Routing | AgentCore Runtime | — |
+| Multi-Agent Coordination | AgentCore Runtime | — |
+| Tool Selection | AgentCore Runtime | — |
+| Tool Retry | AgentCore Runtime | — |
+| Prompt Construction | AgentCore Runtime | — |
+| Bedrock Converse Invocation | AgentCore Runtime | — |
 
 **Note d'architecture :** la boucle agentique, le raisonnement et la sélection des tools sont
 exclusivement sous AgentCore Runtime. FastAPI ne peut pas contourner Runtime pour appeler
@@ -209,14 +209,14 @@ directement Bedrock Converse API sur le chemin conversationnel (P-01, P-02).
 
 ### Domaine 6 — Memory
 
-| Capacité | Propriétaire |
-|---|---|
-| Conversation Memory | AgentCore Runtime |
-| Session State | AgentCore Runtime |
-| Conversation Summary | AgentCore Runtime |
-| Preference Extraction | AgentCore Runtime |
-| Memory Retrieval | AgentCore Runtime |
-| Memory Persistence | AgentCore Runtime |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Conversation Memory | AgentCore Runtime | — |
+| Session State | AgentCore Runtime | — |
+| Conversation Summary | AgentCore Runtime | — |
+| Preference Extraction | AgentCore Runtime | — |
+| Memory Retrieval | AgentCore Runtime | — |
+| Memory Persistence | AgentCore Runtime | — |
 
 **Note d'architecture :** AgentCore Memory est utilisé uniquement pour les préférences et
 l'état conversationnel isolés par acteur et tenant. Memory ne stocke pas les données métier
@@ -229,14 +229,14 @@ Memory doit être vérifiée par les tests industriels.
 
 ### Domaine 7 — MCP
 
-| Capacité | Propriétaire |
-|---|---|
-| Tool Discovery | MCP Gateway |
-| Tool Authentication | MCP Gateway |
-| Tool Authorization | MCP Gateway |
-| Tool Transport | MCP Gateway |
-| Tool Registration | MCP Gateway |
-| Tool Version Negotiation | MCP Gateway |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Tool Discovery | MCP Gateway | AgentCore Runtime |
+| Tool Authentication | MCP Gateway | — |
+| Tool Authorization | MCP Gateway | — |
+| Tool Transport | MCP Gateway | — |
+| Tool Registration | MCP Gateway | — |
+| Tool Version Negotiation | MCP Gateway | — |
 
 **Note d'architecture :** AgentCore Gateway MCP est le seul point d'entrée des tools. Aucun
 tool ne peut être appelé directement par FastAPI ou par le code agent sans passer par la Gateway.
@@ -249,14 +249,14 @@ Gateway.
 
 ### Domaine 8 — Data Platform
 
-| Capacité | Propriétaire |
-|---|---|
-| Object Storage | Amazon S3 |
-| Vector Storage | S3 Vectors |
-| Operational Data | DynamoDB |
-| Secrets | Secrets Manager |
-| Identity Store | Cognito |
-| Configuration | Parameter Store |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Object Storage | Amazon S3 | FastAPI |
+| Vector Storage | S3 Vectors | FastAPI |
+| Operational Data | DynamoDB | FastAPI |
+| Secrets | Secrets Manager | — |
+| Identity Store | Cognito | — |
+| Configuration | Parameter Store | — |
 
 **Note d'architecture :** chaque store a un rôle exclusif. Aucune capacité d'un store ne peut
 être substituée par un autre sans ADR explicite. En particulier, DynamoDB n'est pas un vecteur
@@ -268,15 +268,15 @@ et S3 Vectors n'est pas un store transactionnel.
 
 ### Domaine 9 — Observability
 
-| Capacité | Propriétaire |
-|---|---|
-| Metrics | OpenTelemetry |
-| Distributed Tracing | OpenTelemetry |
-| Correlation IDs | OpenTelemetry |
-| Structured Logging | CloudWatch |
-| Audit Logs | CloudWatch |
-| Dashboards | CloudWatch |
-| Alerts | CloudWatch |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| Metrics | OpenTelemetry | — |
+| Distributed Tracing | OpenTelemetry | — |
+| Correlation IDs | OpenTelemetry | — |
+| Structured Logging | CloudWatch | — |
+| Audit Logs | CloudWatch | — |
+| Dashboards | CloudWatch | — |
+| Alerts | CloudWatch | — |
 
 **Note d'architecture :** la propagation du contexte W3C Trace Context est obligatoire de
 FastAPI jusqu'à AgentCore Runtime et aux tools MCP. Les identifiants de corrélation (traceId,
@@ -289,14 +289,14 @@ les logs.
 
 ### Domaine 10 — Security
 
-| Capacité | Propriétaire |
-|---|---|
-| TLS Termination | CloudFront |
-| DDoS Protection | AWS Shield |
-| WAF Rules | AWS WAF |
-| Network Isolation | Amazon VPC |
-| Pod Identity | EKS |
-| IAM Authorization | IAM |
+| Capacité | Propriétaire | Consommateurs |
+|---|---|---|
+| TLS Termination | CloudFront | — |
+| DDoS Protection | AWS Shield | — |
+| WAF Rules | AWS WAF | — |
+| Network Isolation | Amazon VPC | — |
+| Pod Identity | EKS | — |
+| IAM Authorization | IAM | — |
 
 **Note d'architecture :** les contrôles de sécurité sont en défense en profondeur. Aucune couche
 ne suppose que la précédente a filtré entièrement. FastAPI valide les contrats même si API Gateway
