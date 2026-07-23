@@ -32,12 +32,12 @@ Une state machine Step Functions pilote des tâches Lambda/Fargate par étape.
 
 **Rejet proposé :** ajoute un nouveau paradigme d'orchestration distinct du pattern d'idempotence
 DynamoDB déjà éprouvé en V1, pour un bénéfice non démontré à l'échelle visée par ce projet ; coût
-et complexité supplémentaires non justifiés tant qu'EKS (`V2-ADR-007`) porte déjà le calcul
+et complexité supplémentaires non justifiés tant qu'ECS (`V2-ADR-007`) porte déjà le calcul
 applicatif.
 
-### Option C — File d'événements SQS + worker EKS
+### Option C — File d'événements SQS + worker ECS
 
-Une file SQS déclenche des workers EKS (namespace `ingestion`, `V2-ADR-007`) qui font progresser
+Une file SQS déclenche des workers ECS (service `ingestion`, `V2-ADR-007`) qui font progresser
 l'état du document dans la table `documents` (`V2-ADR-003`) via des écritures conditionnelles.
 
 ## Décision proposée
@@ -48,7 +48,7 @@ Retenir **l'option C**.
 Upload (FastAPI)
   -> S3 (préfixe quarantaine)
   -> message SQS { documentId, version, stage: "validate" }
-  -> worker EKS (namespace ingestion) : traite UNE étape puis enfile la suivante
+  -> worker ECS (service ingestion) : traite UNE étape puis enfile la suivante
        validate    -> promotion S3 (préfixe définitif) | rejet    -> SQS { stage: "parse" }
        parse        -> parsing / normalisation                     -> SQS { stage: "chunk" }
        chunk        -> chunking versionné                          -> SQS { stage: "embed" }
@@ -95,7 +95,7 @@ déjà actée en V1 — `V1-RES-002`/`V1-RES-003`) ; alerte CloudWatch sur profo
 ## Conséquences
 
 - une file SQS et une DLQ sont nécessaires (impact Terraform) ;
-- un namespace EKS dédié `ingestion` avec autoscaling piloté par la profondeur de file (mécanisme
+- un service ECS dédié `ingestion` avec autoscaling piloté par la profondeur de file (mécanisme
   précis différé au LLD-001/LLD-002) ;
 - l'ingestion reste strictement hors d'AgentCore Runtime (CAM Domaine 4, violation bloquante en
   revue de code sinon) ;
@@ -116,7 +116,7 @@ déjà actée en V1 — `V1-RES-002`/`V1-RES-003`) ; alerte CloudWatch sur profo
 ## Références AWS
 
 - Amazon SQS (file standard + DLQ) ;
-- Amazon EKS Fargate (workers d'ingestion, `V2-ADR-007`) ;
+- Amazon ECS Fargate (workers d'ingestion, `V2-ADR-007`) ;
 - Amazon S3 (quarantaine et cycle de vie) ;
 - Amazon Bedrock (embeddings) ;
 - Amazon DynamoDB (état du pipeline, écritures conditionnelles).

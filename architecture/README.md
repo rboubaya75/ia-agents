@@ -33,8 +33,8 @@ La V2 respecte les choix techniques suivants :
 - Cognito pour l’authentification ;
 - React, TypeScript et Vite ;
 - frontend sur S3 privé, CloudFront et WAF ;
-- backend applicatif sur EKS ;
-- Terraform et Helm ;
+- backend applicatif sur ECS/Fargate ;
+- Terraform ;
 - GitLab CI avec OIDC AWS comme cible V2 ;
 - OpenTelemetry et CloudWatch ;
 - Secrets Manager pour les secrets.
@@ -137,14 +137,14 @@ ou amendé. Une capacité non attribuée dans la CAM est un écart de gouvernanc
 
 Les dix LLD canoniques sont :
 
-1. `V2-LLD-001` — plateforme AWS, réseau, EKS et FastAPI ;
+1. `V2-LLD-001` — plateforme AWS, réseau, ECS et FastAPI ;
 2. `V2-LLD-002` — RAG et ingestion documentaire ;
 3. `V2-LLD-003` — agents et orchestration ;
 4. `V2-LLD-004` — AgentCore Gateway MCP et tools ;
 5. `V2-LLD-005` — identité, sécurité et conformité ;
 6. `V2-LLD-006` — données, mémoire, rétention et restauration ;
 7. `V2-LLD-007` — observabilité, SLO et FinOps ;
-8. `V2-LLD-008` — CI/CD, Terraform, Helm et promotion ;
+8. `V2-LLD-008` — CI/CD, Terraform et promotion ;
 9. `V2-LLD-009` — stratégie de tests et preuves ;
 10. `V2-LLD-010` — frontend React V2.
 

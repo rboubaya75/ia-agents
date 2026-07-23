@@ -1,13 +1,13 @@
 # Charte de cadrage — Secure AgentCore V2
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Baseline :** V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
 - **Statut :** Draft
 
 ## 1. Finalité
 
-La V2 transforme le socle agentique V1 en plateforme applicative Data et IA générative exploitable et gouvernable. Elle ajoute un backend applicatif sur EKS, un RAG applicatif fondé sur S3 Vectors, une architecture d’agents custom, une observabilité distribuée et une chaîne CI/CD cible GitLab CI avec OIDC AWS.
+La V2 transforme le socle agentique V1 en plateforme applicative Data et IA générative exploitable et gouvernable. Elle ajoute un backend applicatif sur ECS/Fargate, un RAG applicatif fondé sur S3 Vectors, une architecture d’agents custom, une observabilité distribuée et une chaîne CI/CD cible GitLab CI avec OIDC AWS.
 
 La V2 conserve les garanties acquises en V1 : frontière d’identité serveur, IAM least privilege, tools gouvernés, idempotence des mutations, redaction des logs et traçabilité des preuves.
 
@@ -36,13 +36,13 @@ La V1 n’est pas modifiée rétroactivement :
 
 ### 3.2 Objectifs techniques
 
-- introduire FastAPI sur EKS ;
+- introduire FastAPI sur ECS/Fargate ;
 - utiliser Bedrock Converse API ;
 - rendre les embeddings Bedrock configurables ;
 - isoler le code métier des frameworks d’agents ;
 - instrumenter les flux avec OpenTelemetry ;
 - centraliser métriques, traces et logs dans CloudWatch ;
-- déployer via Terraform, Helm et GitLab CI avec OIDC AWS ;
+- déployer via Terraform et GitLab CI avec OIDC AWS ;
 - produire des preuves de sécurité, qualité, performance, coût et résilience.
 
 ### 3.3 Objectifs d’architecture d’entreprise
@@ -59,7 +59,7 @@ La V1 n’est pas modifiée rétroactivement :
 
 - cadrage et gouvernance V2 ;
 - HLD et dix LLD canoniques ;
-- backend FastAPI sur EKS ;
+- backend FastAPI sur ECS/Fargate ;
 - agents custom sous `/agents` ;
 - adapter optionnel Strands ou LangGraph ;
 - AgentCore Runtime comme runtime d’exécution ;
@@ -71,7 +71,7 @@ La V1 n’est pas modifiée rétroactivement :
 - WAF ;
 - observabilité OpenTelemetry/CloudWatch ;
 - sécurité, FinOps, sauvegarde et restauration ;
-- Terraform, Helm et GitLab CI OIDC ;
+- Terraform et GitLab CI OIDC ;
 - tests industriels et réception.
 
 ### 4.2 Hors périmètre initial
@@ -93,11 +93,11 @@ La V1 n’est pas modifiée rétroactivement :
 | V2-ARCH-002 | Le navigateur ne produit jamais l’identité de confiance et ne connaît pas l’URL technique AgentCore Runtime. |
 | V2-ARCH-003 | AgentCore Runtime est utilisé uniquement comme runtime d’exécution d’agents custom. |
 | V2-ARCH-004 | Les frameworks d’agents sont encapsulés derrière un adapter optionnel. |
-| V2-ARCH-005 | Le backend applicatif cible FastAPI sur EKS. |
+| V2-ARCH-005 | Le backend applicatif cible FastAPI sur Amazon ECS, launch type Fargate (cf. `V2-ADR-007` pour la comparaison de plateformes et sa justification). |
 | V2-ARCH-006 | Le RAG est applicatif et repose sur S3 Vectors, DynamoDB et S3. |
 | V2-ARCH-007 | Les modèles sont invoqués via Bedrock Converse API. |
 | V2-ARCH-008 | Les tools sont exposés et gouvernés via AgentCore Gateway MCP. |
-| V2-ARCH-009 | Terraform et Helm sont les mécanismes déclaratifs de référence. |
+| V2-ARCH-009 | Terraform est le mécanisme déclaratif de référence ; les définitions de tâches et services ECS sont pilotées directement par Terraform, sans couche de templating additionnelle. Helm, spécifique à Kubernetes, est sans objet avec ECS et ne redeviendrait pertinent qu’en cas de migration future vers EKS. |
 | V2-ARCH-010 | GitLab CI avec OIDC AWS est la cible de CI/CD V2. |
 | V2-ARCH-011 | Toute PR V2 cible `migration/secure-agentcore-v2` et ne modifie pas la baseline V1. |
 
@@ -117,7 +117,7 @@ Ces exigences doivent être précisées dans le HLD et les LLD ; elles ne consti
 
 ### Disponibilité et résilience
 
-- workloads EKS répartis sur plusieurs zones de disponibilité ;
+- workloads ECS répartis sur plusieurs zones de disponibilité ;
 - health checks, readiness et graceful shutdown ;
 - reprise idempotente de l’ingestion ;
 - dégradation contrôlée en cas d’indisponibilité RAG, Memory, Gateway ou modèle ;
@@ -145,14 +145,14 @@ Ces exigences doivent être précisées dans le HLD et les LLD ; elles ne consti
 - architecture As-Is V1, To-Be V2 et analyse des écarts ;
 - ADR structurants ;
 - HLD V2 approuvé ;
-- `V2-LLD-001` — plateforme AWS, réseau, EKS et FastAPI ;
+- `V2-LLD-001` — plateforme AWS, réseau, ECS et FastAPI ;
 - `V2-LLD-002` — RAG et ingestion documentaire ;
 - `V2-LLD-003` — agents et orchestration ;
 - `V2-LLD-004` — AgentCore Gateway MCP et tools ;
 - `V2-LLD-005` — identité, sécurité et conformité ;
 - `V2-LLD-006` — données, mémoire, rétention et restauration ;
 - `V2-LLD-007` — observabilité, SLO et FinOps ;
-- `V2-LLD-008` — CI/CD, Terraform, Helm et promotion ;
+- `V2-LLD-008` — CI/CD, Terraform et promotion ;
 - `V2-LLD-009` — stratégie de tests et preuves ;
 - `V2-LLD-010` — frontend React V2 ;
 - modèle de données ;
@@ -169,7 +169,7 @@ La V2 est clôturable lorsque :
 
 - le HLD et les dix LLD sont en statut `As-Built` ou explicitement non applicables avec justification ;
 - les ADR structurants sont approuvés ;
-- l’environnement est reproductible par Terraform et Helm ;
+- l’environnement est reproductible par Terraform ;
 - les agents custom, le RAG, le frontend et les tools respectent leurs contrats ;
 - les tests de qualité, sécurité, isolation, charge, résilience et restauration sont passés ;
 - les évaluations RAG utilisent un dataset versionné ;
@@ -187,7 +187,7 @@ La V2 est clôturable lorsque :
 | Prompt injection documentaire | Détournement des agents ou tools | Contenu RAG traité comme donnée non fiable et filtrage des actions. |
 | Couplage au framework agentique | Migration difficile | Adapter obligatoire et contrats applicatifs indépendants. |
 | Ingestion non idempotente | Doublons et index incohérent | Identifiants déterministes, état DynamoDB et reprise contrôlée. |
-| Dérive des coûts Bedrock/EKS | Budget imprévisible | Quotas, télémétrie de coût et tests de charge. |
+| Dérive des coûts Bedrock/ECS | Budget imprévisible | Quotas, télémétrie de coût et tests de charge. |
 | Migration CI/CD prématurée | Perte des gates V1 | Parité démontrée avant retrait des workflows existants. |
 | Mauvaise cible de PR | Pollution de la baseline V1 | Branches V2 créées depuis et fusionnées vers `migration/secure-agentcore-v2`. |
 

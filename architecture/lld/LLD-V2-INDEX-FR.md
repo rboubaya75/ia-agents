@@ -26,14 +26,14 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu’elle affec
 
 | ID | LLD | Portée | Dépendances ADR exactes | Statut |
 |---|---|---|---|---|
-| V2-LLD-001 | Plateforme AWS, réseau, EKS et FastAPI | VPC, EKS, compute, ingress, DNS, IAM workload, Helm, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009 | À créer |
+| V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, DNS, IAM workload, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009 | À créer |
 | V2-LLD-002 | RAG et ingestion documentaire | S3, parsing, chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-017, V2-ADR-018 | À créer |
 | V2-LLD-003 | Agents et orchestration | `/agents`, adapter, Converse API, prompts, budgets, fallback | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-012 | À créer |
 | V2-LLD-004 | AgentCore Gateway MCP et tools | catalogue, schémas, IAM, confirmation, idempotence, retry | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-014 | À créer |
 | V2-LLD-005 | Identité, sécurité et conformité | Cognito, autorisation, tenant, KMS, WAF, threat model, audit | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-010, V2-ADR-014, V2-ADR-015, V2-ADR-016, V2-ADR-017 | À créer |
 | V2-LLD-006 | Données, mémoire, rétention et restauration | modèles, cycle de vie, TTL, backup, effacement, réhydratation | V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-015, V2-ADR-017 | À créer |
 | V2-LLD-007 | Observabilité, SLO et FinOps | OTel, CloudWatch, corrélation, alertes, coûts, SLO | V2-ADR-002, V2-ADR-003, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-009, V2-ADR-012, V2-ADR-013 | À créer |
-| V2-LLD-008 | CI/CD, Terraform, Helm et promotion | GitLab CI, OIDC, artefacts, scans, plan, rollback | V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-010 | À créer |
+| V2-LLD-008 | CI/CD, Terraform et promotion | GitLab CI, OIDC, artefacts, scans, plan, rollback | V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-010 | À créer |
 | V2-LLD-009 | Stratégie de tests et preuves | pyramide, datasets, E2E, sécurité, charge, chaos, DR | V2-ADR-001 à V2-ADR-018 selon applicabilité, avec V2-ADR-018 obligatoire pour le RAG | À créer |
 | V2-LLD-010 | Frontend React V2 | streaming, uploads, citations, auth, reprise, accessibilité | V2-ADR-001, V2-ADR-002, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-014, V2-ADR-016 | À créer |
 
@@ -119,9 +119,9 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu’elle affec
 
 ## 5. Attendus par LLD
 
-### V2-LLD-001 — Plateforme AWS, réseau, EKS et FastAPI
+### V2-LLD-001 — Plateforme AWS, réseau, ECS et FastAPI
 
-Doit définir : topologie VPC et subnets, endpoints AWS, egress, choix de calcul EKS, namespaces, identités de workloads, Network Policies, Pod Security, ingress/API Gateway, DNS, certificats, autoscaling, disruption, Helm, health, readiness et graceful shutdown.
+Doit définir : topologie VPC et subnets, endpoints AWS, egress, dimensionnement du calcul ECS, services, identités de workloads (Task IAM Roles), Security Groups, ingress/API Gateway, DNS, certificats, autoscaling, déploiements contrôlés, health, readiness et graceful shutdown.
 
 ### V2-LLD-002 — RAG et ingestion
 
@@ -137,7 +137,7 @@ Doit définir : catalogue et versionnement, schémas stricts, IAM et resource po
 
 ### V2-LLD-005 — Identité, sécurité et conformité
 
-Doit définir : modèle utilisateur/tenant, claims, scopes, rôles, threat model, WAF, KMS, Secrets Manager, sécurité EKS, egress, sécurité des uploads, prompt injection, data poisoning, exfiltration, audit trail, rétention et effacement.
+Doit définir : modèle utilisateur/tenant, claims, scopes, rôles, threat model, WAF, KMS, Secrets Manager, sécurité ECS, egress, sécurité des uploads, prompt injection, data poisoning, exfiltration, audit trail, rétention et effacement.
 
 ### V2-LLD-006 — Données et restauration
 
@@ -149,7 +149,7 @@ Doit définir : instrumentation OpenTelemetry, propagation du contexte, schémas
 
 ### V2-LLD-008 — CI/CD
 
-Doit définir : GitLab CI, OIDC AWS, stratégie de branches V2, builds immuables, SBOM, signature, Terraform plan/apply contrôlé, Helm lint/template/deploy, promotion, secrets, rollback et parité avant retrait de GitHub Actions.
+Doit définir : GitLab CI, OIDC AWS, stratégie de branches V2, builds immuables, SBOM, signature, Terraform plan/apply contrôlé, promotion (task definition ECS, retag d'image), secrets, rollback et parité avant retrait de GitHub Actions.
 
 ### V2-LLD-009 — Tests
 

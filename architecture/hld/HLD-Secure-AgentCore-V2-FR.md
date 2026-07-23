@@ -1,6 +1,6 @@
 # HLD — Secure AgentCore V2
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Branche :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
 - **Statut :** Draft — architecture cible à instruire par ADR
@@ -8,7 +8,7 @@
 
 ## 1. Résumé exécutif
 
-La V2 étend la plateforme agentique V1 avec un backend applicatif FastAPI sur EKS, un RAG applicatif fondé sur S3 Vectors, un pipeline d’ingestion documentaire, des agents custom découplés de leur framework et une observabilité distribuée OpenTelemetry/CloudWatch.
+La V2 étend la plateforme agentique V1 avec un backend applicatif FastAPI sur ECS/Fargate, un RAG applicatif fondé sur S3 Vectors, un pipeline d’ingestion documentaire, des agents custom découplés de leur framework et une observabilité distribuée OpenTelemetry/CloudWatch.
 
 Le HLD ne remplace pas les ADR. Les points structurants encore ouverts sont explicitement listés et doivent être décidés avant passage du document au statut `Approved`.
 
@@ -47,7 +47,7 @@ Utilisateurs
        -> S3 privé : frontend React
        -> API Gateway : front-door API
             -> couche de sécurité et routage à décider par ADR
-                 -> FastAPI sur EKS
+                 -> FastAPI sur ECS/Fargate
                       -> services conversation, documents et administration
                       -> orchestrateur applicatif
                       -> pipeline d’ingestion
@@ -91,8 +91,8 @@ Données
 | Cognito | Authentification et émission des tokens |
 | API Gateway | Front-door API, JWT, CORS, throttling, logs et routage |
 | Couche d’ingress sécurisée | Reconstruction de l’identité, schémas, quotas et normalisation ; forme à décider par ADR |
-| FastAPI sur EKS | APIs applicatives, documents, orchestration, administration et contrôles métier |
-| EKS | Runtime des services applicatifs non agentiques et workers |
+| FastAPI sur ECS/Fargate | APIs applicatives, documents, orchestration, administration et contrôles métier |
+| ECS (Fargate) | Runtime des services applicatifs non agentiques et workers |
 | AgentCore Runtime | Exécution des agents custom et intégration modèle/Memory/tools |
 | Bedrock Converse API | Invocation des modèles configurables |
 | AgentCore Memory | Préférences et mémoire autorisée, isolée par acteur |
@@ -101,8 +101,7 @@ Données
 | DynamoDB | Métadonnées documentaires, états, idempotence et données métier |
 | OpenTelemetry | Instrumentation standard des traces, métriques et logs |
 | CloudWatch | Centralisation, dashboards, alarmes et investigations |
-| Terraform | Provisionnement AWS |
-| Helm | Déploiement Kubernetes |
+| Terraform | Provisionnement AWS, y compris définitions de tâches et services ECS |
 | GitLab CI | Qualité, sécurité, plan, build, promotion et déploiement via OIDC AWS |
 
 ## 6. Flux principaux
@@ -127,7 +126,7 @@ Données
 ```text
 1. Browser -> API : demande d’upload autorisée
 2. Document -> S3 source privé
-3. Événement d’ingestion -> worker EKS ou service asynchrone à décider
+3. Événement d’ingestion -> worker ECS ou service asynchrone à décider
 4. Validation de sécurité et détection du type
 5. Parsing et normalisation
 6. Chunking versionné
@@ -215,7 +214,7 @@ Chaque étape correspond à une capacité attribuée par la
                          │ (jamais le JWT lui-même au-delà de ce point)
                          ▼
 ┌──────────────── Zone applicative ───────────────┐
-│ FastAPI sur EKS                                   │
+│ FastAPI sur ECS/Fargate                           │
 │  - autorisation métier (RBAC/ABAC)                │
 │  - retrieval, construction du contexte RAG        │
 └───────────────────────┬───────────────────────────┘
@@ -256,7 +255,7 @@ si Runtime l'a déjà construite.
 
 - API Gateway après validation JWT ;
 - couche d’ingress sécurisée ;
-- workloads EKS identifiés ;
+- workloads ECS identifiés ;
 - AgentCore Runtime avec resource policy ;
 - Gateway MCP avec resource policy ;
 - tools autorisés et données filtrées par identité.
@@ -295,20 +294,19 @@ Chaque flèche correspond à une capacité de la [CAM](capability-allocation-mat
 Identity & Access Management) : ce diagramme est la vue dynamique de ce que la CAM attribue de
 façon statique.
 
-## 8. Architecture EKS initiale
+## 8. Architecture ECS initiale
 
 La cible prévoit :
 
 - plusieurs zones de disponibilité ;
-- node groups ou mécanisme de calcul à décider selon coûts et contraintes ;
-- namespaces séparés par fonction ;
-- identités IAM par workload ;
-- Network Policies ;
-- Pod Security Standards ;
+- launch type Fargate (`V2-ADR-007`) ;
+- services ECS séparés par fonction ;
+- rôles IAM de tâche par workload (Task IAM Roles) ;
+- Security Groups par tâche (réseau `awsvpc` natif à Fargate) ;
 - ingress interne contrôlé ;
-- autoscaling ;
-- Pod Disruption Budgets ;
-- probes de santé ;
+- autoscaling (ECS Service Auto Scaling) ;
+- déploiements contrôlés (`minimumHealthyPercent`, circuit breaker ECS) ;
+- probes de santé (health checks conteneur et cible du load balancer) ;
 - graceful shutdown ;
 - images ECR immuables et scannées ;
 - secrets récupérés depuis Secrets Manager.
@@ -377,7 +375,7 @@ Le HLD impose au minimum :
 - IAM least privilege et resource policies ;
 - KMS ;
 - Secrets Manager ;
-- segmentation réseau EKS ;
+- segmentation réseau ECS (Security Groups par tâche) ;
 - contrôle de l’egress ;
 - images signées et SBOM ;
 - validation des uploads ;
@@ -414,22 +412,22 @@ Métriques :
 - coût estimé ;
 - embeddings générés ;
 - qualité et latence du retrieval ;
-- saturation EKS ;
+- saturation ECS ;
 - throttling ;
 - erreurs, refus et dégradations ;
 - volume et coût de stockage.
 
 ## 14. Disponibilité, sauvegarde et reprise
 
-- architecture EKS multi-AZ ;
-- autoscaling et budgets de disruption ;
+- architecture ECS multi-AZ ;
+- autoscaling et déploiements contrôlés (`minimumHealthyPercent`) ;
 - retries bornés avec jitter pour opérations sûres ;
 - idempotence des traitements asynchrones ;
 - PITR DynamoDB ;
 - versioning S3 ;
 - procédure de réhydratation S3 Vectors ;
 - sauvegarde des configurations ;
-- stratégie de rollback Helm et applicative ;
+- stratégie de rollback applicative (nouvelle révision de task definition) ;
 - tests périodiques de restauration ;
 - RTO/RPO à décider selon cas d’usage.
 
@@ -441,8 +439,7 @@ Commit
   -> secret scan, SAST, dépendances, SBOM
   -> build image immutable et signature
   -> Terraform fmt/init/validate/plan
-  -> Helm lint/template/tests
-  -> déploiement contrôlé par environnement
+  -> déploiement contrôlé par environnement (nouvelle révision de task definition ECS)
   -> tests smoke et E2E
   -> preuves archivées
   -> promotion du même artefact
@@ -466,13 +463,12 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 
 ### Ajouté
 
-- EKS et FastAPI ;
+- ECS et FastAPI ;
 - RAG S3 Vectors ;
 - ingestion ;
 - agents custom structurés ;
 - OpenTelemetry ;
 - WAF ;
-- Helm ;
 - cible GitLab CI.
 
 ### À décider
@@ -482,7 +478,7 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 - placement de l’orchestration entre FastAPI et Runtime ;
 - mécanisme d’événement d’ingestion ;
 - modèle utilisateur ou tenant ;
-- stratégie de calcul EKS ;
+- dimensionnement fin du calcul ECS (tailles de tâche, capacité) ;
 - migration des données et préférences.
 
 ## 17. Décisions ouvertes bloquantes
@@ -493,7 +489,7 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 - V2-ADR-004 : pipeline d’ingestion et reprise ;
 - V2-ADR-005 : orchestration agents et adapter ;
 - V2-ADR-006 : modèle d’identité et isolation ;
-- V2-ADR-007 : réseau et calcul EKS ;
+- V2-ADR-007 : réseau et calcul ECS ;
 - V2-ADR-008 : observabilité et propagation du contexte ;
 - V2-ADR-009 : GitLab CI et promotion ;
 - V2-ADR-010 : sauvegarde, restauration et réhydratation.

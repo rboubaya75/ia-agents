@@ -88,7 +88,7 @@ Gateway sont une source valide (P-03). Le format exact des en-têtes est défini
 **Note d'architecture :** les données métier transactionnelles restent exclusivement sous FastAPI
 et DynamoDB. AgentCore Memory n'est pas un store de données métier (P-01, P-02).
 
-**LLD de référence :** V2-LLD-001 (plateforme AWS, réseau, EKS et FastAPI), V2-LLD-006 (données).
+**LLD de référence :** V2-LLD-001 (plateforme AWS, réseau, ECS et FastAPI), V2-LLD-006 (données).
 
 ---
 
@@ -231,7 +231,7 @@ Structured Logging).
 | DDoS Protection | AWS Shield | — |
 | WAF Rules | AWS WAF | — |
 | Network Isolation | Amazon VPC | — |
-| Pod Identity | EKS | — |
+| IAM Task Role | ECS | — |
 | IAM Authorization | IAM | — |
 
 **Note d'architecture :** les contrôles de sécurité sont en défense en profondeur. Aucune couche
