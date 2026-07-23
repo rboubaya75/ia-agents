@@ -3,11 +3,11 @@
 - **Statut :** Proposed
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
-- **Dépendances :** V2-ADR-002, V2-ADR-006, V2-ADR-007, V2-ADR-011, V2-ADR-016
+- **Dépendances :** V2-ADR-002, V2-ADR-006, V2-ADR-011, V2-ADR-016
 
 ## Contexte
 
-La V1 utilise API Gateway, une Lambda Security Facade et AgentCore Runtime IAM-only. La V2 introduit FastAPI sur EKS pour les APIs conversationnelles, documentaires et administratives. La frontière de sécurité doit rester côté serveur, préserver l’identité de confiance et permettre à terme le streaming.
+La V1 utilise API Gateway, une Lambda Security Facade et AgentCore Runtime IAM-only. La V2 introduit FastAPI sur ECS/Fargate pour les APIs conversationnelles, documentaires et administratives. La frontière de sécurité doit rester côté serveur, préserver l’identité de confiance et permettre à terme le streaming.
 
 ## Exigences
 
@@ -30,11 +30,11 @@ API Gateway appelle la façade Lambda pour `/agent/invoke` et FastAPI uniquement
 
 ### Option B — FastAPI devient la frontière applicative
 
-API Gateway appelle FastAPI sur EKS par intégration privée. FastAPI valide le contrat, résout l’autorisation, construit l’identité de confiance et invoque AgentCore Runtime avec IAM.
+API Gateway appelle FastAPI sur ECS/Fargate par intégration privée. FastAPI valide le contrat, résout l’autorisation, construit l’identité de confiance et invoque AgentCore Runtime avec IAM.
 
 **Avantages :** frontière unique, contrats homogènes, meilleure intégration du retrieval et du streaming.
 
-**Limites :** dépendance accrue à EKS et migration plus structurante.
+**Limites :** dépendance accrue à ECS/Fargate et migration plus structurante.
 
 ### Option C — Routage hybride durable
 
@@ -54,7 +54,7 @@ Browser
   -> API Gateway + Cognito JWT
   -> intégration privée VPC Link
   -> load balancer interne
-  -> FastAPI sur EKS
+  -> FastAPI sur ECS/Fargate
   -> AgentCore Runtime IAM-only
 ```
 
@@ -75,8 +75,13 @@ FastAPI doit :
 
 ## Conséquences
 
-- EKS et son chemin privé deviennent critiques pour les conversations ;
-- la disponibilité et le coût minimum EKS doivent être acceptés ;
+- ECS/Fargate et son chemin privé deviennent critiques pour les conversations ; le
+  dimensionnement précis (launch type, sécurité réseau, coût) est décidé par `V2-ADR-007`, qui
+  réalise physiquement le chemin décidé ici — la dépendance ne va que dans ce sens (007 dépend de
+  001, pas l'inverse) ;
+- la disponibilité et le coût minimum du chemin doivent être acceptés, y compris le load balancer
+  interne lui-même (composant always-on, facturé indépendamment du trafic — pas seulement le
+  calcul ECS/Fargate) ;
 - le LLD plateforme doit détailler VPC Link, load balancer, health checks et egress ;
 - une campagne de non-régression doit comparer les chemins V1 et V2 ;
 - le rollback consiste à réorienter la route conversation vers la façade V1.
@@ -85,7 +90,7 @@ FastAPI doit :
 
 - JWT invalide, mauvais client et identité injectée refusés ;
 - Runtime direct refusé ;
-- appels EKS vers Runtime limités par IAM/resource policy ;
+- appels ECS vers Runtime limités par IAM/resource policy ;
 - CORS et WAF validés ;
 - corrélation bout en bout ;
 - test de bascule vers le chemin V1 ;
@@ -94,5 +99,5 @@ FastAPI doit :
 ## Références AWS
 
 - API Gateway private integrations et VPC Link ;
-- Amazon EKS Pod Identity ;
+- Amazon ECS (launch type Fargate) avec IAM Task Roles ;
 - Amazon Bedrock AgentCore Runtime avec authentification IAM.

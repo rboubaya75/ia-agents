@@ -9,7 +9,7 @@
 
 ## Contexte
 
-La V2 ajoute un backend FastAPI sur EKS tout en conservant AgentCore Runtime comme runtime
+La V2 ajoute un backend FastAPI sur ECS/Fargate tout en conservant AgentCore Runtime comme runtime
 d'exécution des agents custom. Une séparation explicite est nécessaire pour éviter la duplication
 de l'orchestration, du retrieval, des sessions et des contrôles de sécurité.
 

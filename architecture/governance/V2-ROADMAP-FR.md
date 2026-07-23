@@ -89,7 +89,7 @@ Aucun ADR structurant critique ne reste ambigu, sans décision ou sans expérime
 - architecture logique et physique To-Be ;
 - flux d’identité, données, ingestion, retrieval, agents et tools ;
 - zones de confiance ;
-- architecture EKS ;
+- architecture ECS ;
 - stockage S3, S3 Vectors et DynamoDB ;
 - haute disponibilité et reprise ;
 - observabilité et FinOps ;
@@ -110,14 +110,14 @@ Aucun ADR structurant critique ne reste ambigu, sans décision ou sans expérime
 
 ### Catalogue canonique
 
-1. `V2-LLD-001` — plateforme AWS, réseau, EKS et FastAPI ;
+1. `V2-LLD-001` — plateforme AWS, réseau, ECS et FastAPI ;
 2. `V2-LLD-002` — RAG et ingestion documentaire ;
 3. `V2-LLD-003` — agents et orchestration ;
 4. `V2-LLD-004` — AgentCore Gateway MCP et tools ;
 5. `V2-LLD-005` — identité, sécurité et conformité ;
 6. `V2-LLD-006` — données, mémoire, rétention et restauration ;
 7. `V2-LLD-007` — observabilité, SLO et FinOps ;
-8. `V2-LLD-008` — CI/CD, Terraform, Helm et promotion ;
+8. `V2-LLD-008` — CI/CD, Terraform et promotion ;
 9. `V2-LLD-009` — stratégie de tests et preuves ;
 10. `V2-LLD-010` — frontend React V2.
 
@@ -132,15 +132,14 @@ Chaque LLD couvre : périmètre, dépendances ADR exactes, architecture détaill
 - exigences, risques, ADR et tests sont traçables ;
 - les choix non tranchés sont bloquants ou explicitement différés.
 
-## 7. Phase 4 — Socle plateforme EKS et FastAPI
+## 7. Phase 4 — Socle plateforme ECS et FastAPI
 
 ### Travaux
 
 - modules Terraform ;
 - réseau et endpoints ;
-- EKS, namespaces, politiques et identités de workloads ;
+- ECS, services, politiques et identités de workloads ;
 - ECR, Secrets Manager et KMS ;
-- Helm charts ;
 - FastAPI avec health, readiness et graceful shutdown ;
 - WAF, API Gateway et ingress selon ADR ;
 - observabilité minimale ;
@@ -149,7 +148,7 @@ Chaque LLD couvre : périmètre, dépendances ADR exactes, architecture détaill
 ### Gate V2-G3
 
 - plan Terraform revu ;
-- charts Helm testés ;
+- définitions de tâches ECS validées ;
 - contrats FastAPI validés ;
 - contrôles réseau et IAM testés hors ligne ;
 - aucun déploiement sans autorisation explicite.

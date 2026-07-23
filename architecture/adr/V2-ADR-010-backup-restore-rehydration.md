@@ -69,7 +69,7 @@ horodatage, durée, statut).
 - `scripts/terraform_plan_guard.py` doit être étendu pour bloquer tout plan qui désactiverait le
   PITR DynamoDB, le versioning S3, ou détruirait ces ressources sans confirmation explicite ;
 - l'estimation de RTO pour S3 Vectors dépend directement du débit du pipeline d'ingestion
-  (`V2-ADR-004`) et de la capacité EKS disponible (`V2-ADR-007`) — un sinistre majeur doit pouvoir
+  (`V2-ADR-004`) et de la capacité ECS disponible (`V2-ADR-007`) — un sinistre majeur doit pouvoir
   mobiliser temporairement plus de workers que le régime nominal ;
 - aucune sauvegarde dédiée n'est requise pour AgentCore Memory, cohérent avec sa nature de donnée
   non durable déjà actée.

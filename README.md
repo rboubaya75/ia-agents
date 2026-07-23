@@ -37,7 +37,7 @@ Exigences
 ## Cible technique V2
 
 - Python 3.12 et FastAPI ;
-- backend applicatif sur EKS ;
+- backend applicatif sur ECS/Fargate ;
 - agents custom sous `/agents` ;
 - Strands ou LangGraph derrière un adapter optionnel ;
 - Bedrock AgentCore Runtime comme runtime d’exécution uniquement ;
@@ -48,7 +48,7 @@ Exigences
 - React, TypeScript et Vite ;
 - frontend S3 privé, CloudFront et WAF ;
 - AgentCore Gateway MCP ;
-- Terraform et Helm ;
+- Terraform ;
 - GitLab CI avec OIDC AWS comme cible ;
 - OpenTelemetry et CloudWatch ;
 - Secrets Manager et KMS.
@@ -67,7 +67,7 @@ Browser / React
        -> S3 privé
        -> API Gateway + Cognito
             -> frontière applicative à décider par ADR
-                 -> FastAPI sur EKS
+                 -> FastAPI sur ECS/Fargate
                       -> APIs conversation et documents
                       -> ingestion et retrieval applicatifs
                  -> AgentCore Runtime IAM-only
@@ -109,14 +109,14 @@ Cette vue est un point de départ. Le chemin d’ingress, la répartition FastAP
 
 ## Catalogue LLD initial
 
-1. plateforme AWS, réseau, EKS et FastAPI ;
+1. plateforme AWS, réseau, ECS et FastAPI ;
 2. RAG et ingestion documentaire ;
 3. agents et orchestration ;
 4. AgentCore Gateway MCP et tools ;
 5. identité, sécurité et conformité ;
 6. données, mémoire, rétention et restauration ;
 7. observabilité, SLO et FinOps ;
-8. CI/CD, Terraform, Helm et promotion ;
+8. CI/CD, Terraform et promotion ;
 9. stratégie de tests et preuves ;
 10. frontend React V2.
 

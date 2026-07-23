@@ -126,5 +126,5 @@ Une suppression utilisateur ou tenant coordonne :
 
 - Cognito et authorizers JWT API Gateway ;
 - S3 Vectors metadata filtering et IAM `s3vectors` ;
-- EKS Pod Identity ;
+- Amazon ECS IAM Task Roles ;
 - AgentCore Gateway MCP avec authentification IAM.

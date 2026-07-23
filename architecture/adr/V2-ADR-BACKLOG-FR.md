@@ -20,7 +20,7 @@ Chaque ADR doit contenir :
 - décision ;
 - conséquences positives et négatives ;
 - impacts sécurité, disponibilité, coûts et exploitation ;
-- impacts Terraform, Helm, CI/CD et tests ;
+- impacts Terraform, CI/CD et tests ;
 - stratégie de migration et rollback ;
 - preuves nécessaires ;
 - statut `Proposed`, `Accepted`, `Superseded` ou `Rejected`.
@@ -31,13 +31,13 @@ Une expérimentation peut être exigée avant décision, mais elle doit être bo
 
 | ID | Décision à instruire | Questions principales | Gate |
 |---|---|---|---|
-| V2-ADR-001 | Ingress et frontière de sécurité | API Gateway, façade Lambda, FastAPI/EKS, streaming, identité de confiance | V2-G1 |
+| V2-ADR-001 | Ingress et frontière de sécurité | API Gateway, façade Lambda, FastAPI/ECS, streaming, identité de confiance | V2-G1 |
 | V2-ADR-002 | Répartition FastAPI / AgentCore Runtime | orchestration, retrieval, sessions, responsabilités et contrats | V2-G1 |
 | V2-ADR-003 | RAG applicatif avec S3 Vectors | index, filtres, métadonnées, citations, suppression et qualité | V2-G1 |
 | V2-ADR-004 | Pipeline d’ingestion documentaire | événement, workers, état, idempotence, reprise et quarantaine | V2-G1 |
 | V2-ADR-005 | Agents et framework d’orchestration | mono/multi-agent, adapter Strands/LangGraph, budgets et fallback | V2-G1 |
 | V2-ADR-006 | Identité, autorisation et isolation | utilisateur/tenant, claims, scopes, clés de partition et audit | V2-G1 |
-| V2-ADR-007 | Architecture réseau et calcul EKS | subnets, endpoints, egress, nodes/Fargate, autoscaling et coûts | V2-G1 |
+| V2-ADR-007 | Architecture réseau et calcul ECS | subnets, endpoints, egress, EC2/Fargate, autoscaling et coûts | V2-G1 |
 | V2-ADR-008 | Observabilité et contexte distribué | OpenTelemetry, propagation, redaction, SLO et coûts | V2-G1 |
 | V2-ADR-009 | GitLab CI et promotion | OIDC, artefacts, environnements, parité et retrait GitHub Actions | V2-G1 |
 | V2-ADR-010 | Sauvegarde, restauration et réhydratation | S3, DynamoDB, S3 Vectors, Memory, RTO/RPO et tests | V2-G1 |
@@ -49,7 +49,7 @@ Une expérimentation peut être exigée avant décision, mais elle doit être bo
 #### Options initiales
 
 1. conserver API Gateway et Lambda Security Facade devant AgentCore Runtime, FastAPI étant appelé pour les capacités applicatives ;
-2. API Gateway vers FastAPI/EKS, qui devient la frontière applicative et invoque AgentCore Runtime ;
+2. API Gateway vers FastAPI/ECS, qui devient la frontière applicative et invoque AgentCore Runtime ;
 3. routage hybride API Gateway vers façade Lambda pour la conversation et vers FastAPI pour les documents ;
 4. autre variante uniquement si elle conserve une identité de confiance serveur et n’expose pas Runtime au navigateur.
 
@@ -93,7 +93,7 @@ Une expérimentation peut être exigée avant décision, mais elle doit être bo
 
 #### Options initiales
 
-- worker EKS déclenché par file ou événement ;
+- worker ECS déclenché par file ou événement ;
 - orchestration AWS managée non agentique si justifiée ;
 - traitement synchrone uniquement pour petits documents, avec bascule asynchrone ;
 - autre mécanisme démontrant idempotence, visibilité et reprise.
@@ -125,14 +125,14 @@ Le choix ne peut pas conduire à utiliser Bedrock managed Agents.
 - suppression et audit ;
 - tests cross-user/cross-tenant.
 
-### V2-ADR-007 — EKS
+### V2-ADR-007 — ECS
 
 #### Questions
 
 - VPC et subnets ;
 - endpoints privés ;
 - stratégie egress ;
-- node groups, Fargate ou combinaison ;
+- launch type EC2, Fargate ou combinaison ;
 - identités IAM par workload ;
 - contrôleurs nécessaires ;
 - autoscaling ;
@@ -160,7 +160,6 @@ Le choix ne peut pas conduire à utiliser Bedrock managed Agents.
 - OIDC et rôles par environnement ;
 - promotion du même artefact ;
 - Terraform plan/apply ;
-- Helm ;
 - SBOM et signature ;
 - secrets ;
 - preuves ;

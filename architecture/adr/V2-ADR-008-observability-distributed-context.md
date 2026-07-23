@@ -30,15 +30,15 @@ négociable ; X-Ray direct ne le respecte pas, même si les permissions IAM exis
 
 ### Option B — OpenTelemetry avec collector auto-hébergé et backend tiers
 
-Collector OTel sur EKS, export vers Jaeger/Tempo auto-géré.
+Collector OTel sur ECS, export vers Jaeger/Tempo auto-géré.
 
 **Rejet proposé :** ajoute un service tiers à opérer et un coût d'exploitation supplémentaire non
 justifiés, alors qu'un export natif vers les services AWS déjà provisionnés est disponible.
 
 ### Option C — AWS Distro for OpenTelemetry (ADOT)
 
-SDK OpenTelemetry standard, collector ADOT sur EKS, export des traces vers X-Ray (réutilisant les
-permissions IAM déjà en place) et des métriques/logs vers CloudWatch.
+SDK OpenTelemetry standard, collector ADOT en sidecar dans chaque tâche ECS, export des traces vers
+X-Ray (réutilisant les permissions IAM déjà en place) et des métriques/logs vers CloudWatch.
 
 ## Décision proposée
 
@@ -50,7 +50,7 @@ inutilisées en V1.
 ```text
 FastAPI (SDK OTel) --traceparent (W3C)--> AgentCore Runtime --traceparent--> Tools MCP
      │                                          │                                │
-     └──────────────────── collector ADOT (EKS) ─────────────────────────────────┘
+     └──────────────────── collector ADOT (sidecar ECS) ─────────────────────────┘
                                     │
                          ┌──────────┴──────────┐
                          ▼                       ▼
@@ -98,15 +98,17 @@ aujourd'hui, délégué à `V2-LLD-007`) : métriques OTel exportées vers Cloud
 dashboards et alarmes par chemin critique (latence P95 conversation, latence P95 retrieval, taux
 d'erreur des appels tool). Les métriques minimales attendues (reprises du HLD §13) : time-to-
 first-token, latence totale et par composant, tokens entrée/sortie, coût estimé, embeddings
-générés, qualité et latence du retrieval, saturation EKS, throttling, erreurs/refus/dégradations,
+générés, qualité et latence du retrieval, saturation ECS, throttling, erreurs/refus/dégradations,
 volume et coût de stockage.
 
 ## Conséquences
 
-- déploiement du collector ADOT sur EKS (Helm chart ou addon EKS, impact Terraform/Helm) ;
-- dashboards et alarmes CloudWatch définis en Terraform ou Helm, pas manuellement ;
+- déploiement du collector ADOT en sidecar dans chaque task definition ECS (impact Terraform
+  uniquement — pas de Helm, spécifique à Kubernetes et non retenu par `V2-ADR-007`) ;
+- dashboards et alarmes CloudWatch définis en Terraform, pas manuellement ;
 - les permissions IAM X-Ray déjà provisionnées en V1 sont enfin exploitées, aucun changement IAM
-  majeur nécessaire au-delà de l'extension aux nouveaux workloads EKS (Pod Identity, `V2-ADR-007`) ;
+  majeur nécessaire au-delà de l'extension aux nouveaux workloads ECS (Task IAM Role,
+  `V2-ADR-007`) ;
 - le catalogue d'événements V1 (`facade_invocation`, `agent_invocation`, etc.) est étendu, pas
   remplacé, pour couvrir FastAPI, retrieval et l'ensemble de la chaîne V2.
 
