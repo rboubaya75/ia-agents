@@ -48,11 +48,13 @@ Retenir **l'option C**.
 Upload (FastAPI)
   -> S3 (préfixe quarantaine)
   -> message SQS { documentId, version, stage: "validate" }
-  -> worker EKS (namespace ingestion)
-       -> validation (type, taille, antivirus) -> promotion S3 (préfixe définitif) | rejet
-       -> parsing -> chunking versionné -> embeddings Bedrock -> écriture S3 Vectors
-       -> écriture métadonnées DynamoDB (table documents, V2-ADR-003)
-       -> publication statut + métriques
+  -> worker EKS (namespace ingestion) : traite UNE étape puis enfile la suivante
+       validate    -> promotion S3 (préfixe définitif) | rejet    -> SQS { stage: "parse" }
+       parse        -> parsing / normalisation                     -> SQS { stage: "chunk" }
+       chunk        -> chunking versionné                          -> SQS { stage: "embed" }
+       embed        -> embeddings Bedrock                          -> SQS { stage: "index" }
+       index        -> écriture S3 Vectors + métadonnées DynamoDB  -> statut "indexed"
+  (chaque étape = une écriture d'état conditionnelle dans la table documents, V2-ADR-003)
 ```
 
 ## Machine à états et idempotence
@@ -63,6 +65,12 @@ Upload (FastAPI)
 uploaded -> quarantine_scan -> validated | rejected
 validated -> parsing -> chunking -> embedding -> indexing -> indexed | failed
 ```
+
+**Un message SQS porte une seule étape.** Le worker traite l'étape reçue, écrit la transition
+d'état conditionnelle, puis enfile le message de l'étape suivante — il n'enchaîne pas les étapes
+dans un même message. Ce découpage est ce qui rend correcte la règle de `visibility timeout`
+ci-dessous (calibrée sur la plus longue étape *unitaire*, pas sur la somme) et garde chaque unité
+de travail idempotente et reprenable indépendamment.
 
 Chaque transition est une écriture DynamoDB conditionnelle (l'état précédent attendu doit
 correspondre, sinon l'opération est un no-op silencieux plutôt qu'une erreur). L'identifiant

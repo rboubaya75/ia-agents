@@ -93,6 +93,14 @@ Le mécanisme précis (bascule de modèle, profils d'inférence) est traité par
 dépend de cet ADR. La seule exigence fixée ici : l'adapter doit accepter le modèle et sa
 configuration en paramètre, jamais en valeur fixe dans le code du domaine.
 
+## Justification des dépendances
+
+- **V2-ADR-006** : l'agent reçoit l'identité de confiance injectée côté serveur et ne fait jamais
+  confiance à une identité produite par le modèle — le contrat d'injection est fixé par ce
+  dernier ;
+- **V2-ADR-008** : les hooks et les budgets (tours/tools/tokens) émettent les événements et
+  métriques de corrélation dont l'instrumentation est décidée par ce dernier.
+
 ## Conséquences
 
 - création de la structure `/agents` avec séparation adapter/interface/domaine ;

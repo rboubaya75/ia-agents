@@ -16,9 +16,10 @@ d'instrumentation et des garanties opérationnelles (redaction, échantillonnage
 L'observabilité V2 (OpenTelemetry, traceId/spanId) est **entièrement à créer** : la V1 n'a aucune
 dépendance OTel, seulement du logging JSON structuré avec identifiants hashés
 (`safe_hash()`, SHA-256 tronqué) et une corrélation `requestId`/`operationId` déjà propagée bout
-en bout. Point notable : le rôle IAM AgentCore Runtime porte déjà les permissions X-Ray
-(`xray:PutTraceSegments`, `PutTelemetryRecords`, `GetSamplingRules`, `GetSamplingTargets`,
-`infra/modules/agentcore_runtime/iam.tf`) — provisionnées par anticipation mais jamais exploitées.
+en bout. Point notable : le rôle IAM AgentCore Runtime porte déjà des permissions X-Ray —
+`PutTraceSegments`/`PutTelemetryRecords` dans `infra/modules/agentcore_runtime/iam.tf`, complétées
+par `GetSamplingRules`/`GetSamplingTargets` dans `infra/environments/test/iam_agentcore_runtime.tf`
+— provisionnées par anticipation mais jamais exploitées.
 
 ## Options
 

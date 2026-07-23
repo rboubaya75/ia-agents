@@ -41,7 +41,8 @@ transactionnelles de la table `Trips`, qui exigent une vraie garantie de sauvega
 | Donnée | RPO | RTO | Mécanisme |
 |---|---|---|---|
 | DynamoDB (`Trips`, `documents`, ledger d'idempotence) | quasi nul (PITR, jusqu'à la seconde, 35 jours) | quelques minutes | restauration PITR vers une table neuve, bascule Terraform |
-| S3 (documents sources, frontend) | nul (chaque écriture versionnée) | immédiat | version précédente déjà accessible ; en cas de perte du bucket entier, recréation + restauration depuis réplication ou reconstruction depuis la CI pour le frontend |
+| S3 (documents sources, frontend) — perte niveau objet (écrasement/suppression) | quasi nul (versioning) | immédiat | version précédente déjà accessible |
+| S3 (documents sources) — perte totale du bucket/région | **non couvert aujourd'hui** (aucune réplication cross-région configurée) | dépend de la ré-ingestion | risque résiduel accepté pour `test` ; réplication cross-région à décider pour la production (hors périmètre de cet ADR) |
 | S3 Vectors (index) | temps écoulé depuis le dernier batch d'ingestion réussi | borné par le volume du corpus à réindexer (cible initiale : sous 4 heures pour le corpus de démonstration, à réviser en LLD-006 à l'échelle) | ré-ingestion complète via `V2-ADR-004` |
 | AgentCore Memory | non applicable par conception | non applicable par conception | dégradation déjà actée (« poursuite sans mémoire durable » si indisponible, `capability-allocation-matrix.md`) |
 | Configuration Terraform | nulle (source = dépôt git) | immédiat (redéploiement depuis git) | backend d'état versionné séparément |

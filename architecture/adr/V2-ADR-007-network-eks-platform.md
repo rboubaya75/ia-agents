@@ -3,7 +3,7 @@
 - **Statut :** Proposed
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
-- **Dépendances :** V2-ADR-001, V2-ADR-006, V2-ADR-009
+- **Dépendances :** V2-ADR-001, V2-ADR-006
 
 ## Contexte
 
@@ -17,7 +17,7 @@ subnets, le calcul EKS ni les endpoints qu'il présuppose. Cet ADR comble ce vid
 
 - multi-AZ (HLD section 8) ;
 - Runtime jamais exposé directement à internet ;
-- workloads FastAPI et workers d'ingestion identifiés par IAM (Pod Identity) ;
+- workloads FastAPI et workers d'ingestion identifiés par un rôle IAM dédié par ServiceAccount ;
 - egress par défaut refusé, ouvert explicitement par cas d'usage ;
 - coût contrôlable pour un environnement `test` jetable (cohérent avec le pattern
   `force_destroy = true` déjà utilisé pour le frontend) ;
@@ -65,7 +65,7 @@ VPC dédié V2 (nouveau, eu-west-3, ≥ 2 AZ)
   ├── subnets publics   (NAT Gateway uniquement, pas d'ALB internet-facing)
   ├── subnets privés    (pods Fargate EKS, load balancer interne)
   └── VPC endpoints      (S3, DynamoDB, ECR API/DKR, Secrets Manager, STS,
-                           CloudWatch Logs, KMS — trafic AWS sans passer par le NAT)
+                           CloudWatch Logs, KMS, Bedrock Runtime — trafic AWS sans NAT)
 
 EKS (control plane régional)
   ├── namespace `fastapi`    — profil Fargate, exposé par le load balancer interne
@@ -83,13 +83,19 @@ que FastAPI n'est pas prêt à être déployé — le vote de cet ADR n'engage p
   disponibilité en environnement de production future — compromis documenté comme risque accepté
   pour `test`) ;
 - **VPC endpoints (Gateway pour S3/DynamoDB, Interface pour le reste) :** réduisent la dépendance
-  au NAT Gateway pour le trafic AWS et limitent la surface d'exfiltration ;
+  au NAT Gateway pour le trafic AWS et limitent la surface d'exfiltration. L'endpoint
+  `bedrock-runtime` couvre les embeddings des workers d'ingestion (`V2-ADR-003`/`V2-ADR-004`).
+  L'existence d'un endpoint PrivateLink pour l'invocation AgentCore Runtime reste à confirmer en
+  LLD-001 ; à défaut, ce trafic transite par le NAT Gateway (exception documentée) ;
 - **Network Policies :** refus par défaut entre pods ; autorisations explicites FastAPI → DNS,
   FastAPI → AgentCore Runtime (IAM, pas de règle réseau spécifique nécessaire au-delà du LB),
   workers ingestion → S3/DynamoDB/Bedrock ;
-- **IAM :** EKS Pod Identity (pas IRSA) pour associer un rôle IAM dédié à chaque ServiceAccount,
-  conformément au HLD ; le rôle FastAPI est limité à l'invocation IAM d'AgentCore Runtime et aux
-  accès applicatifs nécessaires, jamais à une administration IAM large ;
+- **IAM :** **IRSA (IAM Roles for Service Accounts)** pour associer un rôle IAM dédié à chaque
+  ServiceAccount. EKS Pod Identity, cité par le HLD, **n'est pas disponible sur Fargate** (son
+  agent s'exécute en DaemonSet sur des nœuds EC2, absents d'un cluster Fargate) — le choix
+  Fargate de cet ADR impose donc IRSA. Ce point précise le HLD (Draft), qui devra être aligné. Le
+  rôle FastAPI est limité à l'invocation IAM d'AgentCore Runtime et aux accès applicatifs
+  nécessaires, jamais à une administration IAM large ;
 - **Autoscaling :** HPA sur le déploiement FastAPI (métriques de requêtes/CPU) ; les workers
   d'ingestion sont dimensionnés par la profondeur de la file SQS (mécanisme précis différé au
   LLD-001/LLD-002, ex. KEDA).
@@ -114,14 +120,14 @@ que FastAPI n'est pas prêt à être déployé — le vote de cet ADR n'engage p
   AgentCore natif) lors de l'introduction du VPC/EKS ;
 - un pod FastAPI ne peut atteindre que les endpoints explicitement autorisés par Network Policy
   (test d'egress refusé vers un domaine arbitraire) ;
-- l'invocation d'AgentCore Runtime depuis un pod FastAPI utilise exclusivement l'identité IAM Pod
-  Identity, sans identifiants statiques ;
+- l'invocation d'AgentCore Runtime depuis un pod FastAPI utilise exclusivement le rôle IAM associé
+  au ServiceAccount (IRSA), sans identifiants statiques ;
 - `enable_eks_platform = false` ne provisionne aucune ressource EKS/VPC (coût nul par défaut) ;
 - estimation de coût mensuel documentée et comparée au budget FinOps de la charte.
 
 ## Références AWS
 
 - Amazon EKS avec profils Fargate ;
-- Amazon EKS Pod Identity ;
+- IAM Roles for Service Accounts (IRSA) — Pod Identity non disponible sur Fargate ;
 - VPC Gateway et Interface Endpoints ;
 - Amazon Bedrock AgentCore Runtime avec authentification IAM.

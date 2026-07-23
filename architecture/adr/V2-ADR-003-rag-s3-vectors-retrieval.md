@@ -3,7 +3,7 @@
 - **Statut :** Proposed
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
-- **Dépendances :** V2-ADR-002, V2-ADR-004, V2-ADR-006, V2-ADR-010
+- **Dépendances :** V2-ADR-002, V2-ADR-006
 
 ## Contexte
 
@@ -53,11 +53,15 @@ l'attribution CAM Domaine 8.
   `tenantId` obligatoire déjà décidé par `V2-ADR-006`, plus simple à opérer ; un index par tenant
   reste une option différée si le volume de tenants le justifie) ;
 - **DynamoDB — nouvelle table `documents`** (la table `Trips` existante n'est pas conçue pour
-  porter des métadonnées documentaires) : `PK = tenantId`, `SK = documentId#version`, attributs
-  `status` (`uploaded | validating | parsing | chunking | embedding | indexing | indexed | failed
-  | quarantined | deleted`), `chunkCount`, `embeddingModelId`, `embeddingVersion`,
-  `chunkerVersion`, `classification`, `sourceUri`, `creationOperationId` (même pattern
-  d'idempotence que `docs/adr/ADR-0006` et `docs/adr/ADR-0007` en V1).
+  porter des métadonnées documentaires) : `PK = tenantId#documentId`, `SK = version`. La clé de
+  partition composite évite de concentrer tout le catalogue d'un tenant dans une seule partition
+  (anti-pattern de partition chaude limitant à 3000 RCU / 1000 WCU) ; le listing des documents
+  d'un tenant passe par un GSI `PK = tenantId` défini en LLD-006. `documentId` est un UUID
+  globalement unique. Attributs : `status` (`uploaded | validating | parsing | chunking |
+  embedding | indexing | indexed | failed | quarantined | deleted`), `chunkCount`,
+  `embeddingModelId`, `embeddingVersion`, `chunkerVersion`, `classification`, `sourceUri`,
+  `creationOperationId` (même pattern d'idempotence que `docs/adr/ADR-0006` et `docs/adr/ADR-0007`
+  en V1).
 
 ### Métadonnées de chunk (S3 Vectors)
 
@@ -70,7 +74,8 @@ Champs filtrables obligatoires : `tenantId`, `documentId`, `version`, `status` (
 - chunking versionné (taille et recouvrement fixés en LLD, identifiant `chunkerVersion` stocké
   avec chaque chunk pour permettre une réévaluation ciblée) ;
 - identifiant de chunk déterministe : `hash(documentId + version + chunkIndex + chunkerVersion)`,
-  garantissant l'idempotence d'une réindexation ;
+  garantissant l'idempotence d'une réindexation ; `documentId` étant un UUID globalement unique,
+  aucun risque de collision inter-tenant même sans `tenantId` dans la dérivation ;
 - embeddings Bedrock configurables (`embeddingModelId` en paramètre, jamais codé en dur), version
   du modèle tracée pour permettre une migration de modèle sans réécriture silencieuse de l'index.
 

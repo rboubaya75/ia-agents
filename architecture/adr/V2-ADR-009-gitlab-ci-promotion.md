@@ -107,6 +107,14 @@ publié comme `artifacts:` GitLab CI avec `expire_in` (durées alignées sur les
 complément de l'artefact durable — équivalent du double mécanisme artefact + `$GITHUB_STEP_
 SUMMARY` déjà en place.
 
+## Justification des dépendances
+
+- **V2-ADR-007** : le pipeline déploie l'infrastructure réseau/EKS et son rôle OIDC ;
+- **V2-ADR-008** : le format des preuves CI reprend les conventions de corrélation/redaction
+  décidées pour l'observabilité ;
+- **V2-ADR-010** : la gate `terraform-apply` réutilise le plan-guard qui protège les ressources de
+  sauvegarde (PITR, versioning) dont la politique est fixée par ce dernier.
+
 ## Parité et retrait de GitHub Actions
 
 Critère de sortie de la coexistence : les mêmes gates (secret scan, audits de dépendances, tests
