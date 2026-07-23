@@ -32,7 +32,10 @@ plateforme elle-même, puis son dimensionnement.
 Avant de dimensionner quoi que ce soit, la question préalable est : quelle plateforme porte
 FastAPI et les workers d'ingestion ? Trois options réelles existent sur AWS pour ce profil de
 charge (un service HTTP stateless + des workers déclenchés par SQS, sans multi-tenant applicatif,
-sans besoin documenté de GPU, service mesh, opérateurs ou workloads hétérogènes).
+sans besoin documenté de GPU, service mesh, opérateurs ou workloads hétérogènes). La comparaison
+ci-dessous porte sur la plateforme elle-même, à forme serverless équivalente (Fargate) pour rester
+cohérente avec l'objectif FinOps ; le launch type au sein de la plateforme retenue est tranché dans
+la section suivante.
 
 ### Option A — AWS Lambda (conteneurs ou zip)
 
@@ -42,10 +45,10 @@ secondes d'API Gateway (déjà identifiée comme facteur de rejet du traitement 
 `V2-ADR-004`) rendent Lambda structurellement inadapté à ce rôle, indépendamment du coût ou de la
 familiarité de l'équipe avec le service.
 
-### Option B — Amazon ECS (launch type Fargate)
+### Option B — Amazon ECS
 
-Cluster ECS dont les services (`fastapi`, `ingestion`) tournent en launch type Fargate, sans
-instance EC2 à gérer.
+Cluster ECS dont les services (`fastapi`, `ingestion`) tournent sans instance EC2 à gérer (forme
+Fargate, cf. section launch type).
 
 **Avantages :** aucun control plane facturé séparément (contrairement à EKS, qui facture le
 control plane indépendamment du calcul) ; rôles IAM par tâche nativement supportés en Fargate,
@@ -57,10 +60,10 @@ documenté à ce jour (service HTTP stateless + workers SQS).
 que Kubernetes si un besoin de cette nature apparaît plus tard ; moins démonstratif d'une
 compétence Kubernetes pour un objectif de portfolio.
 
-### Option C — Amazon EKS (launch type Fargate)
+### Option C — Amazon EKS
 
-Cluster EKS dont tous les pods tournent en profils Fargate, sans node group EC2 (option
-initialement retenue par une version antérieure de cet ADR).
+Cluster EKS sans node group EC2 (forme Fargate ; option initialement retenue par une version
+antérieure de cet ADR).
 
 **Avantages :** écosystème Kubernetes complet si un besoin concret apparaît (multi-équipes,
 GitOps, service mesh, opérateurs, workloads hétérogènes) ; compétence valorisée sur le marché pour
@@ -71,17 +74,18 @@ charge décrite reste un service HTTP stateless et des workers homogènes. Le co
 facture un coût plancher indépendant du trafic, en plus d'exiger une couche d'attribution
 d'identité supplémentaire (IRSA, Pod Identity indisponible sur Fargate) que Fargate résout
 nativement côté ECS. Retenir EKS ici reviendrait à payer la complexité Kubernetes sans consommer
-le bénéfice qui la justifie. Si un besoin concret de cette nature apparaît (cf. options futures
-ci-dessous), il justifiera un nouvel ADR au moment où il sera documenté — pas une anticipation non
-étayée aujourd'hui.
+le bénéfice qui la justifie. Si un besoin concret de cette nature apparaît, il justifiera un
+nouvel ADR au moment où il sera documenté — pas une anticipation non étayée aujourd'hui.
 
 ## Décision proposée pour la plateforme
 
-Retenir **l'option B — Amazon ECS, launch type Fargate**. Un besoin futur documenté (GPU,
-multi-équipes, service mesh) peut justifier une migration vers EKS ; ce n'est pas le cas
-aujourd'hui, et anticiper ce besoin sans le documenter violerait le principe de proportionnalité
-déjà appliqué ailleurs dans ce corpus (ex. rejet de l'orchestration multi-agent par défaut en
-`V2-ADR-005`).
+Retenir **l'option B — Amazon ECS**. Un besoin futur documenté et spécifiquement kubernetes
+(multi-équipes, GitOps, service mesh, opérateurs, workloads hétérogènes) peut justifier une
+migration vers EKS ; ce n'est pas le cas aujourd'hui, et anticiper ce besoin sans le documenter
+violerait le principe de proportionnalité déjà appliqué ailleurs dans ce corpus (ex. rejet de
+l'orchestration multi-agent par défaut en `V2-ADR-005`). Un éventuel besoin GPU, lui, ne justifie
+pas EKS : il est couvert à l'intérieur d'ECS par un capacity provider EC2 (cf. section launch
+type ci-dessous).
 
 ## Choix du launch type ECS
 

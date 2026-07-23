@@ -97,7 +97,7 @@ La V1 n’est pas modifiée rétroactivement :
 | V2-ARCH-006 | Le RAG est applicatif et repose sur S3 Vectors, DynamoDB et S3. |
 | V2-ARCH-007 | Les modèles sont invoqués via Bedrock Converse API. |
 | V2-ARCH-008 | Les tools sont exposés et gouvernés via AgentCore Gateway MCP. |
-| V2-ARCH-009 | Terraform est le mécanisme déclaratif de référence ; les définitions de tâches et services ECS sont pilotées directement par Terraform, sans couche de templating additionnelle (Helm, spécifique à Kubernetes, n’est pas retenu tant qu’EKS ne l’est pas). |
+| V2-ARCH-009 | Terraform est le mécanisme déclaratif de référence ; les définitions de tâches et services ECS sont pilotées directement par Terraform, sans couche de templating additionnelle. Helm, spécifique à Kubernetes, est sans objet avec ECS et ne redeviendrait pertinent qu’en cas de migration future vers EKS. |
 | V2-ARCH-010 | GitLab CI avec OIDC AWS est la cible de CI/CD V2. |
 | V2-ARCH-011 | Toute PR V2 cible `migration/secure-agentcore-v2` et ne modifie pas la baseline V1. |
 
