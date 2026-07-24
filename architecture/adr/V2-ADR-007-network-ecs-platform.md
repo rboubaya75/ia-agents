@@ -1,6 +1,6 @@
 # V2-ADR-007 — Architecture réseau et calcul ECS
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-001, V2-ADR-006

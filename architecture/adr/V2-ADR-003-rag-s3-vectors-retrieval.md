@@ -1,9 +1,13 @@
 # V2-ADR-003 — RAG applicatif avec S3 Vectors
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-002, V2-ADR-006
+- **Phasage :** cet ADR décrit la **cible V3**. Pour la phase V2, `V2-ADR-019` supersede le volet
+  implémentation (parsing, chunking, embeddings et indexation assurés par Bedrock Knowledge Bases
+  adossé à S3 Vectors). Les garanties d'isolation, de citations et de suppression sans résidu
+  ci-dessous restent applicables aux deux phases ; seule leur réalisation technique diffère.
 
 ## Contexte
 
@@ -21,9 +25,13 @@ détaille le schéma, le pipeline et les garanties de qualité du RAG applicatif
 
 Service managé AWS pour le RAG, avec OpenSearch Serverless comme moteur vectoriel.
 
-**Rejet proposé :** exclu explicitement par la charte V2 (Bedrock Knowledge Bases et OpenSearch
-Serverless sont hors périmètre). Duplique en outre la capacité de retrieval déjà attribuée à
-FastAPI par la CAM (violation P-02).
+**Rejet comme cible V3 :** en cible V3, KB dupliquerait la capacité de retrieval attribuée à FastAPI
+par la CAM (violation P-02) et masquerait les décisions de retrieval, contredisant l'objectif
+d'auditabilité fine de la phase de production. **Nuance de phasage :** cette option est en revanche
+**retenue pour la phase V2** par `V2-ADR-019`, sous une forme adossée à S3 Vectors (et non à
+OpenSearch Serverless, qui reste hors périmètre) où FastAPI conserve la propriété du retrieval via
+l'API `Retrieve` et le filtrage tenant/ACL côté serveur — la charte est amendée en conséquence pour
+la V2.
 
 ### Option B — Moteur vectoriel auto-hébergé
 

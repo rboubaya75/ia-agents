@@ -1,6 +1,6 @@
 # V2-ADR-010 — Sauvegarde, restauration et réhydratation
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-007

@@ -1,14 +1,14 @@
 # HLD — Secure AgentCore V2
 
-- **Version :** 0.4
+- **Version :** 0.5
 - **Branche :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
-- **Statut :** Draft — ADR V2-G1 instruits (Proposed), en attente d'approbation formelle
+- **Statut :** Draft — ADR V2-G1 acceptés (001-010, 019) ; phasage RAG tranché (`V2-ADR-019`)
 - **Environnement initial :** `test`
 
 ## 1. Résumé exécutif
 
-La V2 étend la plateforme agentique V1 avec un backend applicatif FastAPI sur ECS/Fargate, un RAG applicatif fondé sur S3 Vectors, un pipeline d’ingestion documentaire, des agents custom découplés de leur framework et une observabilité distribuée OpenTelemetry/CloudWatch.
+La V2 étend la plateforme agentique V1 avec un backend applicatif FastAPI sur ECS/Fargate, un RAG fondé sur S3 Vectors (via Bedrock Knowledge Bases en phase V2, pipeline applicatif en cible V3 — `V2-ADR-019`), un pipeline d’ingestion documentaire, des agents custom découplés de leur framework et une observabilité distribuée OpenTelemetry/CloudWatch.
 
 Le HLD ne remplace pas les ADR. Les points structurants encore ouverts sont explicitement listés et doivent être décidés avant passage du document au statut `Approved`.
 
@@ -72,8 +72,8 @@ Données
 1. Le navigateur reste une zone non fiable.
 2. L’identité de confiance est dérivée et reconstruite côté serveur.
 3. AgentCore Runtime est uniquement le runtime d’exécution des agents custom.
-4. Bedrock managed Agents et Bedrock Knowledge Bases ne sont pas utilisés.
-5. Le retrieval est une capacité applicative contrôlée.
+4. Bedrock managed Agents ne sont pas utilisés. Bedrock Knowledge Bases, adossé à S3 Vectors, est retenu comme implémentation RAG de la phase V2 ; le pipeline applicatif reste la cible V3 (`V2-ADR-019`).
+5. Le retrieval est une capacité applicative contrôlée : quelle que soit la phase, FastAPI reste propriétaire du filtrage tenant/ACL et de la construction du contexte, AgentCore Runtime ne faisant jamais de retrieval.
 6. Les contenus documentaires et Memory sont traités comme données non fiables.
 7. Les frameworks d’agents sont encapsulés derrière un adapter.
 8. Les mutations sont confirmées, idempotentes et non rejouées après effet de bord.
@@ -137,6 +137,14 @@ Données
 ```
 
 L’ingestion doit être idempotente, reprenable et capable de supprimer ou réindexer un document sans laisser d’éléments orphelins.
+
+> **Phasage (`V2-ADR-019`).** Le flux ci-dessus (étapes 3 à 9 : worker ECS, parsing, chunking,
+> embeddings, écriture S3 Vectors) est la **cible V3**. En **phase V2**, ces étapes sont assurées
+> par Bedrock Knowledge Bases adossé à S3 Vectors : FastAPI déclenche l’ingestion KB
+> (`StartIngestionJob`) et interroge KB via l’API `Retrieve`, en conservant le filtrage tenant/ACL
+> et la construction du contexte côté serveur. Le module SQS + worker ECS `ingestion` n’est pas
+> provisionné en V2. La latence d’ingestion V2 est asynchrone (ordre de la minute) et reflétée dans
+> le statut publié à l’étape 10.
 
 ### 6.3 Mutation via tool MCP
 
@@ -508,21 +516,21 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 
 ## 17. État des décisions architecturales
 
-### ADR instruits — statut Proposed (Gate V2-G1 en cours)
+### ADR acceptés — statut Accepted (Gate V2-G1)
 
-Les ADR suivants ont été instruits (contenu et décision proposée disponibles) ; leur passage en
-`Accepted` est conditionné à l’approbation formelle de la Gate V2-G1 :
+Les ADR suivants sont `Accepted` :
 
 - `V2-ADR-001` : ingress et frontière de sécurité ;
 - `V2-ADR-002` : responsabilités FastAPI versus AgentCore Runtime ;
-- `V2-ADR-003` : architecture RAG S3 Vectors ;
-- `V2-ADR-004` : pipeline d’ingestion et reprise ;
+- `V2-ADR-003` : architecture RAG S3 Vectors (cible V3 ; volet implémentation V2 superseded par `V2-ADR-019`) ;
+- `V2-ADR-004` : pipeline d’ingestion et reprise (cible V3 ; volet implémentation V2 superseded par `V2-ADR-019`) ;
 - `V2-ADR-005` : orchestration agents et adapter ;
 - `V2-ADR-006` : modèle d’identité et isolation ;
 - `V2-ADR-007` : réseau et calcul ECS ;
 - `V2-ADR-008` : observabilité et propagation du contexte ;
 - `V2-ADR-009` : GitLab CI et promotion ;
-- `V2-ADR-010` : sauvegarde, restauration et réhydratation.
+- `V2-ADR-010` : sauvegarde, restauration et réhydratation ;
+- `V2-ADR-019` : phasage de livraison du RAG (Knowledge Bases en V2, pipeline applicatif en V3).
 
 ### ADR au backlog — non encore instruits
 

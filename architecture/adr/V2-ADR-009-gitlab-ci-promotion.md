@@ -1,6 +1,6 @@
 # V2-ADR-009 — GitLab CI et promotion
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-007, V2-ADR-008, V2-ADR-010

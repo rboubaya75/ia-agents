@@ -1,6 +1,6 @@
 # V2-ADR-006 — Identité, autorisation et isolation
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-001, V2-ADR-002, V2-ADR-003, V2-ADR-007, V2-ADR-010, V2-ADR-014, V2-ADR-015, V2-ADR-016, V2-ADR-017

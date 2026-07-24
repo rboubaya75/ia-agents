@@ -1,6 +1,6 @@
 # V2-ADR-005 — Agents et framework d'orchestration
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-002, V2-ADR-006, V2-ADR-008
