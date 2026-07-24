@@ -1,9 +1,9 @@
 # HLD — Secure AgentCore V2
 
-- **Version :** 0.3
+- **Version :** 0.4
 - **Branche :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
-- **Statut :** Draft — architecture cible à instruire par ADR
+- **Statut :** Draft — ADR V2-G1 instruits (Proposed), en attente d'approbation formelle
 - **Environnement initial :** `test`
 
 ## 1. Résumé exécutif
@@ -46,7 +46,7 @@ Utilisateurs
   -> CloudFront + WAF
        -> S3 privé : frontend React
        -> API Gateway : front-door API
-            -> couche de sécurité et routage à décider par ADR
+            -> VPC Link (intégration privée) → ALB interne (`V2-ADR-001`)
                  -> FastAPI sur ECS/Fargate
                       -> services conversation, documents et administration
                       -> orchestrateur applicatif
@@ -90,7 +90,7 @@ Données
 | WAF | Protection L7, limitation et règles managées/custom selon risques |
 | Cognito | Authentification et émission des tokens |
 | API Gateway | Front-door API, JWT, CORS, throttling, logs et routage |
-| Couche d’ingress sécurisée | Reconstruction de l’identité, schémas, quotas et normalisation ; forme à décider par ADR |
+| Couche d’ingress sécurisée | Reconstruction de l’identité, schémas, quotas et normalisation ; VPC Link → ALB interne → FastAPI (`V2-ADR-001`) |
 | FastAPI sur ECS/Fargate | APIs applicatives, documents, orchestration, administration et contrôles métier |
 | ECS (Fargate) | Runtime des services applicatifs non agentiques et workers |
 | AgentCore Runtime | Exécution des agents custom et intégration modèle/Memory/tools |
@@ -118,7 +118,7 @@ Données
 7. Agent custom -> Bedrock Converse API
 8. Agent custom -> Gateway MCP si tool autorisé
 9. Réponse : contenu, citations, operationId et référence de corrélation
-10. Streaming ou réponse synchrone selon ADR et LLD
+10. Streaming SSE des tokens Bedrock (cf. §6.5) ; les en-têtes de propagation des claims entre API Gateway et FastAPI sont définis en V2-LLD-001
 ```
 
 ### 6.2 Ingestion documentaire
@@ -126,7 +126,7 @@ Données
 ```text
 1. Browser -> API : demande d’upload autorisée
 2. Document -> S3 source privé
-3. Événement d’ingestion -> worker ECS ou service asynchrone à décider
+3. Événement SQS -> worker ECS Fargate (service ingestion) (`V2-ADR-004`)
 4. Validation de sécurité et détection du type
 5. Parsing et normalisation
 6. Chunking versionné
@@ -151,6 +151,24 @@ L’ingestion doit être idempotente, reprenable et capable de supprimer ou réi
 8. Résultat redacted et corrélé
 9. Aucun replay de l’agent après démarrage confirmé de la mutation
 ```
+
+### 6.5 Streaming des réponses conversationnelles
+
+Le protocole retenu est **Server-Sent Events (SSE)**, standard W3C (`EventSource`), sur HTTP
+ordinaire. Ce choix est cohérent avec `V2-ADR-001` : le chemin API Gateway → VPC Link → ALB →
+FastAPI a été retenu précisément pour sa compatibilité avec le streaming HTTP, et Lambda a été
+rejeté en partie à cause du timeout de 29 secondes incompatible avec un processus serveur
+persistant.
+
+SSE est adapté car le flux conversationnel est unidirectionnel (serveur → client) : le navigateur
+envoie une requête HTTP standard, FastAPI retourne une `StreamingResponse` dont le contenu progresse
+au fil des tokens produits par Bedrock Converse API.
+
+**Contrainte à gérer en V2-LLD-001 :** API Gateway HTTP API applique un timeout dur de 29 secondes.
+Pour les réponses longues, un pattern de fallback (retour immédiat d'un `operationId` + endpoint de
+poll SSE séparé) doit être défini en `V2-LLD-001`. Le format exact des en-têtes propageant les
+claims entre API Gateway et FastAPI est également défini en `V2-LLD-001` ; l'implémentation
+frontend (`EventSource`) est couverte par `V2-LLD-010`.
 
 ### 6.4 Diagramme de flux de données (question → réponse)
 
@@ -262,7 +280,7 @@ si Runtime l'a déjà construite.
 
 ### 7.4 Règle d’identité
 
-Le principe V1 reste la baseline : l’acteur provient d’un claim Cognito validé et n’est jamais accepté depuis le payload métier. Le modèle multi-tenant, les scopes et la représentation interne de l’identité doivent être décidés par ADR.
+Le principe V1 reste la baseline : l’acteur provient d’un claim Cognito validé et n’est jamais accepté depuis le payload métier. Le modèle multi-tenant, les scopes et la représentation interne de l’identité sont décidés par `V2-ADR-006` : résolution serveur contrôlée, compatible mono-tenant et multi-tenant.
 
 ### 7.5 Diagramme des flux d'identité
 
@@ -471,28 +489,49 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 - WAF ;
 - cible GitLab CI.
 
-### À décider
+### Décidé par ADR
 
-- maintien exact de la Lambda Security Facade ;
-- chemin synchrone ou streaming ;
-- placement de l’orchestration entre FastAPI et Runtime ;
-- mécanisme d’événement d’ingestion ;
-- modèle utilisateur ou tenant ;
-- dimensionnement fin du calcul ECS (tailles de tâche, capacité) ;
-- migration des données et préférences.
+- Lambda Security Facade remplacée par FastAPI sur ECS/Fargate pour la couche applicative (`V2-ADR-001`) ;
+- streaming SSE pour les réponses conversationnelles (cf. §6.5) ;
+- orchestration : FastAPI coordonne les appels à Runtime, Runtime exécute les agents custom (`V2-ADR-002`) ;
+- ingestion asynchrone via SQS → service ECS Fargate (`V2-ADR-004`) ;
+- modèle d’identité : résolution serveur, mono-tenant compatible multi-tenant (`V2-ADR-006`).
 
-## 17. Décisions ouvertes bloquantes
+### À détailler en LLD
 
-- V2-ADR-001 : ingress et frontière de sécurité ;
-- V2-ADR-002 : responsabilités FastAPI versus AgentCore Runtime ;
-- V2-ADR-003 : architecture RAG S3 Vectors ;
-- V2-ADR-004 : pipeline d’ingestion et reprise ;
-- V2-ADR-005 : orchestration agents et adapter ;
-- V2-ADR-006 : modèle d’identité et isolation ;
-- V2-ADR-007 : réseau et calcul ECS ;
-- V2-ADR-008 : observabilité et propagation du contexte ;
-- V2-ADR-009 : GitLab CI et promotion ;
-- V2-ADR-010 : sauvegarde, restauration et réhydratation.
+- dimensionnement fin du calcul ECS (tailles de tâche, capacité) — `V2-LLD-001` ;
+- noms et format des en-têtes de propagation des claims entre API Gateway et FastAPI — `V2-LLD-001`.
+
+### Non applicable
+
+- migration des données V1 → V2 : la V2 démarre avec un état vide ; les données V1 (DynamoDB Trips, Memory) restent dans l’environnement V1 sans migration.
+
+## 17. État des décisions architecturales
+
+### ADR instruits — statut Proposed (Gate V2-G1 en cours)
+
+Les ADR suivants ont été instruits (contenu et décision proposée disponibles) ; leur passage en
+`Accepted` est conditionné à l’approbation formelle de la Gate V2-G1 :
+
+- `V2-ADR-001` : ingress et frontière de sécurité ;
+- `V2-ADR-002` : responsabilités FastAPI versus AgentCore Runtime ;
+- `V2-ADR-003` : architecture RAG S3 Vectors ;
+- `V2-ADR-004` : pipeline d’ingestion et reprise ;
+- `V2-ADR-005` : orchestration agents et adapter ;
+- `V2-ADR-006` : modèle d’identité et isolation ;
+- `V2-ADR-007` : réseau et calcul ECS ;
+- `V2-ADR-008` : observabilité et propagation du contexte ;
+- `V2-ADR-009` : GitLab CI et promotion ;
+- `V2-ADR-010` : sauvegarde, restauration et réhydratation.
+
+### ADR au backlog — non encore instruits
+
+Les ADR suivants sont identifiés dans le backlog (`architecture/adr/V2-ADR-BACKLOG-FR.md`) et
+référencés comme dépendances par certains LLD (V2-LLD-002, 003, 005, 006) ; ils seront instruits
+à mesure que leurs domaines progressent :
+
+- `V2-ADR-011` à `V2-ADR-018` : WAF, stratégie de tests de sécurité, modèle de données, rétention,
+  suppression, accès aux données, accès multi-agent, et sujets complémentaires selon priorisation.
 
 ## 18. Critère de validation du HLD
 
