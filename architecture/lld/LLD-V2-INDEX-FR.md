@@ -1,6 +1,6 @@
 # Catalogue des LLD — Secure AgentCore V2
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md`
@@ -26,8 +26,8 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu’elle affec
 
 | ID | LLD | Portée | Dépendances ADR exactes | Statut |
 |---|---|---|---|---|
-| V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, DNS, IAM workload, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009 | À créer |
-| V2-LLD-002 | RAG et ingestion documentaire | S3, parsing, chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-017, V2-ADR-018 | À créer |
+| V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, DNS, IAM workload, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009 | v0.1 (Draft) |
+| V2-LLD-002 | RAG et ingestion documentaire | S3, ingestion KB (V2) / applicative (V3), chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-017, V2-ADR-018 | v0.1 (Draft) |
 | V2-LLD-003 | Agents et orchestration | `/agents`, adapter, Converse API, prompts, budgets, fallback | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-012 | À créer |
 | V2-LLD-004 | AgentCore Gateway MCP et tools | catalogue, schémas, IAM, confirmation, idempotence, retry | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-014 | À créer |
 | V2-LLD-005 | Identité, sécurité et conformité | Cognito, autorisation, tenant, KMS, WAF, threat model, audit | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-010, V2-ADR-014, V2-ADR-015, V2-ADR-016, V2-ADR-017 | À créer |
@@ -126,6 +126,8 @@ Doit définir : topologie VPC et subnets, endpoints AWS, egress, dimensionnement
 ### V2-LLD-002 — RAG et ingestion
 
 Doit définir : formats et tailles, upload et quarantaine, validation et antivirus, parsing, chunking versionné, embeddings Bedrock configurables, schéma S3 Vectors, métadonnées DynamoDB, idempotence, suppression, réindexation, réhydratation, filtres d’isolation, citations, dataset et métriques d’évaluation.
+
+Conformément à `V2-ADR-019`, la phase V2 délègue l’ingestion et l’indexation à Bedrock Knowledge Bases adossé à S3 Vectors (FastAPI conservant l’API `Retrieve` uniquement, le post-filtrage tenant/ACL, le `retrievalContext` et les citations) ; le pipeline applicatif SQS + worker ECS de `V2-ADR-003`/`V2-ADR-004` reste la cible V3, réversible via un adapter de magasin vectoriel unique.
 
 ### V2-LLD-003 — Agents et orchestration
 
