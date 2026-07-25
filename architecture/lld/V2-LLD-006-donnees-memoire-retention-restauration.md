@@ -1,6 +1,6 @@
 # V2-LLD-006 — Données, mémoire, rétention et restauration
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§9, §14)
@@ -8,6 +8,11 @@
   (phasage RAG), plus `V2-ADR-013`/`V2-ADR-015`/`V2-ADR-017` (au backlog — traités comme contrats
   ouverts, cf. §1.3)
 - **Gate :** V2-G2
+
+> **Révision v0.2 (revue PR #35) :** les scripts d'exploitation référencés
+> (`check_dv_consistency.py`, `run_rag_eval.py`) sont désormais explicitement marqués **artefacts
+> planifiés** avec leur contrat d'entrée/sortie (§16.1), et non des outils existants. Aucun code
+> n'est créé avant l'approbation des LLD (G2).
 
 ## 1. Métadonnées
 
@@ -603,8 +608,9 @@ que les trois autres coordonnées existent. Un écart > 0 est un défaut de coh�
 garantit **si elle est respectée dans l'ordre**. Deux garde-fous supplémentaires :
 
 - **Vérification préalable à toute ré-ingestion massive** : script `scripts/check_dv_consistency.py`
-  qui liste les `documents.status = indexed` sans objet S3 correspondant. Ces documents doivent
-  être passés à `status = "failed"` avant la ré-ingestion, pas ignorés.
+  (**artefact planifié, contrat en §16.1** — non encore créé) qui liste les
+  `documents.status = indexed` sans objet S3 correspondant. Ces documents doivent être passés à
+  `status = "failed"` avant la ré-ingestion, pas ignorés.
 - **Métrique post-restauration** : nombre de chunks dans S3 Vectors ± X% du `sum(chunkCount)` de
   `documents.status = indexed`. Un écart supérieur à la marge alerte (`V2-LLD-007`).
 
@@ -624,6 +630,23 @@ garantit **si elle est respectée dans l'ordre**. Deux garde-fous supplémentair
 Le guard est un script CI exécuté avant `terraform apply` (`V2-LLD-008`). Une violation renvoie un
 code d'échec non contournable en CI ; en local, la confirmation explicite passe par variable
 d'environnement (jamais par flag CLI, pour éviter les accidents).
+
+### 16.1 Scripts d'exploitation planifiés (à créer à l'implémentation)
+
+Les runbooks §15 et §18 s'appuient sur deux scripts qui **n'existent pas encore** : ils sont des
+**artefacts planifiés**, créés à l'implémentation (périmètre outillage, aligné sur `V2-LLD-009`),
+pas des outils disponibles à ce stade documentaire pré-G2. Ce LLD fixe leur contrat pour que la
+future implémentation soit sans ambiguïté. À l'inverse, `scripts/terraform_plan_guard.py` et
+`scripts/run_industrial_test_suite.py` **existent déjà** dans le dépôt et sont réutilisés tels quels.
+
+| Script (planifié) | Entrées | Sortie | Rôle |
+|---|---|---|---|
+| `scripts/check_dv_consistency.py` | `--table <documents>`, `--bucket <sources>`, `--sample N` (optionnel) | code 0 si cohérent, code ≠ 0 + rapport JSON listant les écarts | Vérifier l'invariant §14.4 : tout `documents.status = indexed` a un objet S3 source correspondant, et signaler les `indexed` sans source (à repasser `failed` avant ré-ingestion) |
+| `scripts/run_rag_eval.py` | `--dataset <ref>`, `--baseline <artefact.json>` | rapport JSON (recall@k, precision@k, groundedness, couverture citations) + statut PASS/FAIL vs baseline | Rejouer le dataset d'évaluation retrieval (`V2-ADR-018`) après réhydratation et comparer aux métriques pré-incident |
+
+Tant que ces scripts ne sont pas créés, les runbooks §18.2 et §18.4 qui les invoquent sont **non
+exécutables** : ils décrivent la procédure cible, pas une capacité présente. Cette limite est
+explicitement portée au périmètre d'implémentation, pas masquée.
 
 ## 17. Tests et preuves
 

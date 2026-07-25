@@ -1,11 +1,18 @@
 # V2-LLD-001 — Plateforme AWS, réseau, ECS et FastAPI
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G2
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§8, §12, §14)
-- **Dépendances ADR :** V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009
+- **Dépendances ADR :** V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-019
+
+> **Révision v0.2 (revue PR #35) :** alignement sur `V2-ADR-019`. Le service ECS `ingestion` et
+> son rôle IAM sont désormais explicitement marqués **cible V3 non provisionnée en V2** (l'ingestion
+> V2 est assurée par Bedrock Knowledge Bases, cf. `V2-LLD-002`). Le rôle IAM `fastapi` porte les
+> actions KB réellement utilisées en V2 (`Retrieve`, `StartIngestionJob`/`GetIngestionJob`) et non
+> l'accès direct S3 Vectors (réservé à V3). Correction du code de graceful shutdown (lifespan),
+> du chiffrement des logs (CMK) et de l'exception egress AgentCore Runtime.
 
 ## 1. Métadonnées
 
@@ -31,6 +38,7 @@
 | V2-ADR-007 | ECS Fargate uniquement ; VPC avec subnets publics (NAT) et privés (tâches + ALB) ; VPC endpoints ; flag `enable_ecs_platform` |
 | V2-ADR-008 | Sidecar ADOT dans chaque task definition ; export X-Ray + CloudWatch |
 | V2-ADR-009 | Déploiement par nouvelle révision de task definition ECS (pas de Helm) |
+| V2-ADR-019 | En V2, l'ingestion est déléguée à Bedrock Knowledge Bases : le service ECS `ingestion`, son rôle IAM, sa file SQS et son autoscaling **ne sont pas provisionnés en V2** (cible V3). La plateforme provisionne uniquement le service `fastapi` en V2 |
 
 ### 1.3 ADR non applicables
 
@@ -38,15 +46,21 @@
 |---|---|
 | V2-ADR-002 | Répartition FastAPI/Runtime : hors périmètre plateforme, couvert par LLD-003 |
 | V2-ADR-003 | RAG S3 Vectors : hors périmètre plateforme, couvert par LLD-002 |
-| V2-ADR-004 | Pipeline d'ingestion : la plateforme expose le service ECS `ingestion` ; le détail du pipeline est couvert par LLD-002 |
+| V2-ADR-004 | Pipeline d'ingestion applicatif (SQS + worker ECS) : **cible V3**, non provisionné en V2 (`V2-ADR-019`). La plateforme décrit le service `ingestion` comme cible V3 (§4.2) mais ne le déploie pas en V2 ; le détail du pipeline est couvert par LLD-002 |
 | V2-ADR-005 | Orchestration agents : hors périmètre plateforme |
 | V2-ADR-010 | Sauvegarde/restauration : hors périmètre réseau/calcul, couvert par LLD-006 |
 
 ### 1.4 Périmètre et exclusions
 
-**Inclus :** VPC, subnets, NAT Gateway, Internet Gateway, VPC endpoints, ECS cluster, task definitions
-(`fastapi`, `ingestion`), Task IAM Roles, Security Groups, ALB interne, VPC Link, autoscaling,
-déploiements contrôlés, health checks, graceful shutdown, ECR, Secrets Manager (référencement).
+**Inclus (provisionné en V2) :** VPC, subnets, NAT Gateway, Internet Gateway, VPC endpoints, ECS
+cluster, task definition et service `fastapi`, Task IAM Role `fastapi`, Security Groups, ALB interne,
+VPC Link, autoscaling `fastapi`, déploiements contrôlés, health checks, graceful shutdown, ECR,
+Secrets Manager (référencement).
+
+**Décrit mais non provisionné en V2 (cible V3, `V2-ADR-019`) :** task definition et service ECS
+`ingestion`, Task IAM Role `ingestion`, file SQS, autoscaling `ingestion`, `sg-ingestion`, endpoint
+SQS. Ces éléments sont documentés (§4.2, §5.2, §6.3, §9.2) pour préparer la bascule V3, derrière le
+flag `enable_ingestion_service = false` (§16.4). Aucun n'est déployé tant que la V2 utilise KB.
 
 **Exclus :** contenu applicatif des conteneurs (couvert par LLD-002 à LLD-004), configuration
 détaillée ADOT (LLD-007), schéma DynamoDB (LLD-006), GitLab CI (LLD-008), tests (LLD-009),
@@ -87,16 +101,26 @@ Le route par défaut des subnets privés passe par le NAT Gateway de `public-a`.
 | Interface | ECR Docker (`ecr.dkr`) | pull des layers d'image |
 | Interface | Secrets Manager (`secretsmanager`) | récupération des secrets au démarrage de tâche |
 | Interface | KMS (`kms`) | déchiffrement des secrets et données chiffrées |
-| Interface | Bedrock Runtime (`bedrock-runtime`) | embeddings (service `ingestion`) et invocation Runtime (service `fastapi`) |
+| Interface | Bedrock Agent Runtime (`bedrock-agent-runtime`) | **V2** : appel `Retrieve` de Knowledge Bases par `fastapi` |
+| Interface | Bedrock Agent (`bedrock-agent`) | **V2** : `StartIngestionJob`/`GetIngestionJob` par `fastapi` |
+| Interface | Bedrock Runtime (`bedrock-runtime`) | invocation Runtime (service `fastapi`) ; embeddings applicatifs = **V3** (service `ingestion`) |
 | Interface | CloudWatch Logs (`logs`) | export des logs structurés depuis chaque tâche |
 | Interface | CloudWatch Monitoring (`monitoring`) | métriques ECS et custom |
 | Interface | STS (`sts`) | assume role pour les Task IAM Roles |
-| Interface | SQS (`sqs`) | réception des messages d'ingestion (service `ingestion`) |
+| Interface | SQS (`sqs`) | **V3 uniquement** : réception des messages d'ingestion (service `ingestion`) ; non provisionné en V2 |
 | Interface | X-Ray (`xray`) | export traces ADOT → X-Ray |
 
-> **Note :** l'existence d'un endpoint PrivateLink pour l'invocation AgentCore Runtime reste à
-> confirmer. À défaut, ce trafic transite par le NAT Gateway — exception documentée, à lever
-> prioritairement si un endpoint devient disponible.
+> **Note (exception egress AgentCore Runtime) :** l'existence d'un endpoint PrivateLink pour
+> l'invocation AgentCore Runtime reste à confirmer avant implémentation (précondition §16.5). Deux
+> cas :
+> - **endpoint disponible** → un VPC endpoint interface `bedrock-agentcore` est ajouté et la règle
+>   egress `0.0.0.0/0` de `sg-fastapi` (§6.2) est **supprimée** ;
+> - **endpoint indisponible** → le trafic transite par le NAT Gateway vers l'API régionale
+>   AgentCore. Ce chemin est une **exception de sécurité formellement acceptée en `test`** avec
+>   deux contrôles compensatoires obligatoires : (1) **VPC Flow Logs** activés sur `private-a/b`
+>   avec alerte sur toute destination hors plages AWS attendues ; (2) egress restreint par
+>   destination lorsque techniquement possible (préfixe de service AWS). Le risque résiduel est
+>   ré-évalué à chaque release et n'est **pas** transposable en production sans décision explicite.
 
 Tous les endpoints Interface sont associés aux subnets privés et restreints par un Security Group
 dédié (`sg-vpc-endpoints`) n'acceptant que le trafic HTTPS (port 443) depuis les tâches ECS.
@@ -108,11 +132,15 @@ dédié (`sg-vpc-endpoints`) n'acceptant que le trafic HTTPS (port 443) depuis l
 - **Nom :** `secure-agentcore-v2` (régional, 1 seul cluster)
 - **Launch type :** Fargate exclusivement (`V2-ADR-007`)
 - **Container Insights :** activé (métriques ECS dans CloudWatch)
-- **Services :** `fastapi` et `ingestion`
+- **Services V2 :** `fastapi` uniquement
+- **Services V3 (non provisionnés en V2) :** `ingestion` (`V2-ADR-019`, flag `enable_ingestion_service`)
 
 Le cluster est provisionné uniquement si `enable_ecs_platform = true` dans l'environnement
 Terraform cible. La valeur par défaut est `false` — aucun coût réseau/calcul tant que FastAPI
-n'est pas prêt à être déployé (`V2-ADR-007`).
+n'est pas prêt à être déployé (`V2-ADR-007`). En V2, seul le service `fastapi` est déployé :
+l'ingestion documentaire est assurée par Bedrock Knowledge Bases (`V2-ADR-019`, `V2-LLD-002`), et
+le service `ingestion` reste décrit ci-dessous comme cible V3 derrière le flag
+`enable_ingestion_service = false`.
 
 ---
 
@@ -148,42 +176,69 @@ Logs : driver `awslogs`, log group `/ecs/secure-agentcore-v2/fastapi`, rétentio
 
 **Graceful shutdown :**
 
+Uvicorn intercepte lui-même `SIGTERM` et déclenche l'arrêt du contexte `lifespan` ; le drain des
+requêtes en vol se fait dans la phase de fermeture du `lifespan`, jamais depuis un handler de signal
+manuel (un `asyncio.create_task` appelé depuis un handler de signal OS n'est pas garanti de
+s'exécuter dans la boucle d'événements uvicorn).
+
 ```python
-# FastAPI lifespan : SIGTERM → arrêt des nouvelles requêtes, drain 30 s
-import signal, asyncio
+# FastAPI lifespan : le drain se fait à la fermeture, piloté par uvicorn sur SIGTERM
+from contextlib import asynccontextmanager
+import asyncio
+from fastapi import FastAPI
 
-async def shutdown_handler():
-    server.should_exit = True
-    await asyncio.sleep(30)   # drain in-flight requests
+DRAIN_SECONDS = 30
 
-signal.signal(signal.SIGTERM, lambda *_: asyncio.create_task(shutdown_handler()))
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- démarrage : ouverture des ressources (clients AWS, pools) ---
+    yield
+    # --- arrêt (déclenché par uvicorn sur SIGTERM) ---
+    # laisser les requêtes en vol se terminer avant de fermer les ressources
+    await asyncio.sleep(DRAIN_SECONDS)
+
+app = FastAPI(lifespan=lifespan)
 ```
 
-Le délai de déregistrement ALB (`deregistration_delay`) est fixé à 30 s pour laisser le temps
-au drain avant que la tâche reçoive SIGTERM.
+Uvicorn est lancé avec `--timeout-graceful-shutdown 35` (supérieur au drain) pour ne pas couper le
+drain. La séquence ECS/ALB est : l'ALB retire la tâche du target group (fin d'enregistrement,
+`deregistration_delay = 30 s`), **puis** ECS envoie `SIGTERM` à la tâche
+(`stopTimeout = 40 s`, supérieur au drain) ; les nouvelles requêtes cessent d'arriver avant le début
+du drain, et la tâche n'est tuée (`SIGKILL`) qu'après le `stopTimeout`.
 
-### 4.2 Service `ingestion`
+### 4.2 Service `ingestion` — cible V3, non provisionné en V2
 
-| Paramètre | Valeur initiale `test` |
+> **`V2-ADR-019` :** en V2, l'ingestion (parsing, chunking, embeddings, indexation) est assurée par
+> Bedrock Knowledge Bases (`V2-LLD-002` §5). Le service ECS ci-dessous **n'est pas déployé en V2**
+> (`enable_ingestion_service = false`) ; il est spécifié ici pour que la bascule V3 réutilise la
+> même plateforme sans reconception.
+
+| Paramètre | Valeur cible V3 |
 |---|---|
 | CPU | 1 024 (1 vCPU) |
 | Mémoire | 2 048 MB |
 | Network mode | `awsvpc` |
 | Subnets | `private-a`, `private-b` |
-| Task IAM Role | `ecs-task-role-ingestion` (§5.2) |
+| Task IAM Role | `ecs-task-role-ingestion` (§5.2, **V3**) |
 | Task Execution Role | `ecs-task-execution-role` |
 
 **Conteneurs :** même structure que `fastapi` (conteneur principal + sidecar ADOT).
 
 Logs : log group `/ecs/secure-agentcore-v2/ingestion`, rétention 30 jours.
 
-Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — déclenché par SQS).
+Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — déclenché par SQS en V3).
 
 ---
 
 ## 5. Task IAM Roles (least privilege)
 
-### 5.1 `ecs-task-role-fastapi`
+### 5.1 `ecs-task-role-fastapi` (V2)
+
+En V2, FastAPI est propriétaire du retrieval **via Knowledge Bases** (`V2-ADR-019`) : il appelle
+`Retrieve` (jamais `RetrieveAndGenerate`) et déclenche/suit les jobs d'ingestion KB. Il **n'accède
+pas directement à S3 Vectors** en V2 — cet accès est réservé à la cible V3 (§5.2). L'absence de
+`bedrock:RetrieveAndGenerate` dans la politique est un contrôle de sécurité (interdiction renforcée
+côté IAM, `V2-LLD-002` §6.1/§13.1).
 
 ```json
 {
@@ -196,26 +251,42 @@ Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — 
       "Resource": "arn:aws:bedrock-agentcore:eu-west-3:<account>:runtime/<runtime-id>"
     },
     {
+      "Sid": "KnowledgeBaseRetrieveV2",
+      "Effect": "Allow",
+      "Action": ["bedrock-agent-runtime:Retrieve"],
+      "Resource": "arn:aws:bedrock:eu-west-3:<account>:knowledge-base/<kb-id>"
+    },
+    {
+      "Sid": "KnowledgeBaseIngestionV2",
+      "Effect": "Allow",
+      "Action": ["bedrock-agent:StartIngestionJob", "bedrock-agent:GetIngestionJob",
+                 "bedrock-agent:ListIngestionJobs"],
+      "Resource": "arn:aws:bedrock:eu-west-3:<account>:knowledge-base/<kb-id>/data-source/<ds-id>"
+    },
+    {
       "Sid": "DynamoDBAccess",
       "Effect": "Allow",
       "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
                  "dynamodb:Query", "dynamodb:ConditionCheckItem"],
       "Resource": [
         "arn:aws:dynamodb:eu-west-3:<account>:table/v2-conversations",
-        "arn:aws:dynamodb:eu-west-3:<account>:table/v2-sessions"
+        "arn:aws:dynamodb:eu-west-3:<account>:table/v2-sessions",
+        "arn:aws:dynamodb:eu-west-3:<account>:table/<env>-documents",
+        "arn:aws:dynamodb:eu-west-3:<account>:table/<env>-documents/index/by-tenant",
+        "arn:aws:dynamodb:eu-west-3:<account>:table/<env>-idempotency-ledger"
       ]
     },
     {
-      "Sid": "S3VectorsRetrieval",
+      "Sid": "S3DocumentSource",
       "Effect": "Allow",
-      "Action": ["s3vectors:QueryVectors", "s3vectors:GetVectors"],
-      "Resource": "arn:aws:s3vectors:eu-west-3:<account>:bucket/<vectors-bucket>/index/<index-name>"
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:HeadObject"],
+      "Resource": "arn:aws:s3:::<env>-documents-<account>/*"
     },
     {
-      "Sid": "S3DocumentRead",
+      "Sid": "KmsDecryptDocuments",
       "Effect": "Allow",
-      "Action": ["s3:GetObject"],
-      "Resource": "arn:aws:s3:::v2-documents-<account>/*"
+      "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+      "Resource": "arn:aws:kms:eu-west-3:<account>:key/<documents-cmk-id>"
     },
     {
       "Sid": "SecretsManagerRead",
@@ -229,7 +300,7 @@ Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — 
       "Action": [
         "xray:PutTraceSegments", "xray:PutTelemetryRecords",
         "xray:GetSamplingRules", "xray:GetSamplingTargets",
-        "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"
+        "logs:CreateLogStream", "logs:PutLogEvents"
       ],
       "Resource": "*"
     }
@@ -237,7 +308,18 @@ Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — 
 }
 ```
 
-### 5.2 `ecs-task-role-ingestion`
+> **Note ARN KB :** l'ARN de ressource exact pour `bedrock-agent-runtime:Retrieve` et pour les
+> actions `bedrock-agent:*IngestionJob` est à confirmer contre la documentation IAM Bedrock à
+> l'implémentation (le format `knowledge-base/<id>` et `.../data-source/<id>` est la forme
+> attendue). Les noms de tables DynamoDB exacts sont fixés par `V2-LLD-006`.
+
+### 5.2 `ecs-task-role-ingestion` — cible V3, non créé en V2
+
+> **`V2-ADR-019` :** ce rôle accompagne le service ECS `ingestion` du pipeline applicatif V3
+> (consommation SQS, embeddings directs, écriture directe S3 Vectors). Il **n'est pas créé en V2** :
+> en V2, l'embedding et l'écriture de l'index sont assurés par le rôle d'exécution **de la
+> Knowledge Base** (géré par la config KB, distinct des rôles ECS — `V2-LLD-002` §13.1), pas par un
+> rôle de tâche ECS. La politique ci-dessous est la spécification cible V3.
 
 ```json
 {
@@ -311,14 +393,16 @@ Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — 
 | Direction | Protocol | Port | Source/Dest | Justification |
 |---|---|---|---|---|
 | Inbound | TCP | 8000 | `sg-alb-internal` | trafic applicatif depuis l'ALB |
-| Outbound | TCP | 443 | `sg-vpc-endpoints` | appels AWS (Secrets Manager, DynamoDB, S3, Bedrock, X-Ray, logs) |
-| Outbound | TCP | 443 | `0.0.0.0/0` via NAT | AgentCore Runtime si pas d'endpoint PrivateLink (exception documentée) |
+| Outbound | TCP | 443 | `sg-vpc-endpoints` | appels AWS (Secrets Manager, DynamoDB, S3, KB `Retrieve`/ingestion, Bedrock Runtime, X-Ray, logs) |
+| Outbound | TCP | 443 | `0.0.0.0/0` via NAT | **exception conditionnelle** : AgentCore Runtime si pas d'endpoint PrivateLink — supprimée dès qu'un endpoint existe, sous contrôles compensatoires (§2.3, §16.5) |
 
-### 6.3 `sg-ingestion`
+### 6.3 `sg-ingestion` — cible V3, non créé en V2
+
+> `V2-ADR-019` : ce Security Group accompagne le service `ingestion` V3 (§4.2). Non créé en V2.
 
 | Direction | Protocol | Port | Source/Dest | Justification |
 |---|---|---|---|---|
-| Inbound | — | — | — | aucune connexion entrante (déclenché par SQS) |
+| Inbound | — | — | — | aucune connexion entrante (déclenché par SQS en V3) |
 | Outbound | TCP | 443 | `sg-vpc-endpoints` | SQS, S3, DynamoDB, Bedrock, Secrets Manager, X-Ray, logs |
 
 ### 6.4 `sg-vpc-endpoints`
@@ -326,7 +410,7 @@ Le service `ingestion` peut scaler à 0 tâches (pas de trafic HTTP entrant — 
 | Direction | Protocol | Port | Source/Dest | Justification |
 |---|---|---|---|---|
 | Inbound | TCP | 443 | `sg-fastapi` | trafic AWS depuis FastAPI |
-| Inbound | TCP | 443 | `sg-ingestion` | trafic AWS depuis Ingestion |
+| Inbound | TCP | 443 | `sg-ingestion` | **V3 uniquement** : trafic AWS depuis Ingestion (règle ajoutée avec le service V3) |
 | Outbound | — | — | — | implicitement autorisé (endpoints managés AWS) |
 
 ---
@@ -424,9 +508,12 @@ CloudFront doit désactiver le cache sur les chemins `/api/*` et transmettre l'e
 
 Une tâche minimum est maintenue en permanence pour garantir la disponibilité sans cold start.
 
-### 9.2 Service `ingestion`
+### 9.2 Service `ingestion` — cible V3, non provisionné en V2
 
-| Paramètre | Valeur `test` |
+> `V2-ADR-019` : cet autoscaling pilote le service `ingestion` V3 sur la profondeur de file SQS.
+> Non provisionné en V2 (l'ingestion V2 est asynchrone côté KB, sans tâche ECS à scaler).
+
+| Paramètre | Valeur cible V3 |
 |---|---|
 | Minimum de tâches | 0 |
 | Maximum de tâches | 5 |
@@ -435,9 +522,9 @@ Une tâche minimum est maintenue en permanence pour garantir la disponibilité s
 | Cooldown scale-out | 60 s |
 | Cooldown scale-in | 300 s |
 
-Le service peut scaler à 0 quand la file SQS est vide — coût nul hors traitement. La métrique
+En V3, le service scale à 0 quand la file SQS est vide — coût nul hors traitement. La métrique
 CloudWatch `ApproximateNumberOfMessagesVisible` est la seule source de décision ; le détail du
-déclenchement est précisé en LLD-002.
+déclenchement est précisé en LLD-002 §18 (trajectoire V3).
 
 ---
 
@@ -503,9 +590,13 @@ Ceci est géré par Terraform (`V2-ADR-009`) via mise à jour de la variable `ta
 | Cible | Mécanisme |
 |---|---|
 | Secrets (variables d'application) | Secrets Manager, chiffré par KMS CMK dédié |
-| Logs CloudWatch | chiffrement côté serveur AWS (SSE-S3 par défaut, KMS CMK optionnel) |
+| Logs CloudWatch (`/ecs/secure-agentcore-v2/*`) | **chiffrés par CMK dédiée** (`kms_key_id` sur le log group) — cohérent avec la politique CMK de `V2-LLD-006` §11 ; les logs applicatifs peuvent contenir des identifiants de session/tenant même redacted |
 | Trafic réseau interne VPC | HTTPS entre ALB et FastAPI (TLS 1.2 minimum) |
 | Images ECR | scan automatique à chaque push, chiffrement at rest |
+
+Le rôle de tâche (§5.1) doit alors inclure `kms:Decrypt`/`kms:GenerateDataKey` sur la CMK des logs
+en plus de celle des documents ; le rôle d'exécution ECS (`ecs-task-execution-role`) doit pouvoir
+chiffrer via cette CMK pour écrire dans le log group.
 
 ### 12.2 Isolation réseau
 
@@ -530,7 +621,8 @@ Ceci est géré par Terraform (`V2-ADR-009`) via mise à jour de la variable `ta
 | Panne d'une AZ | Les tâches survivantes dans l'autre AZ absorbent le trafic ; ECS replanning automatique ; NAT Gateway unique = risque accepté en `test` |
 | Échec de déploiement | Circuit breaker ECS déclenche un rollback automatique vers la révision précédente |
 | Tâche FastAPI en erreur | ALB retire la tâche du target group (health check échoué) ; autoscaling lance un remplacement |
-| File SQS vide | Service `ingestion` scale à 0 tâche ; pas de consommation de ressources |
+| Ingestion KB indisponible (V2) | Le suivi documentaire reflète `failed` ; réessai borné (`V2-LLD-002` §14) ; aucune tâche ECS à superviser |
+| File SQS vide (V3) | Service `ingestion` scale à 0 tâche ; pas de consommation de ressources |
 | Endpoint AWS indisponible (transitoire) | Retry avec backoff exponentiel et jitter dans le code applicatif ; aucun retry au niveau plateforme |
 | Secrets Manager indisponible | La tâche échoue à démarrer (comportement fail-closed) ; aucun secret en clair en fallback |
 
@@ -566,9 +658,15 @@ Voir LLD-007 pour le détail de l'instrumentation OTel et les SLO.
 | VPC Interface endpoints | ~7,30 USD × 10 endpoints | ~73 USD |
 | ALB interne | ~16 USD + LCU | trafic minimal |
 | ECS Fargate — service `fastapi` (1 tâche 0,5 vCPU / 1 GB) | ~15 USD | 730 h/mois |
-| ECS Fargate — service `ingestion` (0 tâche au repos) | ~0 USD | scale à 0 |
+| ECS Fargate — service `ingestion` | ~0 USD (V2 : non provisionné) | V3 : scale à 0 au repos |
+| Bedrock Knowledge Bases (ingestion + `Retrieve`) | à la consommation | **coût RAG V2**, détaillé en `V2-LLD-002` §15.3 |
 | ECR stockage | ~1 USD | ~10 GB images |
-| **Total minimum (`enable_ecs_platform = true`)** | **~137 USD/mois** | hors trafic |
+| **Total minimum (`enable_ecs_platform = true`)** | **~137 USD/mois** | hors trafic et hors coûts KB |
+
+> Le coût du RAG en V2 (KB + S3 Vectors + embeddings) est porté par `V2-LLD-002` §15.3, pas par la
+> plateforme : la V2 ne provisionne pas de service ECS `ingestion`. L'endpoint interface SQS
+> (~7,30 USD/mois) n'est pas non plus provisionné en V2, ce qui abaisse le nombre d'endpoints
+> facturés (§2.3).
 
 Différentiel avec l'option EKS écartée (`V2-ADR-007`) : EKS facture un control plane à ~73 USD/mois
 indépendamment du trafic, portant le plancher mensuel à ~210 USD pour un profil identique.
@@ -663,13 +761,31 @@ infra/modules/vpc_ecs_platform/
 Nouvelles variables dans `infra/environments/test/variables.tf` :
 
 ```hcl
-variable "enable_ecs_platform" { type = bool; default = false }
-variable "vpc_cidr"            { type = string; default = "10.0.0.0/16" }
-variable "availability_zones"  { type = list(string); default = ["eu-west-3a", "eu-west-3b"] }
-variable "nat_gateway_count"   { type = number; default = 1 }
-variable "fastapi_image_tag"   { type = string }
+variable "enable_ecs_platform"      { type = bool; default = false }
+variable "enable_ingestion_service" { type = bool; default = false }  # V3 (V2-ADR-019) — jamais true en V2
+variable "vpc_cidr"                 { type = string; default = "10.0.0.0/16" }
+variable "availability_zones"       { type = list(string); default = ["eu-west-3a", "eu-west-3b"] }
+variable "nat_gateway_count"        { type = number; default = 1 }
+variable "fastapi_image_tag"        { type = string }
 variable "fastapi_task_definition_revision" { type = number; default = null }
+variable "logs_kms_key_arn"         { type = string }  # CMK des log groups (§12.1)
 ```
 
-`scripts/terraform_plan_guard.py` doit être étendu pour couvrir les nouvelles ressources réseau et
-ECS au même titre que DynamoDB et S3 (conformément à la conséquence listée dans `V2-ADR-007`).
+Le flag `enable_ingestion_service` conditionne la création du service ECS `ingestion`, son rôle IAM,
+son `sg-ingestion`, son autoscaling SQS et l'endpoint interface SQS (tous §4.2/§5.2/§6.3/§9.2). Il
+reste `false` en V2 : aucune de ces ressources n'est provisionnée tant que la V2 utilise KB
+(`V2-ADR-019`). `scripts/terraform_plan_guard.py` doit vérifier que `enable_ingestion_service` n'est
+pas mis à `true` dans un environnement V2, et couvrir les nouvelles ressources réseau et ECS au même
+titre que DynamoDB et S3 (conséquence listée dans `V2-ADR-007`).
+
+### 16.5 Préconditions de vérification avant implémentation
+
+Deux points doivent être vérifiés **avant** de provisionner la plateforme, et tracés comme preuves :
+
+1. **Disponibilité KB + S3 Vectors en `eu-west-3`** (`V2-ADR-019`) : condition d'activation de tout
+   le phasage RAG V2. Si non confirmée, l'ingestion V2 bascule sur le pipeline applicatif
+   (`enable_ingestion_service = true`) et le rôle §5.2 devient actif — décision explicite, pas
+   silencieuse.
+2. **Endpoint PrivateLink AgentCore Runtime** (§2.3, §6.2) : si disponible, ajouter l'endpoint et
+   supprimer la règle egress `0.0.0.0/0` ; sinon, activer les contrôles compensatoires (VPC Flow
+   Logs + alerte) et acter formellement le risque résiduel `test`.

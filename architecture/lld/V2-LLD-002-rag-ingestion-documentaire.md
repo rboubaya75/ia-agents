@@ -1,12 +1,17 @@
 # V2-LLD-002 — RAG et ingestion documentaire
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§6.2, §9)
 - **ADR de référence :** `V2-ADR-019` (décision de phasage), `V2-ADR-003`, `V2-ADR-004`,
   `V2-ADR-006`, `V2-ADR-010`, `V2-ADR-013`, `V2-ADR-017`, `V2-ADR-018`
 - **Gate :** V2-G2
+
+> **Révision v0.2 (revue PR #35) :** contrat antivirus clarifié (verdict consommé de `V2-LLD-005`,
+> retrait du « worker » non défini) ; mécanisme de réconciliation des jobs KB tranché (reconciler
+> planifié, §5.1) ; préfixes IAM Bedrock corrigés (`bedrock-agent-runtime:Retrieve`,
+> `bedrock-agent:*IngestionJob`, §13.1) ; précondition de disponibilité KB+S3V explicitée (§1.6).
 
 ## 1. Métadonnées
 
@@ -65,6 +70,20 @@ cible et ne sont **pas** provisionnés en V2.
 Ce LLD **réalise `V2-ADR-019`**. Toute divergence entre la description d'ingestion de `V2-ADR-003`/
 `V2-ADR-004` (pipeline applicatif) et le présent LLD (KB) est résolue en faveur de `V2-ADR-019`
 **pour la phase V2**. La section 18 rappelle la trajectoire de bascule vers la cible V3.
+
+### 1.6 Précondition bloquante — disponibilité KB + S3 Vectors en `eu-west-3`
+
+`V2-ADR-019` conditionne tout ce LLD à une **précondition de vérification** : la disponibilité de
+Bedrock Knowledge Bases adossé à S3 Vectors dans la région `eu-west-3`. Cette précondition n'est
+**pas encore prouvée dans la PR** ; elle doit l'être avant tout début d'implémentation (gate G2) :
+
+- **preuve attendue** : création effective d'une KB de test adossée à S3 Vectors en `eu-west-3`, ou
+  confirmation documentée de la disponibilité régionale de la fonctionnalité (référence AWS datée) ;
+- **si la précondition n'est pas levée** : l'ingestion V2 bascule sur le pipeline applicatif
+  (`V2-ADR-003`/`V2-ADR-004`, `enable_ingestion_service = true` dans `V2-LLD-001`) — décision
+  explicite, sans nouvel ADR (`V2-ADR-019` le prévoit) ;
+- tant que la précondition n'est pas tranchée, les sections 5, 6, 7 et 13 de ce LLD sont **en
+  attente de confirmation**, pas approuvées pour implémentation.
 
 ## 2. Architecture d'ensemble
 
@@ -128,21 +147,31 @@ capacités de la data source KB, à confirmer en preuve avant activation).
 ### 3.2 Upload et quarantaine
 
 ```text
-POST /documents (multipart, FastAPI)
+POST /documents (multipart, FastAPI) — chemin synchrone
   1. Auth JWT validée + résolution tenant côté serveur
   2. Validation type/taille/magic-bytes  -> rejet 415/413 si invalide
   3. documentId = UUID v4 (généré serveur) ; version = 1
   4. PUT S3 préfixe quarantaine : s3://<bucket>/quarantine/<tenantId>/<documentId>/v1/<filename>
   5. Écriture DynamoDB documents : status = "uploaded", creationOperationId
-  6. Scan antivirus (worker de validation) -> "validated" | "quarantined"
-  7. Si validated : copie vers préfixe définitif s3://<bucket>/sources/<tenantId>/<documentId>/v1/
-  8. Déclenchement ingestion KB (section 5)
-  9. Réponse 202 { documentId, operationId, status: "ingesting" }
+  6. Réponse 202 { documentId, operationId, status: "uploaded" }
+     (l'objet n'est PAS encore requêtable ; il attend le verdict de validation)
+
+Verdict de validation (asynchrone, contrôle possédé par V2-LLD-005) :
+  7. Le contrôle de sécurité des uploads (antivirus + validation approfondie) émet un verdict
+     "validated" | "quarantined" pour l'objet en quarantaine.
+  8. Sur "validated" : FastAPI copie vers le préfixe définitif
+     s3://<bucket>/sources/<tenantId>/<documentId>/v1/ + génère <filename>.metadata.json (§5.3),
+     documents.status = "validated", puis déclenche l'ingestion KB (section 5) -> "ingesting".
+  9. Sur "quarantined" : documents.status = "quarantined" ; l'objet reste en quarantaine.
 ```
 
-Un document rejeté ou infecté reste en quarantaine avec purge par politique de cycle de vie S3
-(TTL défini en `V2-LLD-006`). L'antivirus est un contrôle de `V2-LLD-005` ; ce LLD en consomme le
-verdict.
+**Frontière de responsabilité (B3, revue PR #35) :** le *mécanisme* d'analyse des uploads
+(moteur antivirus, compute qui l'exécute, déclenchement sur dépôt S3) est **possédé par
+`V2-LLD-005`** (sécurité des uploads). Ce LLD **ne définit pas** de « worker » d'analyse : il définit
+seulement le **contrat de verdict** qu'il consomme (`validated` | `quarantined`) et les transitions
+d'état `documents` associées. Le verdict est asynchrone : un document reste en `uploaded` jusqu'à
+réception du verdict, puis passe `validated` (et enchaîne l'ingestion) ou `quarantined`. Un document
+`quarantined` reste en quarantaine avec purge par cycle de vie S3 (TTL défini en `V2-LLD-006`).
 
 ## 4. Stockage
 
@@ -201,16 +230,35 @@ FastAPI (après validation) :
   2. documents.kbIngestionJobId = job.id ; status = "ingesting"
   3. Réponse 202 { documentId, operationId, status: "ingesting" }
 
-Réconciliation (poll ou event) :
-  4. kb.GetIngestionJob(job.id) -> COMPLETE | FAILED
+Réconciliation (reconciler planifié — voir ci-dessous) :
+  4. pour chaque documents.status = "ingesting" : kb.GetIngestionJob(jobId) -> COMPLETE | FAILED | IN_PROGRESS
   5. COMPLETE : status = "indexed", chunkCount renseigné (best effort)
      FAILED   : status = "failed", raison journalisée (redacted)
+     IN_PROGRESS : inchangé (repris au prochain tick)
 ```
 
+**Mécanisme de réconciliation retenu (M5, revue PR #35) — reconciler planifié.** La transition
+`ingesting -> indexed | failed` est effectuée par une tâche de réconciliation **déclenchée
+périodiquement** (EventBridge Scheduler, période initiale 60 s en `test`), et **non** par un poll
+in-request FastAPI ni par une dépendance à des événements de complétion émis par KB :
+
+- **pas de poll in-request** : la latence de réponse HTTP ne doit pas être couplée à la durée du job
+  KB (le chemin d'upload répond `202` immédiatement, §5.1 étape 3) ;
+- **pas de dépendance aux events KB** : l'émission d'événements de complétion de job d'ingestion par
+  Bedrock KB n'est pas garantie dans le périmètre du projet ; s'y adosser introduirait une
+  dépendance non vérifiée. Si ces événements sont confirmés disponibles ultérieurement, le
+  reconciler peut être complété par un déclenchement événementiel **sans changer le contrat d'état**
+  (le tick planifié reste le filet de sécurité) ;
+- le reconciler interroge `GetIngestionJob` pour les seuls documents en `ingesting` (borne la charge
+  sur l'API KB), et est **idempotent** : rejouer un tick sur un document déjà `indexed` est un no-op.
+
+Le reconciler s'exécute dans le service `fastapi` (tâche de fond) en V2 — aucun service ECS
+supplémentaire n'est requis. Son ARN de scheduler et sa cible sont provisionnés par Terraform.
+
 **Latence assumée (`V2-ADR-019`) :** un document uploadé n'est pas requêtable en quelques secondes
-mais après le job KB (ordre de la minute). Le suivi d'état exposé à l'utilisateur (HLD §6.2) reflète
-`ingesting` jusqu'à la complétion du job. Aucune requête ne doit renvoyer de citation vers un
-document en `ingesting`.
+mais après le job KB (ordre de la minute) plus le délai du prochain tick de réconciliation. Le suivi
+d'état exposé à l'utilisateur (HLD §6.2) reflète `ingesting` jusqu'à la complétion du job. Aucune
+requête ne doit renvoyer de citation vers un document en `ingesting`.
 
 ### 5.2 Configuration de la data source KB
 
@@ -411,12 +459,19 @@ sont retournés mais filtrés côté FastAPI.
 
 ### 13.1 IAM (least privilege)
 
-- **Rôle FastAPI** (`V2-LLD-001`) : `bedrock:Retrieve` sur l'ARN de la KB, `bedrock:StartIngestionJob`
-  / `bedrock:GetIngestionJob` sur la data source, lecture/écriture `documents`, lecture/écriture S3
-  source, `kms:Decrypt` sur la clé du bucket. **Pas** de `bedrock:RetrieveAndGenerate` dans la
-  politique (interdiction §6.1 renforcée par IAM).
+- **Rôle FastAPI** (`V2-LLD-001` §5.1) : `bedrock-agent-runtime:Retrieve` sur l'ARN de la KB,
+  `bedrock-agent:StartIngestionJob` / `bedrock-agent:GetIngestionJob` / `bedrock-agent:ListIngestionJobs`
+  sur la data source, lecture/écriture `documents`, lecture/écriture S3 source, `kms:Decrypt` sur la
+  CMK du bucket. **Pas** de `bedrock-agent-runtime:RetrieveAndGenerate` dans la politique
+  (interdiction §6.1 renforcée par IAM). **Pas** d'action `s3vectors:*` en V2 (l'accès direct S3
+  Vectors est réservé à la cible V3).
 - **Rôle d'exécution KB** : lecture S3 source, écriture index S3 Vectors, invocation du modèle
-  d'embedding — géré par la configuration de la KB, distinct du rôle FastAPI.
+  d'embedding — géré par la configuration de la KB, distinct du rôle FastAPI et du rôle de tâche ECS.
+
+> **Préfixes IAM (O2, revue PR #35) :** les actions Bedrock KB relèvent des services
+> `bedrock-agent-runtime` (plan d'exécution : `Retrieve`) et `bedrock-agent` (plan de contrôle :
+> `*IngestionJob`), **pas** du service `bedrock` (réservé à l'invocation de modèles). Les ARN de
+> ressource exacts sont à confirmer contre la documentation IAM Bedrock à l'implémentation.
 
 ### 13.2 Chiffrement
 

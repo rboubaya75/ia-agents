@@ -1,6 +1,10 @@
 # V2-ADR-019 — Phasage de livraison du RAG (Knowledge Bases en V2, pipeline applicatif en V3)
 
-- **Statut :** Accepted
+- **Statut :** Accepted (décision d'architecture) — **activation conditionnée à une précondition
+  non encore prouvée** : disponibilité de Bedrock Knowledge Bases adossé à S3 Vectors en `eu-west-3`
+  (voir « Décision » et « Preuves attendues »). Tant que cette preuve n'est pas produite,
+  l'implémentation V2 ne peut pas démarrer sur KB ; le repli `V2-ADR-003`/`V2-ADR-004` s'applique
+  sans nouvel ADR.
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-002, V2-ADR-003, V2-ADR-004, V2-ADR-006
