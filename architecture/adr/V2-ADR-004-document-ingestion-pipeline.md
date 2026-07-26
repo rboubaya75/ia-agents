@@ -1,9 +1,14 @@
 # V2-ADR-004 — Pipeline d'ingestion documentaire
 
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-002, V2-ADR-003, V2-ADR-006, V2-ADR-007
+- **Phasage :** cet ADR décrit la **cible V3**. Pour la phase V2, `V2-ADR-019` supersede ce
+  pipeline : l'ingestion (parsing, chunking, embeddings, indexation) est assurée par Bedrock
+  Knowledge Bases via `StartIngestionJob`, et le module SQS + worker ECS `ingestion` n'est pas
+  provisionné en V2. Les exigences d'idempotence, de reprise et de suppression sans orphelin
+  ci-dessous s'appliquent à la cible V3.
 
 ## Contexte
 

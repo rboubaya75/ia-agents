@@ -29,7 +29,7 @@ La V2 respecte les choix techniques suivants :
 - Bedrock AgentCore Runtime comme runtime d’exécution uniquement ;
 - Bedrock Converse API pour l’accès aux modèles ;
 - embeddings Bedrock configurables ;
-- RAG applicatif avec S3 Vectors, DynamoDB et S3 ;
+- RAG fondé sur S3 Vectors : Bedrock Knowledge Bases en phase V2, pipeline applicatif S3 / S3 Vectors / DynamoDB en cible V3 (`V2-ADR-019`) ;
 - Cognito pour l’authentification ;
 - React, TypeScript et Vite ;
 - frontend sur S3 privé, CloudFront et WAF ;
@@ -42,8 +42,8 @@ La V2 respecte les choix techniques suivants :
 Sont exclus :
 
 - Bedrock managed Agents ;
-- Bedrock Knowledge Bases ;
-- OpenSearch Serverless.
+- OpenSearch Serverless ;
+- pipeline RAG applicatif complet en phase V2 (différé à la cible V3, `V2-ADR-019`).
 
 ## 4. Documents de cadrage
 

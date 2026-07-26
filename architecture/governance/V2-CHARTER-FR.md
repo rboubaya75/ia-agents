@@ -64,7 +64,7 @@ La V1 n’est pas modifiée rétroactivement :
 - adapter optionnel Strands ou LangGraph ;
 - AgentCore Runtime comme runtime d’exécution ;
 - Bedrock Converse API ;
-- RAG applicatif S3, S3 Vectors et DynamoDB ;
+- RAG : Bedrock Knowledge Bases adossé à S3 Vectors en phase V2, pipeline applicatif S3 / S3 Vectors / DynamoDB en cible V3 (`V2-ADR-019`) ;
 - pipeline d’ingestion documentaire ;
 - AgentCore Gateway MCP et tools V2 ;
 - frontend React V2 ;
@@ -77,8 +77,8 @@ La V1 n’est pas modifiée rétroactivement :
 ### 4.2 Hors périmètre initial
 
 - Bedrock managed Agents ;
-- Bedrock Knowledge Bases ;
 - OpenSearch Serverless ;
+- pipeline RAG applicatif complet (parsing, chunking et indexation propres) en phase V2 — différé à la cible V3 (`V2-ADR-019`), la V2 s'appuyant sur Bedrock Knowledge Bases adossé à S3 Vectors ;
 - engagement de production réel ;
 - organisation ou gouvernance client inventée ;
 - multi-région actif/actif sans exigence justificative ;
@@ -94,7 +94,7 @@ La V1 n’est pas modifiée rétroactivement :
 | V2-ARCH-003 | AgentCore Runtime est utilisé uniquement comme runtime d’exécution d’agents custom. |
 | V2-ARCH-004 | Les frameworks d’agents sont encapsulés derrière un adapter optionnel. |
 | V2-ARCH-005 | Le backend applicatif cible FastAPI sur Amazon ECS, launch type Fargate (cf. `V2-ADR-007` pour la comparaison de plateformes et sa justification). |
-| V2-ARCH-006 | Le RAG est applicatif et repose sur S3 Vectors, DynamoDB et S3. |
+| V2-ARCH-006 | Le RAG repose sur S3 Vectors comme magasin vectoriel. En phase V2, l'ingestion et le retrieval passent par Bedrock Knowledge Bases adossé à S3 Vectors, FastAPI conservant la propriété du filtrage tenant/ACL et de la construction du contexte ; le pipeline entièrement applicatif est la cible V3 (cf. `V2-ADR-019`, `V2-ADR-003`, `V2-ADR-004`). |
 | V2-ARCH-007 | Les modèles sont invoqués via Bedrock Converse API. |
 | V2-ARCH-008 | Les tools sont exposés et gouvernés via AgentCore Gateway MCP. |
 | V2-ARCH-009 | Terraform est le mécanisme déclaratif de référence ; les définitions de tâches et services ECS sont pilotées directement par Terraform, sans couche de templating additionnelle. Helm, spécifique à Kubernetes, est sans objet avec ECS et ne redeviendrait pertinent qu’en cas de migration future vers EKS. |

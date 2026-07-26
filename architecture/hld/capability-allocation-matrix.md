@@ -250,8 +250,8 @@ Elles constituent des violations de gouvernance bloquantes en revue de code.
 - calcul de l'autorisation tenant (propriétaire : FastAPI — Domaine 1) ;
 - exposition directe au navigateur (propriétaire : API Gateway / FastAPI — Domaines 1 et 2) ;
 - stockage transactionnel des données métier dans Memory (propriétaire : DynamoDB — Domaine 8) ;
-- dépendance directe à Bedrock Knowledge Bases ou managed Agents (exclus par V2-CHARTER) ;
-- retrieval ou indexation vectorielle (propriétaire : FastAPI — Domaine 4).
+- dépendance à Bedrock managed Agents (exclu par V2-CHARTER) ; usage de Bedrock Knowledge Bases via `RetrieveAndGenerate` ou tout accès qui contourne FastAPI (en phase V2, KB est autorisé par `V2-ADR-019` uniquement adossé à S3 Vectors et via l'API `Retrieve`, FastAPI conservant le filtrage tenant/ACL) ;
+- retrieval ou indexation vectorielle échappant à la propriété FastAPI (Domaine 4) : en phase V2 l'indexation et le retrieval de bas niveau sont exécutés par Knowledge Bases, mais FastAPI reste propriétaire du filtrage d'autorisation et de la construction du contexte ; en cible V3 FastAPI exécute directement le retrieval sur S3 Vectors (`V2-ADR-019`).
 
 ## 4. Dégradation contrôlée
 

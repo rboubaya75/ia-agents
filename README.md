@@ -43,7 +43,7 @@ Exigences
 - Bedrock AgentCore Runtime comme runtime d’exécution uniquement ;
 - Bedrock Converse API ;
 - embeddings Bedrock configurables ;
-- RAG applicatif avec S3 Vectors, DynamoDB et S3 ;
+- RAG fondé sur S3 Vectors : Bedrock Knowledge Bases en phase V2, pipeline applicatif S3 / S3 Vectors / DynamoDB en cible V3 (`V2-ADR-019`) ;
 - Cognito ;
 - React, TypeScript et Vite ;
 - frontend S3 privé, CloudFront et WAF ;
@@ -56,8 +56,8 @@ Exigences
 Sont explicitement exclus :
 
 - Bedrock managed Agents ;
-- Bedrock Knowledge Bases ;
-- OpenSearch Serverless.
+- OpenSearch Serverless ;
+- pipeline RAG applicatif complet en phase V2 (différé à la cible V3, `V2-ADR-019`).
 
 ## Architecture To-Be initiale
 

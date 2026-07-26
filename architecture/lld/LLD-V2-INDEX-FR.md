@@ -1,6 +1,6 @@
 # Catalogue des LLD — Secure AgentCore V2
 
-- **Version :** 0.2
+- **Version :** 0.5
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md`
@@ -20,24 +20,24 @@ Un composant structurant ne peut être implémenté que si :
 4. les exigences, risques et critères de test sont traçables ;
 5. les risques résiduels sont acceptés ou associés à un plan de traitement.
 
-Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu’elle affecte la tranche considérée. Un ADR complémentaire non applicable doit être explicitement marqué `Non applicable` dans le LLD, avec justification.
+Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu'elle affecte la tranche considérée. Un ADR complémentaire non applicable doit être explicitement marqué `Non applicable` dans le LLD, avec justification.
 
 ## 3. Catalogue canonique et dépendances ADR
 
 | ID | LLD | Portée | Dépendances ADR exactes | Statut |
 |---|---|---|---|---|
-| V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, DNS, IAM workload, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009 | À créer |
-| V2-LLD-002 | RAG et ingestion documentaire | S3, parsing, chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-017, V2-ADR-018 | À créer |
+| V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, DNS, IAM workload, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-019 | v0.2 (Draft) |
+| V2-LLD-002 | RAG et ingestion documentaire | S3, ingestion KB (V2) / applicative (V3), chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-017, V2-ADR-018 | v0.3 (Draft) |
 | V2-LLD-003 | Agents et orchestration | `/agents`, adapter, Converse API, prompts, budgets, fallback | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-012 | À créer |
 | V2-LLD-004 | AgentCore Gateway MCP et tools | catalogue, schémas, IAM, confirmation, idempotence, retry | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-014 | À créer |
 | V2-LLD-005 | Identité, sécurité et conformité | Cognito, autorisation, tenant, KMS, WAF, threat model, audit | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-010, V2-ADR-014, V2-ADR-015, V2-ADR-016, V2-ADR-017 | À créer |
-| V2-LLD-006 | Données, mémoire, rétention et restauration | modèles, cycle de vie, TTL, backup, effacement, réhydratation | V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-015, V2-ADR-017 | À créer |
+| V2-LLD-006 | Données, mémoire, rétention et restauration | modèles, cycle de vie, TTL, backup, effacement, réhydratation | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-015, V2-ADR-017 | v0.2 (Draft) |
 | V2-LLD-007 | Observabilité, SLO et FinOps | OTel, CloudWatch, corrélation, alertes, coûts, SLO | V2-ADR-002, V2-ADR-003, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-009, V2-ADR-012, V2-ADR-013 | À créer |
 | V2-LLD-008 | CI/CD, Terraform et promotion | GitLab CI, OIDC, artefacts, scans, plan, rollback | V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-010 | À créer |
-| V2-LLD-009 | Stratégie de tests et preuves | pyramide, datasets, E2E, sécurité, charge, chaos, DR | V2-ADR-001 à V2-ADR-018 selon applicabilité, avec V2-ADR-018 obligatoire pour le RAG | À créer |
+| V2-LLD-009 | Stratégie de tests et preuves | pyramide, datasets, E2E, sécurité, charge, chaos, DR | V2-ADR-001 à V2-ADR-019 selon applicabilité, avec V2-ADR-018 obligatoire pour le RAG | À créer |
 | V2-LLD-010 | Frontend React V2 | streaming, uploads, citations, auth, reprise, accessibilité | V2-ADR-001, V2-ADR-002, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-014, V2-ADR-016 | À créer |
 
-## 4. Structure minimale d’un LLD
+## 4. Structure minimale d'un LLD
 
 ### 4.1 Métadonnées
 
@@ -58,10 +58,10 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu’elle affec
 ### 4.3 Contrats
 
 - OpenAPI, événements ou schémas MCP ;
-- formats d’identifiants ;
+- formats d'identifiants ;
 - validation et champs interdits ;
 - versionnement et compatibilité ;
-- codes d’erreur ;
+- codes d'erreur ;
 - idempotence et sémantique de retry.
 
 ### 4.4 Configuration
@@ -115,7 +115,7 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu’elle affec
 - runbooks ;
 - procédures de déploiement et rollback ;
 - diagnostic et maintenance ;
-- responsabilités techniques sans inventer d’organisation réelle.
+- responsabilités techniques sans inventer d'organisation réelle.
 
 ## 5. Attendus par LLD
 
@@ -125,7 +125,9 @@ Doit définir : topologie VPC et subnets, endpoints AWS, egress, dimensionnement
 
 ### V2-LLD-002 — RAG et ingestion
 
-Doit définir : formats et tailles, upload et quarantaine, validation et antivirus, parsing, chunking versionné, embeddings Bedrock configurables, schéma S3 Vectors, métadonnées DynamoDB, idempotence, suppression, réindexation, réhydratation, filtres d’isolation, citations, dataset et métriques d’évaluation.
+Doit définir : formats et tailles, upload et quarantaine, validation et antivirus, parsing, chunking versionné, embeddings Bedrock configurables, schéma S3 Vectors, métadonnées DynamoDB, idempotence, suppression, réindexation, réhydratation, filtres d'isolation, citations, dataset et métriques d'évaluation.
+
+Conformément à `V2-ADR-019`, la phase V2 délègue l'ingestion et l'indexation à Bedrock Knowledge Bases adossé à S3 Vectors (FastAPI conservant l'API `Retrieve` uniquement, le post-filtrage tenant/ACL, le `retrievalContext` et les citations) ; le pipeline applicatif SQS + worker ECS de `V2-ADR-003`/`V2-ADR-004` reste la cible V3, réversible via un adapter de magasin vectoriel unique.
 
 ### V2-LLD-003 — Agents et orchestration
 
@@ -133,7 +135,7 @@ Doit définir : arborescence `/agents`, interfaces du domaine, adapter Strands/L
 
 ### V2-LLD-004 — MCP et tools
 
-Doit définir : catalogue et versionnement, schémas stricts, IAM et resource policies, identité injectée côté serveur, séparation lecture/mutation, confirmation liée à une commande, ledger d’idempotence, retry avant effet de bord uniquement, circuit breaker, versions MCP, logs redacted et preuves.
+Doit définir : catalogue et versionnement, schémas stricts, IAM et resource policies, identité injectée côté serveur, séparation lecture/mutation, confirmation liée à une commande, ledger d'idempotence, retry avant effet de bord uniquement, circuit breaker, versions MCP, logs redacted et preuves.
 
 ### V2-LLD-005 — Identité, sécurité et conformité
 
@@ -142,6 +144,8 @@ Doit définir : modèle utilisateur/tenant, claims, scopes, rôles, threat model
 ### V2-LLD-006 — Données et restauration
 
 Doit définir : modèles DynamoDB, clés/index/transactions, catégories de données, TTL, conservation, versioning S3, PITR, Memory, suppression utilisateur, restauration, réhydratation S3 Vectors et cohérence source/métadonnées/index.
+
+Conformément à `V2-ADR-019`, la réhydratation S3 Vectors en V2 s'exécute par resynchronisation de la data source Knowledge Bases (`StartIngestionJob`) ; le pipeline applicatif SQS + worker ECS de `V2-ADR-004` reste la cible V3 pour la ré-ingestion massive.
 
 ### V2-LLD-007 — Observabilité et FinOps
 
@@ -157,7 +161,7 @@ Doit définir : identifiants de risques, matrice de traçabilité, tests unitair
 
 ### V2-LLD-010 — Frontend
 
-Doit définir : architecture React, streaming, citations, upload, suivi d’ingestion, historique, préférences, renouvellement de token, reprise des opérations ambiguës, confirmations, sécurité navigateur, accessibilité et tests.
+Doit définir : architecture React, streaming, citations, upload, suivi d'ingestion, historique, préférences, renouvellement de token, reprise des opérations ambiguës, confirmations, sécurité navigateur, accessibilité et tests.
 
 ## 6. Ordre de production recommandé
 
@@ -181,7 +185,7 @@ Les LLD peuvent progresser en parallèle lorsque leurs ADR et dépendances sont 
 - aucun contrat critique ne reste implicite ;
 - les contrôles IAM, réseau, données et sécurité sont détaillés ;
 - les tests sont identifiés avant le code ;
-- les procédures de rollback et d’exploitation existent ;
+- les procédures de rollback et d'exploitation existent ;
 - les coûts et limites sont documentés ;
 - chaque dépendance ADR est identifiée par son ID exact ;
 - les divergences avec le HLD sont résolues par amendement ou ADR.

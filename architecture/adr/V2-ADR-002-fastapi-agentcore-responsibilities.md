@@ -1,7 +1,7 @@
 # V2-ADR-002 — Répartition FastAPI et AgentCore Runtime
 
 - **Version :** 0.4
-- **Statut :** Proposed
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** V2-ADR-001, V2-ADR-003, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011
