@@ -1,6 +1,6 @@
 # V2-LLD-002 — RAG et ingestion documentaire
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§6.2, §9)
@@ -8,10 +8,15 @@
   `V2-ADR-006`, `V2-ADR-010`, `V2-ADR-013`, `V2-ADR-017`, `V2-ADR-018`
 - **Gate :** V2-G2
 
-> **Révision v0.2 (revue PR #35) :** contrat antivirus clarifié (verdict consommé de `V2-LLD-005`,
-> retrait du « worker » non défini) ; mécanisme de réconciliation des jobs KB tranché (reconciler
-> planifié, §5.1) ; préfixes IAM Bedrock corrigés (`bedrock-agent-runtime:Retrieve`,
-> `bedrock-agent:*IngestionJob`, §13.1) ; précondition de disponibilité KB+S3V explicitée (§1.6).
+> **Révision v0.2 (revue PR #35, bloquants/majeurs) :** contrat antivirus clarifié (verdict consommé
+> de `V2-LLD-005`, retrait du « worker » non défini) ; mécanisme de réconciliation des jobs KB
+> tranché (reconciler planifié, §5.1) ; préfixes IAM Bedrock corrigés
+> (`bedrock-agent-runtime:Retrieve`, `bedrock-agent:*IngestionJob`, §13.1) ; précondition de
+> disponibilité KB+S3V explicitée (§1.6).
+>
+> **Révision v0.3 (revue PR #35, observations) :** distinction `skipped/no_match` vs
+> `skipped/filtered_out` avec seuils d'alerte distincts (§6.2.1, §15.1) ; cohérence de la précondition
+> KB+S3V dans la config data source (§5.2).
 
 ## 1. Métadonnées
 
@@ -267,7 +272,7 @@ Paramètres fixés par configuration (Terraform, jamais codés en dur), traçés
 | Paramètre | Valeur V2 | Justification |
 |---|---|---|
 | Vector store | S3 Vectors | `V2-ADR-019` — pas d'OpenSearch Serverless |
-| Région | `eu-west-3` | Disponibilité KB+S3V confirmée (précondition `V2-ADR-019` levée) |
+| Région | `eu-west-3` | Sous réserve de la précondition `V2-ADR-019` (disponibilité KB+S3V à prouver avant implémentation, §1.6) |
 | Stratégie de chunking | fixe, taille + recouvrement configurés | reproductibilité ; `chunkerVersion` non géré par KB en V2 (voir limite §5.4) |
 | Modèle d'embedding | `embeddingModelId` en paramètre | `V2-ADR-013` ; jamais codé en dur ; tracé dans `documents` |
 | Champs de métadonnées | `tenantId`, `documentId`, `version`, `status` | exposés au filtre `Retrieve` (`V2-ADR-006`) |
@@ -308,17 +313,35 @@ sans point de contrôle FastAPI, court-circuitant le post-filtrage tenant/ACL et
 FastAPI.answer(question, tenantId, userAcl) :
   1. candidats = adapter.retrieve(question, filter={ tenantId, status: "indexed" }, topK)
         (adapter V2 == KB Retrieve avec filtre métadonnées)
+        -> n_bruts = len(candidats)
   2. POST-FILTRAGE FastAPI (côté serveur, obligatoire) :
         - rejeter tout candidat dont tenantId != tenant courant   (défense en profondeur)
         - appliquer ACL utilisateur (droits document)
         - appliquer classification (V2-ADR-017)
-  3. si aucun candidat après filtrage -> retrievalContext.status = "skipped"
-     si KB indisponible                -> retrievalContext.status = "degraded"
-     sinon                             -> retrievalContext.status = "ok"
+        -> n_retenus = len(candidats retenus) ; n_rejetes = n_bruts - n_retenus
+  3. déterminer retrievalContext.status et reason (voir §6.2.1) :
+     si KB indisponible                     -> status = "degraded"
+     sinon si n_retenus > 0                  -> status = "ok"
+     sinon si n_bruts == 0                   -> status = "skipped", reason = "no_match"
+     sinon (n_bruts > 0 et n_retenus == 0)   -> status = "skipped", reason = "filtered_out"
   4. construire retrievalContext borné (topK, longueur max, dedup par documentId)
   5. résoudre citations : pour chaque chunk retenu, lire documents (titre, page, sourceUri)
   6. transmettre retrievalContext à AgentCore Runtime (jamais le texte brut sans pointeur)
 ```
+
+### 6.2.1 Deux causes de `skipped` — ne pas les confondre (O3, revue PR #35)
+
+Un `retrievalContext.status = "skipped"` recouvre deux situations opérationnellement très
+différentes, distinguées par `reason` :
+
+| `reason` | Cause | Interprétation | Signal |
+|---|---|---|---|
+| `no_match` | `Retrieve` n'a renvoyé aucun candidat (`n_bruts == 0`) | le corpus ne contient rien de pertinent — comportement normal | métrique de couverture, pas d'alerte |
+| `filtered_out` | `Retrieve` a renvoyé des candidats mais le post-filtrage les a tous rejetés (`n_bruts > 0`, `n_retenus == 0`) | soit l'utilisateur n'a pas les droits (normal), soit le filtre est trop strict ou mal configuré (**anomalie possible**) | **seuil d'alerte distinct** (§15.1) : un taux élevé de `filtered_out` signale un défaut de configuration ACL/classification ou de métadonnées KB |
+
+Confondre les deux masquerait une misconfiguration : un filtre trop agressif produirait des réponses
+sans source tout en paraissant « pas de résultat ». La distinction `no_match` / `filtered_out` rend
+ce cas observable.
 
 ### 6.3 Post-filtrage : la ligne de défense
 
@@ -504,8 +527,13 @@ toujours dans le sens de la sûreté.
 
 - ingestion : nombre de jobs, durée, taux d'échec, latence upload→`indexed` (reflète la latence
   asynchrone assumée) ;
-- retrieval : latence `Retrieve`, `topK` effectif, taux de `degraded`/`skipped`, nombre de candidats
-  rejetés au post-filtrage (un rejet cross-tenant > 0 est une **alerte de sécurité**) ;
+- retrieval : latence `Retrieve`, `topK` effectif, taux de `degraded`, taux de `skipped` **ventilé
+  par `reason`** (`no_match` vs `filtered_out`, §6.2.1), nombre de candidats rejetés au
+  post-filtrage. Deux signaux distincts :
+  - un rejet **cross-tenant** > 0 est une **alerte de sécurité** (défense en profondeur déclenchée) ;
+  - un taux de `skipped/filtered_out` au-dessus d'un seuil (à calibrer, ex. > 20 % des requêtes non
+    vides) est une **alerte de configuration** (ACL/classification trop stricte ou métadonnées KB
+    manquantes) — distincte du `no_match` qui, lui, ne déclenche pas d'alerte ;
 - qualité : recall@k, precision@k, groundedness, couverture des citations, taux de refus (calculées
   hors ligne sur le dataset versionné, `V2-ADR-018`).
 

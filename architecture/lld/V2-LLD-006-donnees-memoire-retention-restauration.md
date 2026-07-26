@@ -1,6 +1,6 @@
 # V2-LLD-006 — Données, mémoire, rétention et restauration
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§9, §14)
@@ -9,10 +9,14 @@
   ouverts, cf. §1.3)
 - **Gate :** V2-G2
 
-> **Révision v0.2 (revue PR #35) :** les scripts d'exploitation référencés
+> **Révision v0.2 (revue PR #35, bloquants/majeurs) :** les scripts d'exploitation référencés
 > (`check_dv_consistency.py`, `run_rag_eval.py`) sont désormais explicitement marqués **artefacts
 > planifiés** avec leur contrat d'entrée/sortie (§16.1), et non des outils existants. Aucun code
 > n'est créé avant l'approbation des LLD (G2).
+>
+> **Révision v0.3 (revue PR #35, observations) :** limite du GSI `by-tenant` documentée avec
+> évolution compatible (§4.2) ; prérequis de conception rendant la bascule Terraform de restauration
+> réellement exécutable — noms de tables en variables + outputs + vérification (§13.1.1).
 
 ## 1. Métadonnées
 
@@ -152,11 +156,25 @@ resource "aws_dynamodb_table" "documents" {
 }
 ```
 
-### 4.2 Clé de partition composite
+### 4.2 Clé de partition composite et design du GSI
 
 `pk = tenantId#documentId` évite la partition chaude sur un tenant unique (`V2-ADR-003` §schéma).
-Le listing des documents d'un tenant passe par le GSI `by-tenant` (partition `tenantId`, tri par
-statut puis date de création). L'accès direct à un document connu reste O(1) sur `pk = tenantId#…`.
+L'accès direct à un document connu reste O(1) sur `pk = tenantId#…`.
+
+**GSI `by-tenant` — choix de `gsi1sk` (O4, revue PR #35).** La clé de tri `gsi1sk = status#createdAt`
+optimise le cas d'usage principal (« lister les documents d'un tenant dans un statut donné, triés par
+date ») via `Query(gsi1pk = tenantId AND begins_with(gsi1sk, "indexed#"))`. Elle a une limite
+assumée : un listing **tous statuts confondus triés par date** ne peut pas s'exprimer en une seule
+`Query` efficace (le préfixe `status#` casse l'ordre chronologique global) et forcerait soit
+plusieurs `Query` (une par statut, fusionnées côté applicatif), soit un `Scan` du partition —
+coûteux sur un tenant actif.
+
+Ce compromis est **retenu** parce que les parcours réels sont presque toujours filtrés par statut
+(afficher les `indexed`, suivre les `ingesting`, purger les `deleted`). Si un besoin de listing
+chronologique tous-statuts émerge, l'évolution compatible est un **second GSI** `by-tenant-date`
+(`gsi1pk = tenantId`, `gsi1sk = createdAt`) plutôt qu'une refonte de `by-tenant` — ajout d'index
+sans réécriture des accès existants. Ce point est laissé ouvert et tracé ici, pas tranché
+prématurément.
 
 ### 4.3 Attributs (compatibles avec V2 et V3)
 
@@ -498,8 +516,9 @@ aws dynamodb restore-table-to-point-in-time \
 # 2. Vérifier : comptage, échantillonnage, cohérence
 aws dynamodb scan --table-name test-documents-restore-... --select COUNT
 
-# 3. Bascule contrôlée :
-#    3a. Terraform : renommer la ressource ou pointer les modules vers la table restaurée
+# 3. Bascule contrôlée (voir prérequis de conception §13.1.1) :
+#    3a. terraform apply -var="documents_table_name=test-documents-restore-YYYYMMDD-HHMM"
+#        (le nom de table est une VARIABLE, pas une valeur codée en dur)
 #    3b. terraform plan  (validé par terraform_plan_guard.py — voir §16)
 #    3c. terraform apply
 #    3d. La table originale n'est PAS supprimée automatiquement (conservation 7 jours minimum)
@@ -507,6 +526,25 @@ aws dynamodb scan --table-name test-documents-restore-... --select COUNT
 
 **Point critique :** DynamoDB PITR restaure vers une **nouvelle** table ; la bascule Terraform doit
 être testée en DR drill pour valider la procédure sous stress.
+
+#### 13.1.1 Prérequis de conception pour rendre la bascule réellement exécutable (O5, revue PR #35)
+
+La bascule §13.1 étape 3 n'est possible **que si les modules Terraform ne codent pas les noms de
+tables en dur**. Sans ce prérequis, une restauration sous incident exigerait de modifier le code
+Terraform à chaud — précisément ce qu'on ne veut pas sous stress. Contraintes fixées par ce LLD :
+
+- chaque table lue par un service (`documents`, `Trips`, `users`, `ledger`) expose son nom via une
+  **variable Terraform** (`documents_table_name`, etc.) et non une constante ; la valeur par défaut
+  est le nom nominal, surchargeable à l'`apply` de restauration ;
+- le module publie en **output** le nom effectif de chaque table
+  (`output "documents_table_name"`), consommé par les services (task definition FastAPI, §`V2-LLD-001`)
+  — la bascule met à jour l'input, les consommateurs suivent l'output ;
+- avant de considérer la bascule terminée, **vérifier qu'aucun service ne lit encore l'ancienne
+  table** : `aws dynamodb describe-table --table-name <ancienne>` + inspection des variables
+  d'environnement/secrets résolus des tâches ECS en cours (`aws ecs describe-tasks`) ;
+- le DR drill (§17.2) exécute cette bascule **en environnement `test` isolé** pour prouver que la
+  procédure fonctionne sans édition de code — un drill qui exige une modification manuelle du module
+  est un échec de conception à corriger, pas une étape normale.
 
 ### 13.2 Restauration S3 (versioning, écrasement/suppression accidentelle)
 

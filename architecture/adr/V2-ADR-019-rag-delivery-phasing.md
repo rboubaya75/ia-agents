@@ -36,10 +36,19 @@ Cet ADR arbitre explicitement entre la maîtrise maximale (coûteuse à construi
 livraison V2 (déléguée à un service managé), et fixe le chemin de migration vers la cible
 applicative.
 
+> **Note de chiffrage (revue PR #35) :** deux ordres de grandeur sont cités dans cet ADR et doivent
+> être lus ensemble. **~4 000 lignes** = le coût *total* du pipeline applicatif complet (cible V3).
+> **~2 700 lignes** = le sous-ensemble de ce pipeline *évité en V2* grâce à KB (parsing multi-format,
+> chunking, saga de suppression, migration d'embeddings). La différence (~1 300 lignes : upload,
+> adapter de magasin vectoriel, post-filtrage tenant/ACL, `retrievalContext`, citations) est écrite
+> **dans les deux phases** — c'est la part que FastAPI conserve. Ces chiffres sont des estimations
+> d'effort, pas un engagement.
+
 ## Exigences concernées
 
-- livrer une capacité RAG fonctionnelle en V2 sans mobiliser l'équipe sur ~4 000 lignes de code de
-  fiabilité (parsing, chunking, saga de suppression, migration d'embeddings) ;
+- livrer une capacité RAG fonctionnelle en V2 sans mobiliser l'équipe sur les ~2 700 lignes de code
+  de fiabilité évitées grâce à KB (parsing, chunking, saga de suppression, migration d'embeddings),
+  sur un pipeline applicatif complet estimé à ~4 000 lignes en cible V3 ;
 - préserver l'isolation multi-tenant : aucun chunk d'un tenant ne doit atteindre un autre ;
 - conserver FastAPI comme frontière et propriétaire applicatif du retrieval (cohérence CAM) ;
 - garder AgentCore Runtime hors du retrieval et de l'indexation (`V2-ADR-002`) ;
