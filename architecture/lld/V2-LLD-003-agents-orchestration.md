@@ -1,6 +1,6 @@
 # V2-LLD-003 — Agents et orchestration
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Statut :** Draft (propositions — en attente de revue)
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§10)
@@ -10,12 +10,18 @@
   (backlog), `V2-ADR-012` (backlog)
 - **Gate :** V2-G2
 
-> **Version 0.1 — Statut propositions :** ce document est un draft pédagogique destiné à aligner
-> l'équipe sur la conception avant implémentation. Les sections marquées
-> `⚠ ADR MANQUANT` dépendent de `V2-ADR-011` (streaming + annulations) et `V2-ADR-012`
-> (modèles + fallback), tous deux au backlog — ces sections proposeront un choix par défaut
-> raisonnable mais resteront ouvertes jusqu'à décision formelle. Aucun élément de ce LLD n'est
-> contractuellement opposable avant sa révision post-ADR et son passage en `Approved`.
+> **Version 0.1 — Statut propositions :** document de propositions pédagogique destiné à aligner
+> l'équipe sur la conception avant implémentation. Les sections marquées `⚠ ADR MANQUANT`
+> dépendent de `V2-ADR-011` (streaming + annulations) et `V2-ADR-012` (modèles + fallback), tous
+> deux au backlog.
+>
+> **Révision v0.2 (revue indépendante, bloquants) :** topologie d'exécution du code `/agents` sur
+> AgentCore Runtime clarifiée et contradiction « orchestration FastAPI vs Runtime » résolue (§2.3,
+> §2.4) ; permissions IAM corrigées et marquées à valider avec la doc AWS (§9.1) ; contrat d'usage
+> d'AgentCore Memory ajouté (§2.5) ; budget `maxTokens` désambiguïsé (par conversation) et
+> recalibré sur la fenêtre de contexte du modèle (§5.2, §5.3) ; séquencement de la gate V2-G2
+> tranché — ce LLD peut passer `Approved` avec les sections streaming/fallback explicitement
+> ouvertes, sous contrat de mise à jour dès ADR-011/012 décidés (§14).
 
 ---
 
@@ -125,10 +131,30 @@ agents/
     └── system_v2.md          # future version (coexistence possible)
 ```
 
-### 2.3 Flux d'invocation principal
+### 2.3 Modèle d'exécution et flux d'invocation
 
-Le schéma ci-dessous représente le chemin d'une requête conversationnelle de bout en bout.
-FastAPI est le coordinateur ; Runtime est l'exécuteur.
+**Où s'exécute le code `/agents` ?** AgentCore Runtime est un service AWS managé, pas un conteneur
+que l'équipe opère directement. Le code du répertoire `/agents` n'est donc pas exécuté « à
+l'intérieur » d'un composant AWS contrôlé : il est **packagé et déployé comme l'agent custom que
+Runtime héberge et invoque**. Runtime fournit le processus hôte et le point d'entrée ; le code
+`/agents` fournit la logique agentique (orchestrateur, budgets, adapter). Cette distinction
+gouverne le packaging, l'injection du contrat et l'observabilité (voir ci-dessous).
+
+**Packaging et déploiement :**
+
+- Le code `/agents` (adapter Strands + domaine) est packagé sous la forme attendue par AgentCore
+  Runtime (image conteneur ou artefact de déploiement selon le mode Runtime retenu). Le mode exact
+  et la task definition sont **fixés par `V2-LLD-001`** (plateforme). Ce LLD fixe le contenu et les
+  contrats du code déployé, pas son mode de packaging AWS.
+- Le point d'entrée Runtime reçoit le payload `runtime-contract.md` (voir §3.3) et le désérialise
+  en `AgentRequest` (§3.2) avant d'appeler `orchestrator.run(request)`.
+- **Observabilité (renvoi ADR-008) :** ADR-008 décrit un collector ADOT en sidecar pour les tâches
+  **ECS FastAPI**. Runtime étant managé, la faisabilité d'un sidecar y est incertaine : la
+  stratégie d'export des traces depuis le code agent (SDK OTel exportant directement, ou
+  corrélation de repli via `operationId`) est un **point ouvert tranché en `V2-LLD-007`** (§13.2).
+
+Le schéma ci-dessous représente le chemin d'une requête conversationnelle de bout en bout. FastAPI
+est le coordinateur applicatif ; le code `/agents`, exécuté par Runtime, est l'exécuteur agentique.
 
 ```
 Utilisateur
@@ -137,49 +163,85 @@ Utilisateur
 API Gateway (JWT validé, claims extraits)
     │
     ▼
-FastAPI
- ├─ 1. Autorisation (tenantId, actorId, rôles — V2-ADR-006)
+FastAPI  (workflow applicatif — coordinateur)
+ ├─ 1. Autorisation (tenantId, actorId, rôles/scopes — V2-ADR-006)
  ├─ 2. Retrieval → retrievalContext borné (V2-LLD-002)
  ├─ 3. Assemblage contrat Runtime (runtime-contract.md)
  │       { message, runtimeSessionId, trustedIdentity,
  │         operationContext, retrievalContext }
- └─ 4. Appel AgentCore Runtime ──────────────────────────────┐
-                                                              │
-                                         AgentCore Runtime   │
-                                          ├─ domain/orchestrator.py
-                                          │   └─ AgentAdapter.invoke(context)
-                                          │         └─ StrandsAdapter
-                                          │               ├─ budget_guard (maxTurns/maxToolCalls/maxTokens)
-                                          │               ├─ tool_allowlist check
-                                          │               ├─ Bedrock Converse API (claude-*)
-                                          │               ├─ AgentCore Memory (lecture/écriture)
-                                          │               └─ AgentCore Gateway MCP (tools)
-                                          └─ AgentResult → FastAPI
-FastAPI
+ └─ 4. Invocation AgentCore Runtime ─────────────────────────┐
+                                                             │
+   ┌─────────────────────────────────────────────────────────┐
+   │ AgentCore Runtime (service managé)                      │
+   │   héberge et invoque le code /agents déployé :          │
+   │                                                         │
+   │   point d'entrée → désérialise AgentRequest             │
+   │     └─ domain/orchestrator.py (boucle agentique)        │
+   │          └─ AgentAdapter.invoke(request)                │
+   │                └─ StrandsAdapter                        │
+   │                      ├─ budget_guard (turns/tools/tokens)│
+   │                      ├─ tool_allowlist (filtre exposition)│
+   │                      ├─ AgentCore Memory (lecture, §2.5) │
+   │                      ├─ Bedrock Converse API (claude-*)  │
+   │                      ├─ AgentCore Gateway MCP (tools)    │
+   │                      └─ AgentCore Memory (écriture, §2.5)│
+   │   → AgentResult                                          │
+   └─────────────────────────────────────────────────────────┘
+                                                             │
+FastAPI  ◀───────────────────────────────────────────────────┘
  └─ 5. Réponse client (stream ou bloc)
 ```
 
 **Points critiques du flux :**
 
 1. FastAPI ne fait jamais d'appel direct à Bedrock Converse API sur le chemin conversationnel —
-   uniquement via Runtime. Toute déviation est une violation P-02 bloquante.
-2. Le contenu du `retrievalContext` est marqué `trust: "untrusted"` — Runtime ne peut pas le
+   uniquement via l'invocation Runtime. Toute déviation est une violation P-02 bloquante.
+2. Le contenu du `retrievalContext` est marqué `trust: "untrusted"` — le code agent ne peut pas le
    traiter comme une source d'autorité (règle V2-ADR-002).
-3. `trustedIdentity` est construite par FastAPI ; Runtime et les tools écrasent toute identité
-   produite par le modèle avant chaque appel tool (V2-ADR-006).
+3. `trustedIdentity` est construite par FastAPI ; le code agent et les tools écrasent toute
+   identité produite par le modèle avant chaque appel tool (V2-ADR-006).
 
-### 2.4 Orchestrateur par défaut
+### 2.4 Deux sens du mot « orchestration » — levée d'ambiguïté
 
-Un orchestrateur unique est retenu pour la V2 (`V2-ADR-005`) : aucun multi-agent tant qu'un besoin
-concret n'est pas documenté. L'ajout d'un agent spécialisé exige un **amendement ADR ou une
-justification explicite dans ce LLD** (P-01/P-02).
+Le corpus V2 emploie « orchestration » dans deux acceptions distinctes qu'il faut séparer pour
+éviter une fausse contradiction entre le HLD (« FastAPI … orchestration ») et la CAM (Domaine 5,
+`Conversation Orchestration → AgentCore Runtime`).
 
-L'orchestrateur gère :
+| Terme | Propriétaire | Portée |
+|---|---|---|
+| **Workflow Coordination** (orchestration applicative) | FastAPI (CAM Domaine 3) | Décide du parcours : autorisation, retrieval, assemblage du contrat, appel Runtime, formatage de la réponse. Ne raisonne pas, n'appelle pas Converse API. |
+| **Conversation Orchestration** (boucle agentique) | AgentCore Runtime via le code `/agents` (CAM Domaine 5) | Boucle tours modèle/tool, raisonnement, sélection de tools, invocation Converse API, gestion Memory. Ne décide pas du parcours applicatif. |
+
+Il n'y a donc pas de double propriété : FastAPI coordonne *quand* invoquer l'agent ; le code
+`/agents` orchestre *ce qui se passe* pendant l'invocation. Le contrat `runtime-contract.md` est la
+frontière exacte entre les deux.
+
+**Orchestrateur agentique (Domaine 5) — périmètre en V2 :** un orchestrateur unique est retenu
+(`V2-ADR-005`), aucun multi-agent tant qu'un besoin concret n'est pas documenté ; l'ajout d'un
+agent spécialisé exige un **amendement ADR ou une justification explicite dans ce LLD** (P-01/P-02).
+Il gère :
+
 - l'instanciation de l'adapter configuré ;
 - l'application des budgets emboîtés avant chaque tour ;
-- la vérification de la tool allowlist avant chaque appel ;
+- le filtrage d'exposition des tools (allowlist, §6) avant chaque tour ;
 - la construction du message système depuis le `PromptRegistry` ;
-- le retour structuré `AgentResult` vers FastAPI.
+- la lecture/écriture Memory selon le contrat §2.5 ;
+- le retour structuré `AgentResult`.
+
+### 2.5 AgentCore Memory — contrat d'usage
+
+La **propriété** de Memory (stockage, TTL, rétention, effacement, isolation des namespaces) est
+couverte par `V2-LLD-006`. Le présent LLD fixe seulement l'**usage** de Memory par le code agent,
+qui relève du Domaine 5 (comportement agentique).
+
+| Question | Décision V2 |
+|---|---|
+| **Quand lire ?** | Une seule lecture par invocation, **avant le premier tour**, pour hydrater le contexte (préférences + résumé conversationnel). Pas de relecture par tour (coût tokens + latence). |
+| **Quand écrire ?** | Une seule écriture par invocation, **après le dernier tour réussi**, avec le résumé/préférences mis à jour. Aucune écriture si l'invocation échoue avant production d'un `AgentResult` valide. |
+| **Namespace** | Dérivé de `trustedIdentity` : `namespace = hash(tenantId + "#" + actorId)`. Formule exacte et politique alignées sur `V2-LLD-005`/`V2-LLD-006`. Jamais dérivé d'un claim brut. |
+| **Confiance du contenu** | Le contenu Memory (préférences saisies par l'utilisateur, résumés dérivés de conversations) est traité comme **donnée non fiable** au même titre que `retrievalContext` : le prompt système interdit d'exécuter une instruction qui y figurerait. |
+| **Comptage tokens** | Les tokens injectés depuis Memory dans le prompt final **comptent** dans `agent.tokens_used` et dans le budget `maxTokens` (§5.2). |
+| **Indisponibilité** | Si Memory est indisponible en lecture, l'invocation continue sans contexte mémorisé et `AgentResult.degraded = true` (voir §8.1). Une écriture échouée est journalisée et retentée hors chemin critique, sans casser la réponse. |
 
 ---
 
@@ -343,27 +405,54 @@ qui multiplie les appels tool sans limite. Les budgets V2 ajoutent ces deux dime
 
 ### 5.2 Les quatre dimensions
 
-| Budget | Valeur V2 par défaut (configurable) | Comportement à dépassement |
-|---|---|---|
-| `maxTurns` | 10 | `BudgetExceededError` → réponse dégradée avec explication |
-| `maxToolCalls` | 20 | `BudgetExceededError` → réponse partielle avec indication |
-| `maxTokens` | 8 000 (entrée + sortie cumulés) | `BudgetExceededError` → tronque et signale |
-| `deadlineEpochMs` | hérité de `operationContext` | `DeadlineExceededError` → retour immédiat |
+Tous les budgets sont comptés **par invocation** (une invocation = un appel Runtime traitant un
+message utilisateur, potentiellement plusieurs tours modèle/tool). Aucun budget n'est « par tour » :
+le tour est le grain qui *consomme* le budget, pas le grain qui le *porte*.
+
+| Budget | Portée | Valeur V2 par défaut (configurable) | Comportement à dépassement |
+|---|---|---|---|
+| `maxTurns` | invocation | 10 | `BudgetExceededError` → réponse dégradée avec explication |
+| `maxToolCalls` | invocation | 20 | `BudgetExceededError` → réponse partielle avec indication |
+| `maxTokens` | invocation | voir §5.2.1 (dérivé du modèle) | `BudgetExceededError` → tronque et signale |
+| `deadlineEpochMs` | invocation | hérité de `operationContext` | `DeadlineExceededError` → retour immédiat |
 
 Les valeurs par défaut sont des paramètres Terraform/SSM — jamais des constantes dans le code.
 Le dépassement de n'importe quel budget produit un `AgentResult` avec `budget_exhausted=True`,
 jamais une exception non gérée.
 
-### 5.3 Emboîtement
+#### 5.2.1 Calibrage de `maxTokens`
 
-Les budgets sont emboîtés : le budget de la conversation borne chaque tour ; le budget d'un
-tour borne chaque appel tool. Un dépassement au niveau inférieur est traité localement (réponse
-partielle) sans faire exploser le niveau supérieur — la conversation se termine proprement.
+`maxTokens` compte le **cumul entrée + sortie de tous les tours de l'invocation** — pas un tour
+isolé. Il inclut : prompt système, message utilisateur, contexte Memory injecté (§2.5),
+`retrievalContext.chunks`, l'historique inter-tours, les résultats de tools réinjectés, et toute
+la sortie modèle produite.
+
+Une constante fixe (l'ancien « 8 000 ») est **inadaptée** : un `retrievalContext` de 5 chunks à
+~500 tokens consomme déjà ~2 500 tokens de seul contexte, ce qui saturerait une conversation RAG
+dès le deuxième tour. `maxTokens` est donc **dérivé de la fenêtre de contexte du modèle configuré**
+(`AgentConfig.model_id`), pas d'un nombre en dur :
 
 ```
-Conversation (deadlineEpochMs + maxTurns + maxTokens)
-  └─ Tour N (tokens d'entrée + sortie du tour)
-       └─ Tool call k (tool_calls_count ≤ maxToolCalls)
+maxTokens_défaut = floor(fenêtre_contexte_modèle × 0,75)
+```
+
+La marge de 25 % réserve de la place à la sortie finale et évite de heurter la limite dure du
+modèle. La valeur effective est calculée au démarrage à partir d'une table
+`modèle → fenêtre_contexte` (maintenue avec `V2-ADR-012`) et peut être plafonnée plus bas par SSM
+pour maîtriser le coût. La cohérence avec la taille maximale de `retrievalContext.chunks`
+(`V2-LLD-002` §6.2) est un point ouvert (§13.2).
+
+### 5.3 Emboîtement
+
+Les budgets d'invocation bornent le déroulé interne : le compteur de tours borne le nombre
+d'itérations, le compteur d'appels tool borne les effets de bord, le compteur de tokens cumulés
+borne le contexte total. Un dépassement détecté en cours de boucle arrête proprement l'invocation
+et produit un `AgentResult` partiel — la boucle ne « déborde » jamais silencieusement.
+
+```
+Invocation (deadlineEpochMs + maxTurns + maxToolCalls + maxTokens, cumulés)
+  └─ Tour N   (consomme des tokens entrée + sortie, incrémente turn_count)
+       └─ Tool call k (incrémente tool_calls_count, borné par maxToolCalls)
 ```
 
 ### 5.4 Modèle configuré
@@ -463,6 +552,8 @@ Cette proposition devra être revue et stabilisée dès que V2-ADR-011 est déci
 | `deadlineEpochMs` dépassé | Retour immédiat | `true` | « Délai dépassé » |
 | Tool refusé (`ToolDeniedError`) | Tour sans tool, réponse au modèle | selon impact | Transparent sauf si bloquant |
 | Tool en erreur (MCP retourne erreur) | Retry dans budget Tool → dégradé | `true` si non résolu | « Outil indisponible » |
+| Memory indisponible en lecture (§2.5) | Invocation sans contexte mémorisé | `true` | Transparent |
+| Memory indisponible en écriture (§2.5) | Journalisé, retenté hors chemin critique | `false` | Transparent |
 | Bedrock throttling | ⚠ voir ADR-012 (backlog) | `true` | « Service temporairement indisponible » |
 | AgentCore Runtime indisponible | FastAPI retourne HTTP 503 | — | Erreur applicative standard |
 
@@ -481,31 +572,35 @@ produit un `AgentResult` structuré. Aucune exception non gérée ne doit attein
 
 ## 9. IAM et sécurité
 
-### 9.1 Rôle IAM de la tâche ECS Runtime
+### 9.1 Rôle IAM de l'exécution agent (Runtime)
 
-Le rôle IAM associé à la tâche ECS AgentCore Runtime est défini dans `V2-LLD-001`. Ce LLD
-liste uniquement les permissions applicables au domaine agents :
+Le rôle IAM effectif est **défini et provisionné par `V2-LLD-001`** (plateforme) ; ce LLD ne fait
+qu'énumérer les permissions dont le domaine agents a **fonctionnellement** besoin. Il ne fige pas
+les noms d'actions : plusieurs préfixes AgentCore ci-dessous sont donnés à titre indicatif et
+**doivent être validés contre la documentation AWS AgentCore en vigueur** avant implémentation
+(les services AgentCore Runtime / Memory / Gateway sont récents et leurs préfixes IAM ont évolué).
 
-```hcl
-# Droits Bedrock Converse API (plan d'exécution)
-"bedrock:InvokeModel",
-"bedrock:InvokeModelWithResponseStream",  # ⚠ conditionnel — à confirmer post-ADR-011
+> ⚠ **À valider avec la doc AWS (avant `Approved`).** La v0.1 listait
+> `bedrock-agent-runtime:InvokeAgent` pour Memory et `execute-api:Invoke` pour Gateway MCP : ces
+> deux actions étaient **incorrectes**. `bedrock-agent-runtime:InvokeAgent` cible l'invocation d'un
+> **Bedrock Agent managé** (service distinct, non retenu — cf. CAM « pas de managed Agents »), et
+> `execute-api:Invoke` ne s'applique qu'à un stage **API Gateway REST**, pas à un composant
+> AgentCore Gateway. Les préfixes corrects relèvent de la famille `bedrock-agentcore:*` (Runtime,
+> Memory, Gateway), à confirmer nominativement.
 
-# Droits AgentCore Memory
-"bedrock-agent-runtime:InvokeAgent",       # si Memory via AgentCore
+| Besoin fonctionnel | Action IAM (à confirmer) | Note |
+|---|---|---|
+| Invocation modèle (Converse) | `bedrock:InvokeModel` | plan d'exécution |
+| Invocation modèle en streaming | `bedrock:InvokeModelWithResponseStream` | conditionnel — dépend d'ADR-011 |
+| Lecture/écriture AgentCore Memory | `bedrock-agentcore:*` (Memory) — **à confirmer** | remplace l'ancien `bedrock-agent-runtime:InvokeAgent` (faux) |
+| Appel des tools via AgentCore Gateway MCP | `bedrock-agentcore:*` (Gateway) — **à confirmer** | remplace l'ancien `execute-api:Invoke` (faux) |
+| Logs applicatifs | `logs:CreateLogStream`, `logs:PutLogEvents` | — |
+| Traces | `xray:PutTraceSegments`, `xray:PutTelemetryRecords` | déjà provisionnées en V1 (ADR-008) |
 
-# Droits AgentCore Gateway MCP
-"execute-api:Invoke"                       # appels Gateway via IAM Sig v4
-
-# Logs et traces
-"logs:CreateLogStream",
-"logs:PutLogEvents",
-"xray:PutTraceSegments",
-"xray:PutTelemetryRecords"
-```
-
-Les permissions `s3vectors:*`, `bedrock-agent:*IngestionJob` et `dynamodb:*` appartiennent à
-la tâche ECS FastAPI (`V2-LLD-001`), pas à Runtime.
+Les permissions `s3vectors:*`, `bedrock-agent:*IngestionJob` et `dynamodb:*` appartiennent à la
+tâche ECS **FastAPI** (`V2-LLD-001`), pas à l'exécution agent. Le principe du moindre privilège
+impose de restreindre chaque action par `Resource` (ARN du modèle, de la Memory, de la Gateway),
+détail porté par `V2-LLD-001`.
 
 ### 9.2 Défense contre le prompt injection
 
@@ -682,11 +777,25 @@ Toutes les valeurs sont injectées par Terraform via SSM — jamais hardcodées 
 
 ## 14. Critères de sortie (gate V2-G2)
 
+**Séquencement vis-à-vis des ADR au backlog.** `V2-ADR-011` (streaming) et `V2-ADR-012` (fallback)
+ne sont **pas** des prérequis au passage `Approved` de ce LLD. Les décider n'est pas sous le
+contrôle de ce LLD, et les capacités qu'ils couvrent (streaming, fallback modèle) sont
+**isolées dans des sections explicitement marquées `⚠ ADR MANQUANT`** (§7, §8.3, §5.4) qui ne
+bloquent aucune autre partie de la conception. Ce LLD peut donc être `Approved` avec ces sections
+ouvertes, **sous contrat de mise à jour** : dès qu'ADR-011 ou ADR-012 est décidé, les sections
+correspondantes sont révisées et une nouvelle version du LLD est produite. Ce contrat est lui-même
+un critère de sortie (dernière case ci-dessous).
+
+Critères bloquants pour `Approved` :
+
 - [ ] Tests d'architecture (lint imports, contrats) verts en CI
 - [ ] Tests unitaires domaine sans dépendance réseau Bedrock
-- [ ] Budgets emboîtés vérifiés : chaque dépassement produit un `AgentResult` structuré
+- [ ] Budgets d'invocation vérifiés : chaque dépassement produit un `AgentResult` structuré
+- [ ] `maxTokens` dérivé de la fenêtre de contexte du modèle configuré, pas d'une constante (§5.2.1)
+- [ ] Contrat d'usage Memory (§2.5) implémenté : lecture avant 1er tour, écriture après dernier tour, namespace dérivé de `trustedIdentity`
 - [ ] Tool allowlist active : tout tool hors liste est refusé et tracé
+- [ ] Permissions IAM (§9.1) validées nominativement contre la doc AWS AgentCore en vigueur
 - [ ] Corrélation OTel bout en bout démontrée (traceId ou operationId)
 - [ ] Aucun identifiant brut ni chunk sensible en clair dans les logs
-- [ ] V2-ADR-011 et V2-ADR-012 décidés et sections §7/§8.3/§5.4 mises à jour
 - [ ] Dépendances `V2-LLD-001`, `V2-LLD-004`, `V2-LLD-005` résolues pour les points listés en §13.1
+- [ ] Contrat de mise à jour post-ADR acté : §7/§8.3/§5.4 révisées dès ADR-011/012 décidés (non bloquant pour `Approved`, bloquant pour clôture du suivi)
