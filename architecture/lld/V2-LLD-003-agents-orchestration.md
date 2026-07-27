@@ -1,6 +1,6 @@
 # V2-LLD-003 — Agents et orchestration
 
-- **Version :** 0.3
+- **Version :** 0.4
 - **Statut :** Draft (propositions — en attente de revue)
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§10)
@@ -18,7 +18,7 @@
 > **Révision v0.2 (revue indépendante, bloquants) :** topologie d'exécution du code `/agents` sur
 > AgentCore Runtime clarifiée et contradiction « orchestration FastAPI vs Runtime » résolue (§2.3,
 > §2.4) ; permissions IAM corrigées et marquées à valider avec la doc AWS (§9.1) ; contrat d'usage
-> d'AgentCore Memory ajouté (§2.5) ; budget `maxTokens` désambiguïsé (par conversation) et
+> d'AgentCore Memory ajouté (§2.5) ; budget `maxTokens` désambiguïsé (par invocation) et
 > recalibré sur la fenêtre de contexte du modèle (§5.2, §5.3) ; séquencement de la gate V2-G2
 > tranché — ce LLD peut passer `Approved` avec les sections streaming/fallback explicitement
 > ouvertes, sous contrat de mise à jour dès ADR-011/012 décidés (§14).
@@ -31,6 +31,11 @@
 > `RetrievalContext`/`AgentRequest` rendus `frozen`, `AgentResult.error` typé (`AgentError`/enum) et
 > tokens séparés input/output (§3.2) ; chemin de migration V1→V2 ajouté (§12.4) ; métriques de coût
 > et tokens input/output ajoutées (§10).
+>
+> **Révision v0.4 (corrections revue PR #37) :** en-tête v0.2 corrigé — `maxTokens` désambiguïsé
+> **par invocation** (non « par conversation ») ; valeur par défaut `AGENT_MAX_TOKENS` corrigée
+> dans §12.1 — remplacée par la formule dérivée `floor(ctx_modèle × 0,75)` (§5.2.1) ; constante
+> `8000` retirée, cohérente avec la suppression opérée en v0.2 (bloquant B4).
 
 ---
 
@@ -807,7 +812,7 @@ Cas à couvrir :
 | `AGENT_PROMPT_VERSION` | `"v1"` | SSM Parameter Store |
 | `AGENT_MAX_TURNS` | `10` | SSM Parameter Store |
 | `AGENT_MAX_TOOL_CALLS` | `20` | SSM Parameter Store |
-| `AGENT_MAX_TOKENS` | `8000` | SSM Parameter Store |
+| `AGENT_MAX_TOKENS` | dérivé : `floor(ctx_modèle × 0,75)` — voir §5.2.1 | SSM Parameter Store (cap optionnel) |
 | `AGENT_MODEL_ID` | `"anthropic.claude-sonnet-4-5-..."` | SSM Parameter Store |
 | `AGENT_TOOL_ALLOWLIST` | liste JSON | SSM Parameter Store |
 
