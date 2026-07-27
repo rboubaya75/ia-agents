@@ -1,6 +1,6 @@
 # V2-LLD-003 — Agents et orchestration
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Statut :** Draft (propositions — en attente de revue)
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§10)
@@ -22,6 +22,15 @@
 > recalibré sur la fenêtre de contexte du modèle (§5.2, §5.3) ; séquencement de la gate V2-G2
 > tranché — ce LLD peut passer `Approved` avec les sections streaming/fallback explicitement
 > ouvertes, sous contrat de mise à jour dès ADR-011/012 décidés (§14).
+>
+> **Révision v0.3 (revue indépendante, majeurs + observations) :** filtre d'exposition tool
+> distingué de l'autorisation MCP Gateway pour lever le risque P-02 (§6.1) ; `TrustedIdentity`
+> complétée avec `roles`/`scopes` (§3.2, ADR-006) ; mode streaming émulé exposé au frontend au lieu
+> d'être masqué (§7) ; mitigation temporaire du throttling Bedrock (retry exponentiel borné) en
+> attendant ADR-012 (§5.4) ; lint d'imports rendu générique multi-framework (§2.1, §11.1) ;
+> `RetrievalContext`/`AgentRequest` rendus `frozen`, `AgentResult.error` typé (`AgentError`/enum) et
+> tokens séparés input/output (§3.2) ; chemin de migration V1→V2 ajouté (§12.4) ; métriques de coût
+> et tokens input/output ajoutées (§10).
 
 ---
 
@@ -106,7 +115,9 @@ conformément au principe P-04 (Technology Independence) de la CAM.
 ```
 
 **Règle absolue (P-04) :** un test d'architecture (lint d'imports, exécuté en CI) doit détecter
-toute importation de `strands.*` en dehors du répertoire `agents/adapter/`. Ce test est bloquant.
+toute importation d'un **framework agentique** en dehors du répertoire `agents/adapter/`. La liste
+des préfixes interdits est configurable (`strands`, `langgraph`, `autogen`, …) pour rester valable
+si un second adapter est ajouté — elle n'est pas figée à `strands.*`. Ce test est bloquant.
 
 ### 2.2 Arborescence `/agents`
 
@@ -276,6 +287,7 @@ class AgentAdapter(Protocol):
 
 ```python
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional
 
 @dataclass(frozen=True)
@@ -296,6 +308,10 @@ class AgentConfig:
 class TrustedIdentity:
     actor_id: str               # hash(sub Cognito) — jamais le sub brut
     tenant_id: str              # résolu côté serveur FastAPI
+    roles: tuple[str, ...]      # rôles résolus côté serveur (ADR-006) — tuple = immuable
+    scopes: tuple[str, ...]     # scopes autorisés (ADR-006)
+    # roles/scopes permettent au filtre d'exposition tool (§6) de dépendre du rôle ;
+    # ils ne remplacent pas l'autorisation MCP Gateway (P-01)
 
 @dataclass(frozen=True)
 class OperationContext:
@@ -303,15 +319,15 @@ class OperationContext:
     request_id: str
     deadline_epoch_ms: int      # propagé depuis opContext FastAPI
 
-@dataclass
+@dataclass(frozen=True)            # frozen : trust et status ne peuvent pas muter après construction
 class RetrievalContext:
     status: str                 # "ok" | "degraded" | "skipped"
-    chunks: list[dict]
+    chunks: tuple[dict, ...]     # tuple (immuable) plutôt que list
     chunk_count: int            # == len(chunks), vérifié par test de contrat
     policy: str                 # ex. "v1"
-    trust: str = "untrusted"    # immuable — contenu documentaire = données non fiables
+    trust: str = "untrusted"    # immuable par frozen — contenu = données non fiables
 
-@dataclass
+@dataclass(frozen=True)
 class AgentRequest:
     message: str
     runtime_session_id: str
@@ -321,15 +337,33 @@ class AgentRequest:
     budget: AgentBudget
     config: AgentConfig
 
+class AgentErrorCode(Enum):
+    BUDGET_EXCEEDED = "budget_exceeded"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+    TOOL_DENIED = "tool_denied"
+    MODEL_THROTTLED = "model_throttled"
+    TOOL_UNAVAILABLE = "tool_unavailable"
+    MEMORY_UNAVAILABLE = "memory_unavailable"
+
+@dataclass(frozen=True)
+class AgentError:
+    code: AgentErrorCode        # catégorie discriminable (observabilité, alerting)
+    message: str                # détail humain, redacted
+
 @dataclass
 class AgentResult:
     answer: str
     turn_count: int
+    input_tokens: int           # facturation Bedrock distincte entrée/sortie (voir §10.2)
+    output_tokens: int
     tool_calls_count: int
-    tokens_used: int
     budget_exhausted: bool      # True si un budget a été atteint
-    degraded: bool              # True si retrieval dégradé ou tool en erreur
-    error: Optional[str] = None
+    degraded: bool              # True si retrieval/Memory dégradé ou tool en erreur
+    error: Optional[AgentError] = None   # typé, plus un str libre
+
+    @property
+    def tokens_used(self) -> int:
+        return self.input_tokens + self.output_tokens
 ```
 
 ### 3.3 Contrat FastAPI → AgentCore Runtime (rappel)
@@ -464,37 +498,65 @@ d'inférence Bedrock sans toucher au code domaine.
 ```
 ⚠ ADR MANQUANT (V2-ADR-012) : la stratégie de fallback (bascule automatique vers
 un modèle alternatif en cas de throttling ou d'erreur Bedrock) n'est pas encore
-décidée. Par défaut : pas de fallback automatique ; le budget est épuisé et
-AgentResult.error contient la raison. À stabiliser post-ADR-012.
+décidée. Le choix "modèle de repli" reste ouvert.
 ```
+
+**Mitigation temporaire (non préemptive d'ADR-012).** L'absence de fallback ne peut pas laisser
+chaque `ThrottlingException` casser une conversation — le throttling Bedrock est fréquent en
+production sur les modèles récents. En attendant ADR-012, l'adapter applique une mitigation
+**locale et minimale**, qui ne présuppose aucun modèle de repli :
+
+- retry exponentiel sur `ThrottlingException` **uniquement** : max 2 tentatives (≈ 500 ms puis
+  1 s, avec jitter) ;
+- chaque retry est **borné par `deadlineEpochMs`** — aucun retry si le budget temps est déjà
+  dépassé ;
+- aucun autre code d'erreur Bedrock ne déclenche de retry (échec immédiat, `AgentError` typée) ;
+- si les retries échouent : `AgentResult.error = AgentError(MODEL_THROTTLED, …)`, `degraded = true`.
+
+ADR-012 pourra remplacer cette mitigation par une vraie stratégie de fallback (modèle alternatif,
+profil d'inférence). D'ici là, cette mitigation est un choix technique local, révisable.
 
 ---
 
 ## 6. Tool allowlists et contrôle
 
-### 6.1 Principe
+### 6.1 Deux contrôles distincts — pas de duplication de capacité
 
-Chaque appel agentique reçoit une `tool_allowlist` explicite dans `AgentConfig`. L'orchestrateur
-ne transmet à l'adapter que les tools présents dans cette liste. Tout appel à un tool absent
-produit `ToolDeniedError` et est journalisé.
+La CAM attribue `Tool Authorization` à **MCP Gateway** (Domaine 7). La `tool_allowlist` de ce LLD
+n'est **pas** une seconde implémentation de cette capacité — ce serait une violation P-02. Les deux
+contrôles ont des rôles différents et complémentaires :
 
-**Pourquoi c'est important :** sans allowlist explicite, un modèle peut demander des tools non
+| Contrôle | Question | Propriétaire | Principe |
+|---|---|---|---|
+| **Tool Exposure Filter** (allowlist, §6.2) | « Quels tools sont *exposables* au modèle pour ce parcours ? » | Orchestrateur `/agents` (ce LLD) | P-04 — restreint le catalogue présenté au modèle |
+| **Tool Authorization** | « Cet appelant peut-il *exécuter* ce tool sur cette ressource ? » | MCP Gateway (CAM Dom.7, `V2-LLD-004`) | P-01 — contrôle d'accès effectif |
+
+Le filtre d'exposition réduit la surface d'attaque en amont (le modèle ne « voit » que les tools
+pertinents) ; l'autorisation MCP Gateway reste la ligne de défense qui décide réellement de
+l'exécution, en aval, sur la base de l'identité injectée. Le filtre d'exposition ne dispense
+**jamais** de l'autorisation Gateway (défense en profondeur — CAM Domaine 10).
+
+**Pourquoi le filtre d'exposition est important :** sans lui, un modèle peut demander des tools non
 prévus pour ce parcours, soit par dérive de raisonnement, soit par injection de prompt dans le
-contenu documentaire. L'allowlist est la première ligne de défense.
+contenu documentaire. Le filtre `tool_allowlist` est la première ligne de défense ; l'autorisation
+Gateway est la dernière.
 
-### 6.2 Vérification de l'allowlist
+### 6.2 Filtre d'exposition (allowlist)
 
 ```python
-class ToolAllowlist:
+class ToolExposureFilter:
     """
-    Vérifie qu'un tool est autorisé avant transmission à l'adapter.
+    Filtre d'exposition (P-04) : restreint le catalogue de tools présenté au modèle
+    pour un parcours donné. N'est PAS l'autorisation d'exécution (propriété MCP Gateway).
     La liste est injectée depuis AgentConfig, jamais construite par le modèle.
     """
 
     def check(self, tool_name: str) -> None:
         """
-        Lève ToolDeniedError si tool_name n'est pas dans la liste autorisée.
+        Lève ToolDeniedError si tool_name n'est pas dans la liste exposée.
         Log un événement de sécurité (niveau WARNING) en cas de refus.
+        Un refus ici signale une dérive du modèle ou une injection — pas une
+        décision d'autorisation, qui reste du ressort de MCP Gateway en aval.
         """
         ...
 ```
@@ -530,12 +592,23 @@ Proposition par défaut retenue dans ce LLD jusqu'à décision ADR-011 :
 - Annulation : le client ferme la connexion SSE ; FastAPI détecte la déconnexion
   et propage un signal d'annulation à Runtime via le contexte d'opération
   (deadline_epoch_ms mis à "maintenant")
-- Partielle : si Runtime n'expose pas d'API streaming native, FastAPI retourne
-  le bloc complet de AgentResult.answer en feignant un stream (mode dégradé
-  transparent pour le client, tracé dans les logs)
 
-Cette proposition devra être revue et stabilisée dès que V2-ADR-011 est décidé.
+Mode émulé si Runtime ne stream pas nativement — EXPOSÉ, jamais masqué :
+- FastAPI annonce le mode dans le premier événement SSE :
+    event: meta
+    data: {"streaming": "emulated"}   (vs "native")
+- Le frontend adapte l'UX en conséquence : « génération en cours » (native)
+  vs « préparation de la réponse » + spinner (emulated). Pas de fausse
+  animation token-par-token sur une réponse déjà complète.
+- La métrique time-to-first-token (§10.2) distingue les deux modes : en émulé
+  elle mesure la latence réelle de la réponse complète, pas un premier token
+  fictif. La valeur n'est donc jamais trompeuse.
 ```
+
+> **Note de revue (M3) :** feindre un stream token-par-token sur une réponse déjà complète est une
+> anti-UX (attente longue puis fausse animation, `time-to-first-token` mensongère). Le mode émulé
+> est donc **exposé** au frontend via l'événement `meta`, jamais masqué : un défaut d'infrastructure
+> ne doit pas être caché derrière une animation.
 
 ---
 
@@ -637,7 +710,9 @@ Chaque span OTel émis par les hooks de l'adapter doit porter :
 | `agent.prompt_version` | `AgentConfig.prompt_version` | `"v1"` |
 | `agent.turn_count` | compteur de tours | `3` |
 | `agent.tool_calls_count` | compteur d'appels tool | `5` |
-| `agent.tokens_used` | tokens cumulés | `2450` |
+| `agent.input_tokens` | tokens d'entrée cumulés | `1800` |
+| `agent.output_tokens` | tokens de sortie cumulés | `650` |
+| `agent.cost_estimate_usd` | coût estimé (input × tarif_in + output × tarif_out du modèle) | `0.0123` |
 | `agent.budget_exhausted` | booléen | `false` |
 | `agent.degraded` | booléen | `false` |
 | `retrieval.status` | `retrievalContext.status` | `"ok"` |
@@ -652,8 +727,15 @@ Chaque span OTel émis par les hooks de l'adapter doit porter :
 | `agent.budget_exceeded.rate` | % conversations | > 5 % |
 | `agent.degraded.rate` | % conversations | > 10 % |
 | `agent.tool_denied.count` | événements/min | > 0 (alerte sécurité) |
+| `agent.cost_estimate_usd` | USD/conversation (P95) | seuil FinOps fixé en LLD-007 |
 | `bedrock.converse.latency` | ms (P95) | > 5 000 ms |
 | `bedrock.converse.error.rate` | % | > 2 % |
+| `bedrock.throttled.rate` | % appels Converse | > 1 % (déclenche mitigation §5.4) |
+
+Les tarifs input/output par modèle (`cost_estimate_usd`) proviennent de la même table
+`modèle → tarifs` que le calibrage de `maxTokens` (§5.2.1), maintenue avec `V2-ADR-012`. Le HLD §13
+exige explicitement la métrique de coût estimé ; fusionner input et output la rendrait inexploitable
+(Bedrock facture la sortie ~5× l'entrée).
 
 ### 10.3 Propagation W3C
 
@@ -670,7 +752,7 @@ La preuve de corrélation bout en bout est un critère de sortie de gate (§14).
 
 | Test | Vérification | Blocant |
 |---|---|---|
-| Lint d'imports | Aucun fichier hors `agents/adapter/` n'importe `strands.*` | Oui |
+| Lint d'imports | Aucun fichier hors `agents/adapter/` n'importe un framework agentique (liste configurable : `strands`, `langgraph`, …) | Oui |
 | Test de contrat | Champs interdits rejetés dans `AgentRequest` | Oui |
 | Test de contrat | `chunkCount == len(chunks)` et cohérence de `status` | Oui |
 | Test de contrat | `trust == "untrusted"` dans tout `RetrievalContext` | Oui |
@@ -749,6 +831,23 @@ Toutes les valeurs sont injectées par Terraform via SSM — jamais hardcodées 
 2. Vérifier si le tool demandé est légitime mais absent de l'allowlist (mise à jour de config)
 3. Vérifier si le tool demandé est inattendu (potentiel prompt injection)
 4. Si injection suspectée : escalader vers sécurité, conserver la trace (opération non destructive)
+
+### 12.4 Migration V1 → V2
+
+La V1 (`deploy-agentcore/agents/phase_4.py`, `phase_4_robust.py`) importe Strands directement au
+niveau module (`from strands import Agent`, `BedrockModel`, `MCPClient`, `FileSessionManager`) et
+mêle logique métier et SDK. La cible V2 isole tout le SDK derrière `AgentAdapter`. Le passage est
+un **refactor incrémental**, pas une réécriture from-scratch, en quatre étapes vérifiables :
+
+| Étape | Action | Point de rupture |
+|---|---|---|
+| 1 | Extraire l'interface `AgentAdapter` (§3.1) et `StrandsAdapter` en enveloppant l'usage V1 existant, sans changer le comportement | Aucun — le comportement reste identique |
+| 2 | Déplacer la logique métier (budgets, hooks, sélection de prompt) de `phase_4*.py` vers `domain/`, en ne dépendant plus que de `interface.py` | Les imports `strands.*` disparaissent du domaine |
+| 3 | Activer le lint d'imports (§2.1) en CI ; à ce stade il doit passer au vert | **Rupture dure** : tout import framework résiduel hors `adapter/` casse le build |
+| 4 | Ajouter les budgets non temporels V2 (`maxTurns`, `maxToolCalls`, `maxTokens` §5) absents en V1, et le contrat Memory (§2.5) | Nouveau comportement — couvert par tests unitaires §11.2 |
+
+Le moment où `strands.*` disparaît du domaine (étape 2→3) est le jalon de conformité P-04. Avant ce
+jalon, le lint est en warning ; après, il est bloquant.
 
 ---
 
