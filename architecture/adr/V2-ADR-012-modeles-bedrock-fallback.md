@@ -40,7 +40,7 @@ n'est pas le cas.
 | `V2-LLD-003 §5.4` | une `ThrottlingException` isolée ne doit pas casser une conversation |
 | `V2-LLD-003 §8.2` | toute sortie hors budget produit un `AgentResult` structuré, jamais une exception |
 | `V2-ADR-011` | le flux SSE déclare le mode servi et se termine par `done`, `cancelled` ou `error` |
-| `V2-ADR-006` | la posture de résidence des données reste dans l'Union européenne |
+| (point ouvert) | l'exigence formelle de résidence hors UE n'est pas encore documentée dans le corpus — voir « Option C » |
 | `V2-ADR-008` | le throttling et le coût par invocation sont observables et corrélés |
 
 ## Le fait technique déterminant — un modèle récent ne s'invoque pas par son nom
@@ -105,8 +105,23 @@ tokens d'entrée et de sortie par rapport au profil géographique.
 
 Le routage n'est pas borné géographiquement : les invites et les réponses peuvent être traitées
 hors de l'Union, et les données conservées pour la détection d'abus le sont dans la région de
-destination. Incompatible avec la posture de résidence retenue par le corpus, indépendamment de
-la conformité intrinsèque du mécanisme.
+destination. Cette exposition est de deux ordres :
+
+- **exposition CLOUD Act directe** : le traitement en région US place les données sous portée
+  immédiate de la loi américaine, sans la friction procédurale que confère un traitement en
+  région EU ;
+- **risque de perte de base légale** : si l'EU-US Data Privacy Framework était invalidé (scénario
+  « Schrems III »), tout transfert vers une région non-EU deviendrait sans base légale
+  immédiatement.
+
+**Option C est autorisée en environnement `dev` et `test`**, où les données traitées ne sont pas
+des données personnelles de production et où l'avantage économique (~10 %) et la capacité accrue
+justifient le compromis. Attention : les métriques de latence collectées dans ces environnements
+sont non représentatives de la production (TTFT variable selon la région de destination effective).
+
+**Option C est interdite en `staging` et `production`** par précaution opérationnelle, en
+l'absence d'exigence formelle de résidence dans le corpus. Cette exigence est à instruire dans
+la Charte ou dans `V2-ADR-006` — point ouvert reporté.
 
 ### Option D — Débit provisionné
 
@@ -129,9 +144,10 @@ provisionné. Cela vaut décision sur trois points :
 - le domaine ne teste pas le préfixe de l'identifiant et ne dérive aucune logique de sa forme ;
 - passer du profil géographique au débit provisionné est un changement de configuration SSM,
   sans modification du domaine ni du contrat ;
-- l'Option C reste techniquement accessible par un simple changement de valeur. Elle demeure
-  **interdite par défaut** : son activation exige un amendement de `V2-ADR-006` sur la résidence,
-  pas seulement une écriture SSM. Cette interdiction doit être un contrôle, pas une convention.
+- l'Option C reste techniquement accessible par un simple changement de valeur. Elle est
+  **autorisée en `dev` et `test`**, et **interdite en `staging` et `production`** — voir
+  « Option C » dans les choix ci-dessus. Cette distinction doit être un contrôle sur la valeur
+  SSM par environnement, pas une convention.
 
 L'Option D n'est pas retenue en V2 mais n'est pas fermée : elle devient la réponse au cas où le
 throttling deviendrait structurel plutôt qu'occasionnel, et sa condition de déclenchement est une
@@ -364,9 +380,10 @@ correcte ; elle est seulement incomplète.
 - la règle du premier token rend le repli inefficace sur les réponses longues, qui sont précisément
   celles dont l'échec est le plus visible. C'est la limite acceptée de ce choix : préserver la
   cohérence plutôt que la disponibilité ;
-- le tarif inférieur du profil global (environ 10 %) est écarté par la posture de résidence.
-  L'écart doit être chiffré dans `V2-LLD-007` pour que le compromis reste un choix documenté et
-  non un coût invisible ;
+- le tarif inférieur du profil global (environ 10 %) est écarté en production par précaution
+  opérationnelle (exposition CLOUD Act, risque de perte de base légale RGPD). L'écart doit être
+  chiffré dans `V2-LLD-007` pour que le compromis reste un choix documenté et non un coût
+  invisible ;
 - trois marqueurs `⚠ ADR MANQUANT` de `V2-LLD-003` sont levés ; le LLD peut viser `Approved` sur
   ces sections.
 
@@ -390,8 +407,10 @@ correcte ; elle est seulement incomplète.
   de propagation et du fait qu'elles ne sont pas rétroactives ;
 - réconciliation entre le coût dérivé des compteurs de tokens et la facture de l'environnement, avec
   un écart mesuré et borné ;
-- tentative d'usage d'un profil global : refusée par le contrôle, et non seulement absente de la
-  configuration.
+- tentative d'usage d'un profil global en `staging` ou `production` : refusée par le contrôle
+  (valeur SSM par environnement), et non seulement absente de la configuration ;
+- en environnement `dev` ou `test` avec profil global : TTFT mesuré sur plusieurs appels,
+  distribution documentée comme non représentative de la production.
 
 ## Références AWS
 
