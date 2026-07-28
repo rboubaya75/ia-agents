@@ -82,4 +82,5 @@ jobs:
             architecture/adr/V2-ADR-008-observability-distributed-context.md \
             architecture/adr/V2-ADR-009-gitlab-ci-promotion.md \
             architecture/adr/V2-ADR-010-backup-restore-rehydration.md \
+            architecture/adr/V2-ADR-011-streaming-annulations.md \
             architecture/adr/V2-ADR-019-rag-delivery-phasing.md
