@@ -9,7 +9,7 @@
 - **Préconditions bloquantes :** attachement effectif d'AWS WAF au type d'API Gateway retenu, et
   existence d'un mécanisme rendant CloudFront le seul chemin d'accès (voir « Préconditions »).
 - **Documents impactés :** `V2-ADR-001`, `V2-ADR-006`, `V2-ADR-012` ; `HLD` §6.3, §11 ;
-  `capability-allocation-matrix.md` Domaine 10 ; `V2-LLD-001` §7 ; `V2-LLD-003` §5.2 ;
+  `capability-allocation-matrix.md` Domaine 10 ; `V2-LLD-001` §7 ; `V2-LLD-003` §5.2, §9.2 ;
   `LLD-V2-INDEX-FR.md` (portée `V2-LLD-005`) — voir « Écarts à corriger dans le corpus ».
 
 ## Contexte
@@ -287,20 +287,29 @@ valeur des contrôles décidés dans cet ADR.
 `V2-ADR-006` pose que le refus est la valeur par défaut lorsqu'une information manque, et cet ADR
 ne l'affaiblit nulle part ailleurs. Il en fait ici **une exception, explicitement argumentée**.
 
-Si le magasin de compteurs est indisponible, FastAPI ne connaît plus la consommation de l'identité.
-Appliquer le refus par défaut refuserait alors tout le trafic : une panne du compteur deviendrait
-une panne totale du service.
+Si le magasin de compteurs est indisponible — connexion refusée, healthcheck échoué — ou si
+l'opération atomique dépasse le SLA de latence déclaré (voir précondition 3), FastAPI ne connaît
+plus la consommation de l'identité. Appliquer le refus par défaut refuserait alors tout le trafic :
+une panne du compteur deviendrait une panne totale du service.
 
 **Règle retenue.** Le compteur de quota n'est pas un contrôle d'autorisation. Son indisponibilité
-ne refuse pas ; elle fait retomber le système sur le plafond global d'API Gateway, qui reste
-appliqué et qui existe précisément pour cela. L'événement est journalisé et alerté comme une perte
-de contrôle d'équité, pas comme un incident de sécurité.
+ou son dépassement de SLA de latence ne refuse pas ; ils font retomber le système sur le plafond
+global d'API Gateway, qui reste appliqué et qui existe précisément pour cela. L'événement est
+journalisé et alerté comme une perte de contrôle d'équité, pas comme un incident de sécurité.
 
 La justification tient en une phrase : **un contrôle de disponibilité appliqué en fail-closed
 inverse sa propre finalité.** Un contrôle d'autorisation qui échoue doit refuser, parce que son
 objet est d'empêcher ; un contrôle d'équité qui échoue ne doit pas transformer une dégradation
 partagée en indisponibilité totale. La distinction est ce qui autorise l'exception, et elle vaut
 pour ce compteur uniquement — aucune décision d'autorisation de `V2-ADR-006` n'est concernée.
+
+**Comportement au retour du compteur.** Les invocations qui ont démarré pendant la période
+d'indisponibilité ont consommé des tokens sans être comptées. Au retour du compteur, ces
+invocations sont déjà terminées et leur trace est perdue pour le règlement — ce comportement est
+assumé : le mode dégradé accepte cette perte de précision sur la fenêtre de panne. En revanche,
+toute invocation terminée pendant l'indisponibilité mais dont le règlement de tokens n'a pas encore
+été écrit doit tenter une écriture différée au retour : le règlement manqué est une dette, pas une
+remise.
 
 ## Ce que les quotas ne protègent pas
 
@@ -329,16 +338,25 @@ inventer les besoins d'un client qui n'existe pas.
 
 Cet ADR fixe donc les **dimensions**, la **monnaie** et la **couche** de chaque contrôle, ainsi que
 la relation qui les lie au quota Bedrock. Il ne fixe aucune valeur. Toutes sont des paramètres
-Terraform/SSM, au même titre que les budgets de `V2-LLD-003` §5.2, avec une seule règle de
-validation opposable :
+Terraform/SSM, au même titre que les budgets de `V2-LLD-003` §5.2, avec trois contraintes de
+validation opposables :
 
 ```text
 somme(quotaIdentité) / plafondPlateforme = tauxSursouscription, déclaré explicitement
 plafondPlateforme <= admissions servables par le quota Bedrock du modèle configuré
+tokenBudgetWindowDays déclaré, <= durée maximale d'une invocation conversationnelle (V2-ADR-011)
 ```
 
-Un plan qui ne déclare pas le taux, ou qui fixe un plafond de plateforme supérieur à la capacité
-servable, est refusé à la validation.
+Trois paramètres doivent être déclarés — `tauxSursouscription`, `plafondPlateforme` et
+`tokenBudgetWindowDays` — et leur cohérence est vérifiée par `terraform_plan_guard.py` en mode
+numérique (nouveau contrôle, distinct du contrôle booléen et de la borne simple existants). Un
+plan omettant l'un d'eux, ou fixant un plafond de plateforme supérieur à la capacité servable, est
+refusé à la validation.
+
+La vérification `plafondPlateforme <= admissions servables` requiert la capacité Bedrock réelle du
+compte — une service quota AWS, pas une ressource Terraform. Elle entre dans la garde via un
+paramètre SSM alimenté lors de la découverte de capacité (précondition 4) ; le plan échoue si ce
+paramètre est absent ou nul.
 
 ## Réalisation par phase
 
@@ -354,7 +372,11 @@ servable, est refusé à la validation.
 
 Le règlement reste en fin d'invocation en V2 : l'imputation par tour supposerait un compteur écrit
 à chaque tour de chaque flux, soit un coût d'écriture proportionnel au trafic pour une précision
-dont la valeur n'est pas démontrée tant que `maxTokens` borne déjà l'unité.
+dont la valeur n'est pas démontrée tant que `maxTokens` borne déjà l'unité. La cible V3 suppose en
+outre un prérequis architectural non décidé : l'écriture du compteur doit s'intercaler dans le
+gestionnaire SSE de `V2-ADR-011`, coordonnée avec la backpressure et l'annulation explicite — ce
+couplage doit être décidé dans `V2-ADR-011` avant que l'imputation incrémentale puisse être
+planifiée.
 
 ## Écarts à corriger dans le corpus
 
@@ -371,6 +393,7 @@ Ces corrections découlent de l'acceptation de l'ADR et ne sont pas appliquées 
 | `V2-LLD-001` §7 | le chemin nominal n'exclut pas l'accès direct à API Gateway | ajouter l'exigence de chemin unique et son mécanisme |
 | `V2-LLD-001` §7 | l'ingress est décrit sur HTTP API, alors que `V2-ADR-011` bascule la route conversationnelle sur REST API | aligner, et statuer sur l'attachement du WAF selon le type retenu |
 | `V2-LLD-003` §5.2 | les budgets bornent l'invocation, sans lien avec un quota par identité | énoncer l'emboîtement : budget d'invocation ⊂ quota d'identité ⊂ plafond de plateforme |
+| `V2-LLD-003` §9.2 | le refus pour quota de commandes `pending` n'est pas dans les contrats d'erreur | ajouter le code de refus quota-commandes, distinct du refus d'autorisation et du `ThrottlingException` |
 | `LLD-V2-INDEX-FR.md` | portée de `V2-LLD-005` sans le chemin unique ni le magasin de compteurs | ajouter les deux |
 
 ## Préconditions
@@ -389,8 +412,10 @@ Cinq points doivent être établis avant implémentation. Deux sont bloquants.
    CloudFront sont contournables et les preuves qui les exercent par le chemin nominal ne
    démontrent rien.
 3. **Magasin de compteurs.** Choix d'un magasin partagé entre tâches ECS supportant un incrément
-   atomique et une expiration, et mesure de sa latence — le compteur est sur le chemin de chaque
-   invocation conversationnelle.
+   atomique et une expiration. Le compteur est sur le chemin de chaque invocation conversationnelle ;
+   sa latence doit être mesurée et un SLA de latence maximal déclaré (exemple : P99 ≤ 10 ms). Le
+   dépassement de ce SLA est traité identiquement à l'indisponibilité totale : repli sur le plafond
+   API Gateway, alerte, aucun refus.
 4. **Capacité servable du quota Bedrock.** Déterminer combien d'invocations simultanées le quota du
    modèle configuré sert réellement, puisque c'est ce nombre, et non une valeur choisie, qui borne
    le plafond de plateforme.
@@ -420,8 +445,11 @@ Cinq points doivent être établis avant implémentation. Deux sont bloquants.
 - `V2-ADR-012` acquiert une condition qu'il n'énonçait pas : son repli n'est une réserve que si un
   contrôle d'admission s'applique en amont, faute de quoi il double la capacité offerte à
   l'appelant qui sature.
-- Le système gagne un **paramètre structurant nouveau**, le taux de sursouscription, qui doit être
-  déclaré et non subi. C'est le seul chiffre de cet ADR qui change le comportement sous charge.
+- Le système gagne **trois paramètres structurants gardés** : `tauxSursouscription`, qui conditionne
+  le comportement sous charge ; `plafondPlateforme`, borné par la capacité Bedrock réelle du compte
+  (valeur externe, transmise via SSM) ; et `tokenBudgetWindowDays`, qui détermine la durée de
+  mémoire du règlement en tokens. Les trois doivent être déclarés et sont vérifiés par
+  `terraform_plan_guard.py` en mode numérique.
 - Un compteur partagé apparaît sur le chemin de chaque invocation conversationnelle : c'est une
   dépendance de latence et de disponibilité qui n'existait pas, et la raison pour laquelle son
   indisponibilité doit dégrader et non refuser.
@@ -444,16 +472,20 @@ Cinq points doivent être établis avant implémentation. Deux sont bloquants.
 - un flux ouvert puis abandonné par déconnexion client continue de compter dans la simultanéité
   jusqu'à son terme ou son annulation `V2-ADR-011`, démontrant que la grandeur comptée est
   l'invocation en vol et non la connexion ;
-- **preuve d'équité, la plus significative de cet ADR :** sous charge d'une identité poussant
-  au-delà de son quota, une seconde identité conserve un temps de première réponse dans son
-  enveloppe nominale — et la même charge, quotas désactivés, la dégrade. Le second volet n'est pas
+- **preuve d'équité, la plus significative de cet ADR :** sous une charge calibrée pour que
+  l'identité abusante atteigne `plafondPlateforme × tauxSursouscription` — c'est-à-dire au niveau
+  de saturation déclaré — une seconde identité conserve un temps de première réponse dans son
+  enveloppe nominale ; la même charge, quotas désactivés, la dégrade. Le second volet n'est pas
   facultatif : sans lui, le test passe aussi lorsque la charge n'a jamais saturé quoi que ce soit ;
 - une requête émise directement sur le point de terminaison API Gateway, hors CloudFront, est
   refusée ;
-- l'indisponibilité simulée du magasin de compteurs ne refuse pas le trafic, lève l'alerte
-  attendue, et le plafond global d'API Gateway reste appliqué ;
-- un plan fixant un plafond de plateforme supérieur à la capacité servable, ou ne déclarant pas le
-  taux de sursouscription, est refusé à la validation ;
+- l'indisponibilité simulée du magasin de compteurs (connexion refusée) ne refuse pas le trafic,
+  lève l'alerte attendue, et le plafond global d'API Gateway reste appliqué ; la même preuve est
+  rejouée en simulant un timeout de l'opération atomique au-delà du SLA déclaré — le comportement
+  doit être identique dans les deux cas ;
+- un plan omettant `tauxSursouscription`, `plafondPlateforme` ou `tokenBudgetWindowDays`, ou fixant
+  un plafond de plateforme supérieur à la capacité servable du quota Bedrock, est refusé par
+  `terraform_plan_guard.py` en mode numérique ;
 - le nombre de commandes `pending` par identité est borné, et la matérialisation est refusée
   au-delà sans effet de bord observable ;
 - le nombre de documents en cours d'ingestion par identité est borné, et l'upload est refusé
