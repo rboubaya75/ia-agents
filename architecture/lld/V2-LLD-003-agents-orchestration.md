@@ -35,7 +35,12 @@
 > **Révision v0.4 (corrections revue PR #37) :** en-tête v0.2 corrigé — `maxTokens` désambiguïsé
 > **par invocation** (non « par conversation ») ; valeur par défaut `AGENT_MAX_TOKENS` corrigée
 > dans §12.1 — remplacée par la formule dérivée `floor(ctx_modèle × 0,75)` (§5.2.1) ; constante
-> `8000` retirée, cohérente avec la suppression opérée en v0.2 (bloquant B4).
+> `8000` retirée, cohérente avec la suppression opérée en v0.2 (bloquant B4) ; commentaire de
+> `AgentBudget.max_tool_calls` aligné sur « par invocation » (§3.2) — il restait la dernière
+> occurrence de « par conversation » et portait la contradiction dans le contrat normatif lui-même,
+> celui dont part l'implémentation ; ce LLD ajouté à la liste de validation Markdown de la CI
+> (`.github/workflows/test-markdown-docs.yml`), avec LLD-001/002/006 et ADR-019 qui n'y figuraient
+> pas non plus.
 
 ---
 
@@ -298,7 +303,7 @@ from typing import Optional
 @dataclass(frozen=True)
 class AgentBudget:
     max_turns: int              # nombre maximum de tours modèle/tool (ADR-005)
-    max_tool_calls: int         # nombre total d'appels tool par conversation
+    max_tool_calls: int         # nombre total d'appels tool par invocation
     max_tokens: int             # tokens cumulés entrée + sortie
     deadline_epoch_ms: int      # borne temporelle absolue (déjà existante en V1)
 

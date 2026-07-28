@@ -67,6 +67,10 @@ jobs:
             architecture/hld/capability-allocation-matrix.md \
             architecture/hld/runtime-contract.md \
             architecture/lld/LLD-V2-INDEX-FR.md \
+            architecture/lld/V2-LLD-001-platform-network-ecs-fastapi.md \
+            architecture/lld/V2-LLD-002-rag-ingestion-documentaire.md \
+            architecture/lld/V2-LLD-003-agents-orchestration.md \
+            architecture/lld/V2-LLD-006-donnees-memoire-retention-restauration.md \
             architecture/adr/V2-ADR-BACKLOG-FR.md \
             architecture/adr/V2-ADR-001-ingress-security-boundary.md \
             architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md \
@@ -77,4 +81,5 @@ jobs:
             architecture/adr/V2-ADR-007-network-ecs-platform.md \
             architecture/adr/V2-ADR-008-observability-distributed-context.md \
             architecture/adr/V2-ADR-009-gitlab-ci-promotion.md \
-            architecture/adr/V2-ADR-010-backup-restore-rehydration.md
+            architecture/adr/V2-ADR-010-backup-restore-rehydration.md \
+            architecture/adr/V2-ADR-019-rag-delivery-phasing.md
