@@ -87,4 +87,5 @@ jobs:
             architecture/adr/V2-ADR-013-embeddings-versionnement.md \
             architecture/adr/V2-ADR-014-confirmation-commande-signee.md \
             architecture/adr/V2-ADR-015-memoire-droit-effacement.md \
+            architecture/adr/V2-ADR-016-waf-quotas-protection-abus.md \
             architecture/adr/V2-ADR-019-rag-delivery-phasing.md
