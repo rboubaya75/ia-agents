@@ -185,8 +185,8 @@ Le choix ne peut pas conduire à utiliser Bedrock managed Agents.
 | V2-ADR-011 | Streaming des réponses et gestion des annulations — **rédigé, `Draft` en attente de revue** (`V2-ADR-011-streaming-annulations.md`) | V2-ADR-001, V2-ADR-002 |
 | V2-ADR-012 | Modèles Bedrock, profils d’inférence et fallback — **rédigé, `Draft` en attente de revue** (`V2-ADR-012-modeles-bedrock-fallback.md`) | V2-ADR-005, V2-ADR-011 |
 | V2-ADR-013 | Embeddings Bedrock et stratégie de versionnement — **rédigé, `Draft` en attente de revue** (`V2-ADR-013-embeddings-versionnement.md`) | V2-ADR-003, V2-ADR-010, V2-ADR-012, V2-ADR-019 |
-| V2-ADR-014 | Confirmation forte et objet de commande signé | V2-ADR-006 |
-| V2-ADR-015 | Politique de mémoire et droit à l’effacement | V2-ADR-006, V2-ADR-010 |
+| V2-ADR-014 | Confirmation forte et objet de commande — **rédigé, `Draft` en attente de revue** (`V2-ADR-014-confirmation-commande-signee.md`). L'intitulé initial disait « objet de commande signé » ; la décision retenue ne transporte pas le contenu de la commande, donc ne le signe pas | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-010, V2-ADR-011 |
+| V2-ADR-015 | Politique de mémoire et droit à l’effacement — **rédigé, `Draft` en attente de revue** (`V2-ADR-015-memoire-droit-effacement.md`) | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-010, V2-ADR-014 |
 | V2-ADR-016 | WAF, quotas et protection contre les abus | V2-ADR-001, V2-ADR-006 |
 | V2-ADR-017 | Classification documentaire et conservation | V2-ADR-003, V2-ADR-006 |
 | V2-ADR-018 | Stratégie de tests RAG et seuils de qualité | V2-ADR-003, V2-ADR-013 |
