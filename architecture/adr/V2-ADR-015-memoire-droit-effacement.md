@@ -6,12 +6,13 @@
 - **Dépendances :** `V2-ADR-006` (isolation et suppression coordonnée), `V2-ADR-010` (PITR,
   versioning et restauration), `V2-ADR-014` (une demande d'effacement est une action mutante),
   `V2-ADR-002` (Memory est une donnée non fiable), `V2-ADR-005` (usage de Memory par les agents)
-- **Préconditions à prouver avant implémentation :** existence et sémantique des API de suppression
-  et d'expiration d'AgentCore Memory, et immuabilité du journal d'audit servant au rejeu (voir
+- **Préconditions bloquantes :** existence et sémantique des API de suppression et d'expiration
+  d'AgentCore Memory — leur absence fait basculer sur l'option C ; indépendance du journal d'audit
+  servant au rejeu vis-à-vis du périmètre de restauration — son absence n'a pas de repli (voir
   « Préconditions »).
 - **Documents impactés :** `V2-ADR-006`, `V2-ADR-010` ; `capability-allocation-matrix.md`
-  Domaine 6 ; `V2-LLD-006` §2, §8.3, §9, §10, §13.4 ; `V2-LLD-003` §2.5 ; `LLD-V2-INDEX-FR.md`
-  (portée `V2-LLD-005`) — voir « Écarts à corriger dans le corpus ».
+  Domaine 6 ; `V2-LLD-006` §2, §6.2, §8.3, §8.4, §9.2, §10, §13.3, §13.4, §16 ; `V2-LLD-003` §2.5 ;
+  `LLD-V2-INDEX-FR.md` (portée `V2-LLD-005`) — voir « Écarts à corriger dans le corpus ».
 
 ## Contexte
 
@@ -182,8 +183,14 @@ erasureDurableAt     erasureCompletedAt + residualWindowDays — plus aucune cop
 s'écoule d'elle-même. Aucun job n'est requis à cette échéance.
 
 ```text
-residualWindowDays = fenêtre PITR DynamoDB (V2-ADR-010)
+residualWindowDays = max(fenêtres PITR des tables couvertes par V2-ADR-010)
+                     Trips, documents, users, ledger — 35 jours en l'état
 ```
+
+Le maximum, et non la valeur commune : le PITR se configure table par table. Les quatre tables
+partagent aujourd'hui la même fenêtre, mais une seule d'entre elles dont la fenêtre serait allongée
+étendrait le résidu réel sans que la constante déclarée le reflète. La fenêtre résiduelle est une
+propriété du système, pas d'une table.
 
 Les autres résidus du tableau ci-dessus sont soit immédiats, soit strictement inclus dans cette
 fenêtre — le ledger expire en 7 jours, S3 est purgé version par version, S3 Vectors est vérifié à
@@ -313,6 +320,17 @@ rétention(événements d'audit d'effacement) >= fenêtre PITR
 Sans cette inégalité, une restauration au bord de la fenêtre PITR pourrait ne plus disposer de la
 liste des effacements à rejouer.
 
+Une seconde contrainte, plus forte, porte sur le magasin lui-même. `V2-LLD-006` §8.4 émet à
+l'étape 5 un « événement d'audit » sans en fixer la destination : en l'état, rien n'interdit qu'il
+atterrisse dans une table DynamoDB, donc sous PITR. **Une source de rejeu restaurable en même temps
+que les tables qu'elle sert à corriger n'est pas une source.** Le journal d'effacement ne peut donc
+pas être porté par une ressource couverte par le PITR de `V2-ADR-010`.
+
+Un magasin append-only hors du périmètre des restaurations de tables — groupe de journaux CloudWatch
+dédié avec rétention explicite, ou équivalent — satisfait les deux contraintes. Le choix du médium
+revient à `V2-LLD-006` ; l'indépendance et la rétention sont des intrants de ce choix, pas des
+préférences.
+
 ## La séquence d'un effacement
 
 La séquence complète `V2-LLD-006` §8.4 sans la remplacer. Les étapes 3 à 6 y figurent déjà ; les
@@ -354,6 +372,33 @@ L'étape 5 est la garde du modèle : `erasureCompletedAt` n'est écrit qu'après
 par simple succès des appels de suppression. C'est la même discipline que `V2-LLD-006` §8.2 applique
 déjà au passage en `status = deleted`, étendue à l'effacement utilisateur et à Memory.
 
+## L'effacement incomplet est un état, pas un échec silencieux
+
+Rendre la suppression Memory bloquante crée un état que le corpus ne connaissait pas : une entrée
+`users` porte `erasureRequestedAt` et `erasureOperationId`, mais pas `erasureCompletedAt`. Les
+documents sont partis, les vecteurs aussi ; la mémoire est encore là. Cet état est la conséquence
+directe et voulue de la décision, et il doit être traité comme un état nommé plutôt que comme une
+anomalie.
+
+Trois propriétés le rendent exploitable.
+
+**Il est observable.** L'absence de `erasureCompletedAt` sur une entrée dont `erasureRequestedAt`
+est renseigné est la définition de l'effacement en cours ; elle est interrogeable sans journal
+annexe. Une alerte d'exploitation est levée lorsque cet état se prolonge au-delà du seuil défini
+plus bas, et non lorsqu'un appel échoue — un échec suivi d'une reprise réussie n'est pas un
+incident.
+
+**Il est reprenable.** Chaque étape de la séquence se termine par une vérification par relecture,
+donc chaque étape est rejouable sans effet de bord : supprimer ce qui est déjà supprimé et relire un
+namespace vide sont des opérations idempotentes. La reprise reprend la séquence à l'étape 3, sans
+état intermédiaire à conserver, et sans nouvelle confirmation `V2-ADR-014` — la commande a déjà été
+confirmée, `erasureOperationId` en est la trace. En V2 la reprise est manuelle, déclenchée par
+l'opérateur via le runbook `V2-LLD-006` §18.3.
+
+**Il ne rend rien à l'utilisateur.** L'effacement en cours n'est pas un rollback : les données déjà
+supprimées ne reviennent pas, et l'accès reste refusé. Le système ne repasse jamais d'un effacement
+partiel à un état nominal ; il n'avance que vers la clôture.
+
 ## Ce que l'effacement ne couvre pas
 
 Énoncer ces exclusions fait partie de la décision : un effacement dont le périmètre est implicite ne
@@ -388,7 +433,16 @@ delaiEffacementAnnonce >= residualWindowDays
 ```
 
 - un **paramètre Terraform** `erasure_sla_days`, sans valeur imposée par l'architecture, dont toute
-  valeur inférieure au plancher est refusée à la validation du plan ;
+  valeur inférieure au plancher est refusée à la validation du plan. Sa sémantique est celle d'un
+  **délai annonçable** : la durée maximale entre `erasureRequestedAt` et `erasureDurableAt` que le
+  système s'engage à tenir. Elle se décompose en une part pilotable — les étapes 1 à 6, de l'ordre
+  de la minute lorsqu'elles réussissent — et une part subie, la fenêtre résiduelle, qui n'est pas
+  raccourcissable. Le paramètre est consommé à deux endroits, et à deux seulement : la garde de
+  plan, et l'alerte d'exploitation qui se déclenche lorsqu'un effacement encore incomplet met le
+  délai annoncé hors d'atteinte, soit à `erasureRequestedAt + erasure_sla_days -
+  residualWindowDays`. Un `erasure_sla_days` fixé au plancher exact réduit ce seuil d'alerte à
+  zéro : tout effacement non clôturé immédiatement alerte. C'est cohérent, et c'est la raison
+  d'être de la marge que l'exploitant choisit d'ajouter au plancher ;
 - une **règle de cohérence** : si un délai plus court devenait exigible, le seul levier conforme est
   la réduction de la fenêtre PITR, au prix documenté du RPO, ou la bascule vers l'effacement
   cryptographique de l'option C. Aucun autre chemin ne raccourcit le résidu.
@@ -422,28 +476,40 @@ Ces corrections découlent de l'acceptation de l'ADR et ne sont pas appliquées 
 | `V2-LLD-006` §2 | ligne `Memory` : « volatile ; expiration naturelle » | remplacer par les deux lignes session / longue durée avec leurs rétentions |
 | `V2-LLD-006` §8.3 | « pas de sauvegarde donc pas de résidu » et effacement best-effort | remplacer par la suppression explicite vérifiée |
 | `V2-LLD-006` §8.4 | `erasureCompletedAt` présenté comme la fin de l'effacement | ajouter `erasureDurableAt` et la vérification d'absence en garde |
+| `V2-LLD-006` §8.4 étape 5 | « événement d'audit émis » sans destination : rien n'interdit une table sous PITR | fixer le médium du journal d'effacement, hors périmètre PITR, avec rétention >= fenêtre résiduelle |
 | `V2-LLD-006` §6.2 | schéma `users` sans `erasureDurableAt` | ajouter l'attribut |
 | `V2-LLD-006` §9.2 | « Memory incluse au best-effort » | aligner sur la suppression vérifiée |
 | `V2-LLD-006` §10 | ligne `Memory` : « volatil / expiration naturelle » | deux lignes avec la durée d'expiration paramétrée |
 | `V2-LLD-006` §13.3 et §13.4 | la restauration ne rejoue pas les effacements ; §13.4 ne raisonne que sur `users` | ajouter l'étape de rejeu avant remise en service |
+| `V2-LLD-006` §16 | les règles du guard sont toutes booléennes (PITR activé, versioning actif, chiffrement présent) | ajouter deux règles de borne : `erasure_sla_days >= residualWindowDays` et rétention du journal d'effacement >= fenêtre PITR — un mode de contrôle nouveau pour ce script |
+| `V2-LLD-006` §18.3 | le runbook d'effacement ne couvre pas la reprise d'un effacement incomplet | ajouter la reprise à l'étape 3, idempotente, sans nouvelle confirmation |
+| `V2-LLD-006` §17.2 | le DR drill ne comporte pas d'effacement | ajouter le scénario effacement → restauration antérieure → rejeu, avec le volet sans rejeu |
 | `V2-LLD-003` §2.5 | le contrat d'usage Memory ne mentionne ni rétention ni effacement | renvoyer explicitement à cet ADR |
 | `LLD-V2-INDEX-FR.md` | portée de `V2-LLD-005` sans le rejeu ni la rétention d'audit | ajouter la contrainte de rétention du journal d'effacement |
 
 ## Préconditions
 
-Cinq points doivent être établis avant implémentation. Les deux premiers sont bloquants : leur échec
-fait basculer la décision sur l'option C.
+Cinq points doivent être établis avant implémentation. **Trois sont bloquants**, avec deux
+conséquences d'échec distinctes : l'échec de la précondition 1 ou 2 fait basculer la décision sur
+l'option C ; l'échec de la précondition 3 n'a pas de repli.
 
-1. **Suppression Memory.** Existence d'une opération de suppression des enregistrements longue durée
-   d'un namespace, et d'une relecture permettant de vérifier l'absence. `V2-LLD-003` §9 signale déjà
-   que les préfixes IAM AgentCore ont évolué et sont « à confirmer nominativement » : la même
-   prudence s'applique ici, l'API doit être vérifiée sur le service, pas supposée.
-2. **Expiration Memory.** Existence d'une durée d'expiration configurable sur les événements de
-   session, et valeur maximale admise. Si l'expiration n'est pas configurable, la mémoire de session
-   devient un résidu non borné et relève du même repli.
-3. **Immuabilité du journal d'audit.** Le journal servant au rejeu doit être en append-only et hors
-   du périmètre des restaurations de tables, faute de quoi le rejeu pourrait être amputé de sa
-   source.
+1. **Suppression Memory — bloquante, repli option C.** Existence d'une opération de suppression des
+   enregistrements longue durée d'un namespace, et d'une relecture permettant de vérifier l'absence.
+   `V2-LLD-003` §9 signale déjà que les préfixes IAM AgentCore ont évolué et sont « à confirmer
+   nominativement » : la même prudence s'applique ici, l'API doit être vérifiée sur le service, pas
+   supposée.
+2. **Expiration Memory — bloquante, repli option C.** Existence d'une durée d'expiration
+   configurable sur les événements de session, et valeur maximale admise. Si l'expiration n'est pas
+   configurable, la mémoire de session devient un résidu non borné et relève du même repli.
+3. **Indépendance du journal d'audit — bloquante, sans repli.** Le journal servant au rejeu doit
+   être en append-only, hors du périmètre des restaurations de tables, et retenu au moins aussi
+   longtemps que la fenêtre résiduelle. Sans lui, le rejeu perd sa source autoritative et la fenêtre
+   résiduelle cesse d'être fermée par un mécanisme : elle redevient une déclaration invérifiable,
+   c'est-à-dire exactement ce que cet ADR corrige. Contrairement aux deux premières, cette
+   précondition n'admet aucune option de repli — aucune décision de cet ADR ne rend le rejeu
+   superflu. Tant qu'elle n'est pas satisfaite, une restauration PITR reste techniquement possible
+   mais réintroduit des données effacées sans moyen de les retirer : elle doit alors être traitée
+   comme interdite, non comme dégradée.
 4. **Fenêtre PITR effective.** Confirmer la valeur retenue et sa configurabilité, puisqu'elle
    détermine `residualWindowDays` et donc le plancher annonçable.
 5. **Suppression permanente S3 par version.** Vérifier que la séquence de suppression retire chaque
@@ -473,14 +539,20 @@ fait basculer la décision sur l'option C.
   catégorie de donnée sans borne du corpus.
 - Une suppression Memory qui échoue devient **bloquante** : `erasureCompletedAt` n'est pas écrit, et
   l'effacement reste en cours. C'est un changement d'exploitation réel par rapport au best-effort de
-  `V2-LLD-006` §8.3, qui ne produisait aucune alerte.
+  `V2-LLD-006` §8.3, qui ne produisait aucune alerte. L'exploitation gagne un état à surveiller et
+  un geste de reprise à documenter — c'est le prix assumé de la garantie.
 - Toute restauration acquiert une étape supplémentaire obligatoire. Le DR drill trimestriel de
   `V2-ADR-010` doit désormais inclure un effacement, une restauration antérieure et le rejeu.
+- Le journal d'audit d'effacement devient une **ressource d'architecture contrainte** — médium hors
+  PITR, rétention minimale — là où `V2-LLD-006` §8.4 n'émettait qu'un événement sans destination.
 - Si la précondition 1 ou 2 échoue, la décision bascule sur l'option C : les préférences quittent
   Memory pour DynamoDB, ce qui constitue un amendement à la CAM Domaine 6 et donc à `V2-ADR-002`.
   Ce chemin est prévu, pas subi.
-- Le paramètre `erasure_sla_days` doit être gardé par `terraform_plan_guard.py` au même titre que le
-  PITR, faute de quoi le plancher pourrait être franchi par un simple changement de variable.
+- `terraform_plan_guard.py` doit apprendre un **mode de contrôle qu'il n'a pas** : ses règles
+  existantes et celles que `V2-LLD-006` §16 lui prévoit sont toutes booléennes — une ressource
+  détruite, un drapeau désactivé. Vérifier `erasure_sla_days >= residualWindowDays` et la rétention
+  du journal exige de comparer des valeurs numériques dans le plan. Sans cette extension, le
+  plancher pourrait être franchi par un simple changement de variable.
 
 ## Preuves attendues
 
@@ -489,12 +561,17 @@ fait basculer la décision sur l'option C.
 - un `Retrieve` filtré sur le tenant et l'utilisateur effacé renvoie zéro chunk ;
 - une relecture du namespace Memory de l'acteur effacé renvoie zéro enregistrement longue durée ;
 - un échec simulé de la suppression Memory laisse l'effacement en cours et **n'écrit pas**
-  `erasureCompletedAt` ;
-- une restauration PITR à un instant antérieur à un effacement, suivie du rejeu, ne réintroduit
-  aucune métadonnée de l'utilisateur effacé — et la même restauration **sans** rejeu la réintroduit,
-  démontrant que le test contrôle bien le mécanisme et non l'absence de donnée ;
+  `erasureCompletedAt` ; l'alerte d'exploitation se déclenche au seuil attendu, et la reprise après
+  rétablissement du magasin conduit à la clôture sans nouvelle confirmation ni effet de bord ;
+- **preuve centrale, portée par le DR drill trimestriel** (`V2-ADR-010`, `V2-LLD-006` §17.2) : une
+  restauration PITR à un instant antérieur à un effacement, suivie du rejeu, ne réintroduit aucune
+  métadonnée de l'utilisateur effacé — et la même restauration **sans** rejeu la réintroduit. Le
+  second volet n'est pas facultatif : sans lui, le test passe tout aussi bien lorsque le rejeu ne
+  fait rien, et n'atteste que l'absence de donnée. C'est la seule preuve du corpus qui démontre que
+  la fenêtre résiduelle est fermée par un mécanisme et non par une déclaration ;
 - la rétention configurée du journal d'audit d'effacement est supérieure ou égale à la fenêtre PITR,
-  vérifiée sur le plan Terraform ;
+  et le journal n'est porté par aucune ressource couverte par le PITR — les deux vérifiées sur le
+  plan Terraform ;
 - un plan fixant `erasure_sla_days` sous le plancher est bloqué par `terraform_plan_guard.py` ;
 - les événements de session dépassant la durée d'expiration configurée ne sont plus lisibles ;
 - deux acteurs distincts ne partagent aucun enregistrement de mémoire longue durée, avant comme
