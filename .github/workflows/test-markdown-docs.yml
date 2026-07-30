@@ -88,5 +88,6 @@ jobs:
             architecture/adr/V2-ADR-014-confirmation-commande-signee.md \
             architecture/adr/V2-ADR-015-memoire-droit-effacement.md \
             architecture/adr/V2-ADR-016-waf-quotas-protection-abus.md \
+            architecture/adr/V2-ADR-017-classification-documentaire-conservation.md \
             architecture/adr/V2-ADR-019-rag-delivery-phasing.md \
             architecture/adr/V2-ADR-020-identite-transport-ancrage-confiance.md
