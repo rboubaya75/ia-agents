@@ -3,7 +3,8 @@
 - **Statut :** Draft (propositions — en attente de revue et de validation)
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
-- **Dépendances :** `V2-ADR-003` (attribut `classification` de la table `documents`), `V2-ADR-006`
+- **Dépendances :** `V2-ADR-003` (attribut `classification` de la table `documents`),
+  `V2-ADR-004` (mécanique de désindexation pour la transition vers `restricted`), `V2-ADR-006`
   (modèle d'autorisation, intrants « type et classification de ressource » et « ownership ou
   partage explicite »), `V2-ADR-014` (une action élargissant un accès est une action mutante),
   `V2-ADR-015` (fenêtre résiduelle, PITR non rédactible), `V2-ADR-019` (métadonnées de chunk
@@ -11,9 +12,10 @@
 - **Préconditions non bloquantes :** propagation effective de `classification` aux chunks par KB ;
   définition de la data source KB par préfixe S3 ; coût de la lecture de `documents` avant
   filtrage (voir « Préconditions »).
-- **Documents impactés :** `V2-LLD-002` §4.1, §4.2, §5.3, §6.2, §6.2.1, §11.2 ; `V2-LLD-006` §2,
-  §4.3, §7.1, §7.2, §10 ; `V2-ADR-003` ; `V2-ADR-006` ; `HLD` §11 ; `LLD-V2-INDEX-FR.md` (portée
-  `V2-LLD-005`) — voir « Écarts à corriger dans le corpus ».
+- **Documents impactés :** `V2-LLD-002` §4.1, §4.2, §5.3, §6.2, §6.2.1, §11.2 ; `V2-LLD-005`
+  (autorisation sur lecture directe) ; `V2-LLD-006` §2, §4.3, §7.1, §7.2, §10 ; `V2-ADR-003` ;
+  `V2-ADR-006` ; `HLD` §11 ; `LLD-V2-INDEX-FR.md` (portée `V2-LLD-005`) — voir « Écarts à corriger
+  dans le corpus ».
 
 ## Contexte
 
@@ -169,17 +171,24 @@ anonyme. Un tel niveau serait une valeur sans mécanisme. Son absence est une d�
 oubli — la colonne « Sensibilité » de `V2-LLD-006` §2 emploie `public` pour le bucket frontend, ce
 qui relève de l'autre vocabulaire.
 
-**La valeur par défaut est `confidential`**, et non le niveau le plus restrictif. Le refus par
-défaut de `V2-ADR-006` s'applique au niveau le plus restrictif **parmi ceux qui préservent la
-fonction attendue** : l'upload documentaire existe pour alimenter le RAG, et un défaut à
-`restricted` produirait un système où aucun document n'est indexé sans geste explicite. Le défaut
-retenu est donc fail-closed sur l'accès — seul le propriétaire lit — et fonctionnel sur
-l'indexation.
+**La valeur par défaut est `confidential`**, et non le niveau le plus restrictif. Ce choix est une
+décision indépendante de `V2-ADR-006` : le refus par défaut de cet ADR concerne l'absence
+d'information sur l'autorisation, non le défaut d'un attribut dont toutes les valeurs produisent
+un accès légitime différencié. La décision repose sur deux critères propres : l'upload documentaire
+existe pour alimenter le RAG, et un défaut à `restricted` produirait un système où aucun document
+n'est indexé sans geste explicite. `confidential` est donc la valeur fail-closed sur l'accès — seul
+le propriétaire lit — et fonctionnelle sur l'indexation.
 
 **Un document en quarantaine est traité comme `restricted`**, quelle que soit la valeur déclarée.
 Son contenu n'a pas été validé ; il n'est ni lisible ni indexable. Le cycle de vie existant le
 garantit déjà côté indexation — `quarantined` n'atteint jamais `indexed` (`V2-LLD-002` §4.3) — mais
 la lecture, elle, n'était pas fermée.
+
+**La reclassification d'un document `quarantined` est refusée.** Modifier `classification` sur un
+document dont `status = quarantined` est sans effet tant que la validation n'a pas abouti : le
+statut prime sur la valeur de l'attribut. Toute tentative de reclassification — dans un sens ou dans
+l'autre — est refusée par la couche applicative (FastAPI) sans appel à `V2-ADR-014`, puisque
+`quarantined` neutralise la classification déclarée.
 
 ## Options — point d'application du filtre
 
@@ -262,6 +271,11 @@ modèle même à un utilisateur qui est autorisé à **lire** le document. La le
 l'injection dans un prompt ne sont pas le même acte — la seconde transmet le contenu à Bedrock et
 l'expose à l'inférence.
 
+**L'absence d'entrée `documents` pour un candidat produit un refus.** Si le BatchGetItem ne retourne
+pas d'entrée pour un `documentId` — document supprimé dans la fenêtre entre le retrieve KB et la
+lecture groupée — le fail-closed de `V2-ADR-006` s'applique : le candidat est écarté et compté en
+`filtered_out`, sans erreur ni échec de la requête.
+
 ## Décision — reclassification
 
 Une reclassification est immédiatement effective sur le chemin de lecture, par construction de la
@@ -285,6 +299,14 @@ Cette asynchronie est sans effet sur l'autorisation, et c'est le bénéfice dire
 précédente : dès l'écriture dans `documents`, le post-filtrage refuse l'injection. Les chunks
 survivants ne sont plus qu'un résidu à nettoyer, exactement comme `V2-ADR-015` distingue
 l'effacement logique immédiat de la convergence différée des copies dérivées.
+
+**Les versions S3 non-courantes à l'ancien préfixe doivent être purgées.** Sur un bucket versionné,
+déplacer un objet est une opération copy + delete : la suppression de la clé source crée un delete
+marker, mais les versions non-courantes restent accessibles par version ID à l'ancien emplacement.
+Pour qu'aucun résidu ne soit atteignable hors du préfixe `restricted`, ces versions non-courantes
+doivent être supprimées explicitement dans la même opération (hard delete des non-current versions
+S3). Cette purge fait partie du coût structurel de la transition vers `restricted` et est attestée
+par la preuve correspondante.
 
 ## La classification ne pilote pas la conservation
 
@@ -346,7 +368,7 @@ Ces corrections découlent de l'acceptation de l'ADR et ne sont pas appliquées 
 
 | Document | Écart | Correction attendue |
 |---|---|---|
-| `V2-LLD-002` §6.2 | la classification est filtrée à l'étape 2, `documents` est lu à l'étape 5 | déplacer la lecture de `documents` avant le filtrage, en lecture groupée dédupliquée par `documentId` |
+| `V2-LLD-002` §6.2 | la classification est filtrée à l'étape 2, `documents` est lu à l'étape 5 | remplacer la chaîne par la séquence : (0) KB retrieve → candidats avec métadonnées de chunk ; (1) filtre grossier sur `chunk.classification` (défense en profondeur) ; (2) lire `documents` en BatchGetItem groupé, dédupliqué par `documentId` ; (3) post-filtrage tenant, `documents.classification`, ownership/ACL, indexabilité ; les étapes suivantes sont inchangées |
 | `V2-LLD-002` §4.2 | « le post-filtrage classification se fait aussi côté FastAPI » — ambigu sur la valeur qui décide | énoncer que la métadonnée de chunk est un filtre grossier et que `documents` décide |
 | `V2-LLD-002` §6.2.1 | `filtered_out` ne mentionne pas les faux négatifs de reclassification | ajouter cette cause, avec sa résorption à la réindexation |
 | `V2-LLD-002` §4.1 | un seul préfixe `sources/`, entièrement couvert par la data source KB | ajouter le préfixe des documents `restricted`, hors data source |
@@ -359,6 +381,7 @@ Ces corrections découlent de l'acceptation de l'ADR et ne sont pas appliquées 
 | `V2-ADR-003` | `classification` listé comme attribut sans taxonomie | renvoyer au domaine de valeurs de cet ADR |
 | `V2-ADR-006` | `V2-ADR-017` figure dans ses dépendances alors que cet ADR dépend de lui — **cycle** | retirer `V2-ADR-017` des dépendances de `V2-ADR-006` ; le sens 017 → 006 est le bon |
 | `HLD` §11 | les catégories de données n'ont pas d'axe de classification par ressource | mentionner la classification documentaire et son indépendance de la rétention |
+| `V2-LLD-005` | la lecture directe de document ne mentionne pas de vérification de classification | ajouter que `GET /documents/{id}` suit les étapes 1–3 du modèle d'évaluation (tenant → `documents.classification` → ownership/ACL) ; l'étape 4 (indexabilité) ne s'applique pas à la lecture directe — un document `restricted` reste lisible par son propriétaire |
 | `LLD-V2-INDEX-FR.md` | portée de `V2-LLD-005` : « classification des données » sans contenu | ajouter : domaine fermé, composition avec l'ACL, régimes de reclassification |
 
 ## Préconditions
@@ -418,14 +441,19 @@ chacun énonce sa conséquence s'il n'est pas satisfait.
 - La conservation reste uniforme, et cette uniformité devient une décision testable au lieu d'un
   silence. Le coût d'une rétention différenciée est chiffré, ce qui rend l'arbitrage possible s'il
   était rouvert.
+- Le tombstone (`status = deleted`, 30 jours) conserve `classification` : décision d'audit, pas de
+  rétention différenciée.
+- La classification ne relève pas du périmètre d'effacement de `V2-ADR-015` : elle qualifie la
+  ressource, non la personne, et disparaît avec l'entrée `documents` qui la porte.
 - Un cycle de dépendances existant est mis au jour : `V2-ADR-006` dépend de `V2-ADR-017`, qui dépend
   de lui. Il est corrigé dans le sens 017 → 006, comme les trois autres cycles du corpus.
 
 ## Preuves attendues
 
 - un document reclassé de `internal` en `confidential` cesse d'être retourné à un utilisateur du
-  tenant non propriétaire **sans réindexation** — preuve centrale : elle échoue avec le mécanisme
-  actuel de `V2-LLD-002` §6.2, ce qui est précisément ce qui justifie cet ADR ;
+  tenant non propriétaire **sans réindexation** — preuve centrale : elle passe contre `V2-LLD-002`
+  §6.2 *tel que corrigé par cet ADR*, et échoue contre le mécanisme actuel (ce contraste est la
+  justification de la correction) ;
 - un chunk portant une métadonnée `internal` obsolète, dont l'entrée `documents` porte
   `confidential`, n'est pas retourné à un utilisateur non autorisé — le filtre grossier ne décide
   pas ;
@@ -444,6 +472,12 @@ chacun énonce sa conséquence s'il n'est pas satisfait.
   déclarée à l'upload ;
 - une valeur de classification hors du domaine fermé est refusée à l'écriture, et une entrée
   `documents` portant une valeur inconnue provoque un refus de lecture et non un accès par défaut ;
+- un candidat dont `documentId` est absent de `documents` au moment du BatchGetItem est écarté sans
+  erreur et compté en `filtered_out`, sans provoquer d'échec de la requête ;
+- une tentative de reclassification sur un document `quarantined` est refusée, quelle que soit la
+  direction du changement ;
+- après une transition vers `restricted`, aucune version S3 non-courante ne subsiste à l'ancien
+  préfixe et aucun chunk de l'ancien préfixe n'est ingéré par la data source KB ;
 - une reclassification assouplissante sans confirmation `V2-ADR-014` est refusée ; une
   reclassification restrictive aboutit sans confirmation ;
 - une entrée `documents` en `status = deleted` conserve `classification` pendant la durée du
