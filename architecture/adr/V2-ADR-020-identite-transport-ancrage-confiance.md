@@ -216,10 +216,17 @@ Le risque de disponibilité qui en découle se traite par le cache, pas par l'as
 
 - les clés de signature Cognito sont mises en cache avec un TTL déclaré comme paramètre ;
 - une clé expirée du cache mais non renouvelable en raison d'une indisponibilité du JWKS reste
-  utilisable jusqu'à une borne de tolérance déclarée, distincte du TTL nominal — le compromis est
-  borné et explicite, il n'est pas laissé à l'implémentation ;
+  utilisable jusqu'à une borne de tolérance déclarée, distincte du TTL nominal — **la borne
+  s'exprime en heures, non en jours** ; le compromis est borné et explicite, il n'est pas laissé
+  à l'implémentation ;
 - au-delà de cette borne, le refus s'applique et l'événement est alerté comme un incident de
-  sécurité, non comme une perte de contrôle d'équité.
+  sécurité, non comme une perte de contrôle d'équité ;
+- un `kid` présent dans le token mais absent du cache déclenche un rafraîchissement unique avant
+  décision ; si le rafraîchissement échoue ou si le `kid` reste absent après actualisation, la
+  requête est refusée — ce comportement distingue la rotation planifiée de Cognito (nouveau `kid`
+  accepté dès la première actualisation réussie) d'une tentative d'amplification (un `kid` forgé
+  inconnu ne déclenche qu'une tentative, pas une boucle) ; les paramètres de la fenêtre
+  anti-amplification sont déclarés dans `V2-LLD-001`.
 
 ## Ce que cette décision ne change pas
 
@@ -248,6 +255,8 @@ Ces corrections découlent de l'acceptation de l'ADR et ne sont pas appliquées 
 | `V2-ADR-008` | les règles de redaction ne nomment pas l'en-tête `Authorization` | l'ajouter nommément à la liste des valeurs jamais journalisées |
 | `HLD` §6.3 | l'ingress est crédité de « validation JWT » sans dire où l'identité est établie | distinguer rejet du non-authentifié (passerelle) et établissement de l'identité (FastAPI) |
 | `LLD-V2-INDEX-FR.md` | portée de `V2-LLD-005` sans le contrat de validation du token | ajouter : JWKS, cache, borne de tolérance, claims requis, politique de refus |
+| `LLD-V2-INDEX-FR.md` | ligne de dépendances ADR de `V2-LLD-001` ne liste pas `V2-ADR-020` | ajouter `V2-ADR-020` aux dépendances ADR exactes de `V2-LLD-001` dans le tableau du catalogue |
+| `V2-ADR-011` | item ouvert « en-têtes §7.1 à revalider pour REST API » — non clôturé | ajouter une référence à `V2-ADR-020` comme ADR qui clôture cet item |
 
 ## Préconditions
 
@@ -255,7 +264,11 @@ Quatre points doivent être établis avant implémentation. Aucun n'est bloquant
 
 1. **Transmission de `Authorization` par REST API.** Vérifier nominativement que l'API Gateway REST
    transmet l'en-tête à l'intégration VPC Link sans le consommer, la même prudence que
-   `V2-ADR-016` applique à l'attachement du WAF s'imposant ici.
+   `V2-ADR-016` applique à l'attachement du WAF s'imposant ici. Si cette vérification révèle que
+   REST API consomme `Authorization`, la route conversationnelle peut être basculée sur HTTP API
+   sans modifier la décision — le contrat d'identité est identique sur les deux types, ce qui est
+   précisément l'argument 1 de l'option D, et `V2-ADR-011` autorise cette configuration ; aucun
+   retour à un mapping d'en-têtes n'est acceptable comme alternative.
 2. **Paramètres du cache JWKS.** TTL nominal et borne de tolérance en cas d'indisponibilité, tous
    deux déclarés comme paramètres et non laissés à la bibliothèque retenue.
 3. **Claims requis et politique de refus.** Liste nominative des claims dont l'absence provoque un
@@ -314,8 +327,10 @@ Quatre points doivent être établis avant implémentation. Aucun n'est bloquant
   borne est effective et non décorative ;
 - aucun en-tête `Authorization` n'apparaît dans les journaux d'aucune couche, vérifié sur un
   échantillon incluant les journaux d'erreur, qui sont le lieu habituel de la fuite ;
-- aucun token Cognito n'atteint Runtime, MCP ou un tool — preuve `V2-ADR-006` inchangée, rejouée
-  ici parce que le token circule désormais plus loin qu'auparavant.
+- aucun token Cognito n'atteint Runtime, MCP ou un tool — preuve `V2-ADR-006`, rejouée sur la
+  topologie mise à jour : FastAPI ne transmet pas `Authorization` ni aucun équivalent à Runtime,
+  vérifié par inspection des en-têtes reçus côté Runtime sur une requête authentifiée normale ; le
+  token s'arrête à FastAPI, exactement.
 
 ## Références
 
