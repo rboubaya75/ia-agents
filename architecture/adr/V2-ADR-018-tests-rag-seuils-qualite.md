@@ -3,10 +3,11 @@
 - **Statut :** Draft (propositions — en attente de revue et de validation)
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
-- **Dépendances :** `V2-ADR-003` (métriques nommées, dataset versionné), `V2-ADR-013`
-  (`embeddingSpaceId`, `chunkerVersion`, bascule conditionnée à une mesure), `V2-ADR-010` (index
-  vectoriel comme état dérivé, DR drill), `V2-ADR-017` (classification dans la chaîne de
-  post-filtrage), `V2-ADR-019` (phasage KB en V2, post-filtrage côté FastAPI)
+- **Dépendances :** `V2-ADR-003` (métriques nommées, dataset versionné), `V2-ADR-010` (index
+  vectoriel comme état dérivé, DR drill), `V2-ADR-012` (cycle de vie du modèle juge, délégation de
+  la comparaison entre modèles), `V2-ADR-013` (`embeddingSpaceId`, `chunkerVersion`, bascule
+  conditionnée à une mesure), `V2-ADR-017` (classification dans la chaîne de post-filtrage),
+  `V2-ADR-019` (phasage KB en V2, post-filtrage côté FastAPI)
 - **Préconditions non bloquantes :** déterminisme du `Retrieve` KB à index constant ; disponibilité
   d'un corpus de fixtures représentatif ; coût d'une exécution complète (voir « Préconditions »).
 - **Documents impactés :** `V2-ADR-003` ; `V2-ADR-012` ; `V2-ADR-013` ; `V2-LLD-002` §1.1, §1.2,
@@ -245,6 +246,12 @@ mesurée, la métrique informe sans arbitrer.
 Le modèle juge est un modèle Bedrock distinct de celui qui produit la réponse évaluée. Un modèle
 qui juge sa propre sortie n'apporte pas d'information indépendante.
 
+Étant un modèle Bedrock, le juge subit les statuts de cycle de vie de `V2-ADR-012` : son
+indisponibilité est un état prévu, pas une panne. Dans ce cas la groundedness est **absente du
+rapport et explicitement marquée non mesurée**, et l'exécution conserve le verdict de ses autres
+métriques. Un juge indisponible ne produit jamais de `FAIL` : ce serait faire dépendre un verdict
+d'un instrument dont cet ADR a déjà écarté le caractère bloquant.
+
 ## Décision — composition du dataset de retrieval
 
 Quatre familles de cas sont obligatoires. Les deux dernières sont ce qui rend le dataset utile sur
@@ -255,7 +262,7 @@ un corpus de faible volumétrie.
 | Positive | question dont la réponse est dans le corpus | le chunk attendu figure dans les `k` premiers | régression de rappel, dérive d'espace |
 | Négative de corpus | question sans réponse dans le corpus | `status = skipped`, `reason = no_match` | production d'une réponse sans source |
 | Négative d'autorisation | question dont la réponse est dans un document d'un autre tenant, ou non partagé | aucun candidat retenu, `reason = filtered_out` | régression du post-filtrage |
-| Négative d'indexabilité | question dont la réponse est dans un document `restricted` | aucun chunk dans le `retrievalContext`, y compris pour le propriétaire | régression de `V2-ADR-017` |
+| Négative d'indexabilité | question dont la réponse est dans un document `restricted` | aucun chunk dans le `retrievalContext`, y compris pour le propriétaire ; `reason` selon la sous-famille (ci-dessous) | régression de `V2-ADR-017` |
 
 Les deux dernières familles s'appuient sur la distinction `no_match` / `filtered_out` que
 `V2-LLD-002` §6.2.1 a déjà établie : elle cesse d'être un simple signal d'observabilité pour
@@ -263,8 +270,22 @@ devenir **l'attendu d'un cas de test**. Un cas d'autorisation qui produirait `no
 `filtered_out` échoue, même si aucun contenu n'a fuité — le filtre n'a pas travaillé, et la
 prochaine régression passerait inaperçue.
 
-Le corpus de fixtures doit donc contenir au moins deux tenants, un document non partagé et un
-document `restricted`. Cette composition est une contrainte de fixtures, pas de production.
+La famille négative d'indexabilité se décline pour la même raison en deux sous-familles, toutes
+deux obligatoires, dont l'attendu diffère :
+
+- un document `restricted` **dès son ingestion**, donc jamais indexé : le retrieval ne produit aucun
+  candidat, `reason = no_match` ;
+- un document indexé puis **reclassifié en `restricted`** (`V2-ADR-017`) : le retrieval produit un
+  candidat que le post-filtrage écarte, `reason = filtered_out`.
+
+C'est la seconde qui porte la détection. Elle seule établit que le post-filtrage a travaillé sur un
+chunk réellement présent dans le résultat brut du retrieval ; la première ne vaut que tant que
+l'indexation reste correcte, et deviendrait silencieusement vide si un défaut d'indexation la
+satisfaisait pour la mauvaise raison.
+
+Le corpus de fixtures doit donc contenir au moins deux tenants, un document non partagé, un document
+`restricted` dès son ingestion et un document reclassifié en `restricted` après indexation. Cette
+composition est une contrainte de fixtures, pas de production.
 
 ## Décision — ce à quoi une baseline est attachée
 
@@ -280,15 +301,22 @@ topK                 profondeur de retrieval évaluée
 metrics              valeurs mesurées par métrique
 ```
 
-Un changement de `datasetVersion` ou de `fixturesVersion` **invalide** la baseline : la nouvelle
-exécution en établit une, sous le régime d'amorçage. Un changement d'`embeddingSpaceId` ou de
-`chunkerVersion` **n'invalide pas** la baseline — c'est au contraire le cas que `V2-ADR-013` veut
-mesurer, et la comparaison entre deux espaces sur un dataset et des fixtures identiques est
-exactement l'étape 3 de sa séquence de bascule.
+Chacun des cinq champs d'identification a un effet tranché sur la comparabilité.
+
+| Champ modifié | Effet | Raison |
+|---|---|---|
+| `datasetVersion` | **invalide** | les cas mesurés changent ; la nouvelle exécution établit une baseline sous le régime d'amorçage |
+| `fixturesVersion` | **invalide** | le corpus interrogé change ; même régime |
+| `topK` | **invalide** | la grandeur change — `recall@5` et `recall@10` ne sont pas deux valeurs d'une même métrique ; la comparaison n'a lieu qu'à `topK` égal |
+| `embeddingSpaceId` | **n'invalide pas** | c'est précisément l'écart que l'étape 3 de `V2-ADR-013` veut mesurer |
+| `chunkerVersion` | **n'invalide pas** | c'est l'écart que `V2-ADR-013` veut mesurer entre deux stratégies de découpage |
+
+La comparaison entre deux espaces d'embedding, à dataset et fixtures identiques, est exactement
+l'étape 3 de la séquence de bascule de `V2-ADR-013`.
 
 Cette asymétrie est la raison d'être de la structure : elle rend impossible de masquer une
-régression du pipeline en modifiant le dataset, tout en autorisant la comparaison qu'une migration
-d'embedding exige.
+régression du pipeline en modifiant le dataset, la profondeur de retrieval ou les fixtures, tout en
+autorisant la comparaison qu'une migration d'embedding exige.
 
 ## Décision — comparaison entre modèles
 
@@ -352,7 +380,7 @@ Ces corrections découlent de l'acceptation de l'ADR et ne sont pas appliquées 
 | `V2-LLD-002` §15.1 | les métriques de qualité sont listées comme un bloc « hors ligne » | séparer les métriques déterministes (CI) des métriques de génération (planifiées) |
 | `V2-LLD-002` §16 | « métriques de qualité calculées » en statut `Gate`, sans critère | énoncer le critère : non-régression vs baseline, plus propriétés binaires à zéro ; ajouter le régime d'amorçage |
 | `V2-LLD-006` §14.2 | « métriques dans la marge d'écart tolérée » sans définition de la marge | renvoyer à l'écart configuré avec la baseline ; préciser que la comparaison exige `fixturesVersion` constant |
-| `V2-LLD-006` §16 | `run_rag_eval.py` produit `PASS`/`FAIL` sans régime d'amorçage | ajouter le mode d'établissement de baseline et l'attachement `embeddingSpaceId`/`chunkerVersion` |
+| `V2-LLD-006` §16 | `run_rag_eval.py` produit `PASS`/`FAIL` sans régime d'amorçage | ajouter le mode d'établissement de baseline et les cinq champs d'attachement, avec leur effet respectif sur l'invalidation |
 | `V2-LLD-006` §17.1 | « métriques qualité post-réhydratation dans marge d'éval » : bloquant `Oui` | préciser que seules les métriques déterministes sont bloquantes |
 | `V2-LLD-006` §17.2 | le DR drill rejoue « le dataset d'éval » | préciser : dataset de retrieval sur le corpus de fixtures, indépendant du corpus restauré |
 | `LLD-V2-INDEX-FR.md` | portée de `V2-LLD-009` : « pyramide, datasets, E2E… » | ajouter : valeur initiale de l'écart toléré, étalonnage du modèle juge, cadence des deux datasets |
@@ -408,6 +436,10 @@ chacun énonce sa conséquence s'il n'est pas satisfait.
   réels.
 - La distinction `no_match` / `filtered_out` de `V2-LLD-002` §6.2.1 change de statut : d'un signal
   d'observabilité, elle devient l'attendu de deux familles de cas de test.
+- Le corpus de fixtures porte une contrainte d'historique et non seulement de contenu : il doit
+  contenir un document reclassifié en `restricted` après indexation. Son établissement comporte donc
+  une étape de reclassification, et `fixturesVersion` identifie un état atteint par une séquence
+  d'opérations, pas un simple jeu de fichiers.
 - `V2-ADR-013` obtient une condition de bascule exécutable et déterministe, ce que sa formulation
   actuelle ne garantissait pas.
 - La groundedness cesse d'être présentée comme un critère et devient un indicateur dont
@@ -428,12 +460,16 @@ chacun énonce sa conséquence s'il n'est pas satisfait.
   `PASS` sans comparaison, tout en échouant si une propriété binaire de sûreté est violée ;
 - un changement de `datasetVersion` invalide la baseline et déclenche le régime d'amorçage, sans
   qu'un écart de qualité soit rapporté ;
+- un changement de `topK` invalide la baseline et n'est jamais comparé à une baseline d'un `topK`
+  différent ;
 - un changement d'`embeddingSpaceId` **n'invalide pas** la baseline et produit un écart mesuré,
   conformément à l'étape 3 de `V2-ADR-013` ;
 - un cas de la famille négative d'autorisation produit `reason = filtered_out` et non `no_match` ;
   l'inversion des deux fait échouer le cas ;
-- un cas de la famille négative d'indexabilité vérifie qu'aucun chunk d'un document `restricted`
-  n'entre dans le `retrievalContext`, y compris pour son propriétaire (`V2-ADR-017`) ;
+- les deux sous-familles négatives d'indexabilité sont couvertes : un document `restricted` dès son
+  ingestion produit `reason = no_match`, un document indexé puis reclassifié en `restricted` produit
+  `reason = filtered_out` ; dans les deux cas aucun chunk n'entre dans le `retrievalContext`, y
+  compris pour son propriétaire (`V2-ADR-017`) ;
 - un cas de la famille négative de corpus vérifie qu'aucune réponse n'est produite sans source, et
   que le refus est bien celui de `no_match` ;
 - la couverture des citations est vérifiée mécaniquement : chaque référence citée existe, appartient
@@ -446,6 +482,9 @@ chacun énonce sa conséquence s'il n'est pas satisfait.
   par le fait qu'une ingestion de production ne modifie aucune métrique de baseline ;
 - la concordance du modèle juge avec un jugement humain est mesurée et publiée sur un échantillon,
   et la groundedness ne produit aucun `FAIL` tant que cette concordance n'est pas établie ;
+- l'indisponibilité du modèle juge — statut de fin de vie au sens de `V2-ADR-012` — laisse la
+  groundedness marquée non mesurée dans le rapport, sans `FAIL` et sans effet sur le verdict des
+  métriques déterministes ;
 - le DR drill de `V2-LLD-006` §17.2 rejoue le dataset de retrieval sur les fixtures et non sur le
   corpus restauré, et son verdict est indépendant du volume restauré.
 
