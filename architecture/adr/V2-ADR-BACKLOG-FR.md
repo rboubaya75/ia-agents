@@ -190,6 +190,7 @@ Le choix ne peut pas conduire à utiliser Bedrock managed Agents.
 | V2-ADR-016 | WAF, quotas et protection contre les abus — **rédigé, `Draft` en attente de revue** (`V2-ADR-016-waf-quotas-protection-abus.md`) | V2-ADR-001, V2-ADR-006, V2-ADR-011, V2-ADR-012, V2-ADR-014 |
 | V2-ADR-017 | Classification documentaire et conservation | V2-ADR-003, V2-ADR-006 |
 | V2-ADR-018 | Stratégie de tests RAG et seuils de qualité | V2-ADR-003, V2-ADR-013 |
+| V2-ADR-020 | Transport et ancrage de confiance de l’identité — **rédigé, `Draft` en attente de revue** (`V2-ADR-020-identite-transport-ancrage-confiance.md`). Tranche la source depuis laquelle FastAPI relit les claims, laissée ouverte par `V2-ADR-006` et signalée par `V2-ADR-011` | V2-ADR-001, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-016 |
 
 ## 6. Priorité d’instruction
 
