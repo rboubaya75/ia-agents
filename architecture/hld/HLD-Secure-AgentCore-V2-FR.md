@@ -1,9 +1,10 @@
 # HLD — Secure AgentCore V2
 
-- **Version :** 0.5
+- **Version :** 0.6
 - **Branche :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
-- **Statut :** Draft — ADR V2-G1 acceptés (001-010, 019) ; phasage RAG tranché (`V2-ADR-019`)
+- **Statut :** Draft — les vingt ADR du corpus V2 sont `Accepted` (§17) ; six LLD restent à rédiger
+  (§18). Le passage en `Approved` est une décision de validation, pas un constat automatique.
 - **Environnement initial :** `test`
 
 ## 1. Résumé exécutif
@@ -89,7 +90,7 @@ Données
 | CloudFront | Distribution, TLS, OAC, cache et headers de sécurité |
 | WAF | Protection L7, limitation et règles managées/custom selon risques |
 | Cognito | Authentification et émission des tokens |
-| API Gateway | Front-door API, JWT, CORS, throttling, logs et routage |
+| API Gateway | Front-door API, JWT, CORS, throttling, logs et routage. La route conversationnelle est un **REST API en mode `STREAM`** ; les routes non diffusantes peuvent rester sur HTTP API (`V2-ADR-011`, §6.5) |
 | Couche d’ingress sécurisée | Reconstruction de l’identité, schémas, quotas et normalisation ; VPC Link → ALB interne → FastAPI (`V2-ADR-001`) |
 | FastAPI sur ECS/Fargate | APIs applicatives, documents, orchestration, administration et contrôles métier |
 | ECS (Fargate) | Runtime des services applicatifs non agentiques et workers |
@@ -148,35 +149,47 @@ L’ingestion doit être idempotente, reprenable et capable de supprimer ou réi
 
 ### 6.3 Mutation via tool MCP
 
+Une action mutante n’est pas un appel de tool unique : elle est une séquence de quatre temps,
+séparée par une décision utilisateur qui n’emprunte pas le chemin du modèle (`V2-ADR-014`).
+
 ```text
-1. Agent sélectionne un tool autorisé
-2. Runtime écrase l’identité et le contexte d’opération
-3. Confirmation vérifiée pour les mutations
-4. Appel Gateway MCP signé IAM
-5. Tool valide le schéma et la deadline
-6. Ledger d’idempotence vérifié
-7. Effet de bord atomique
-8. Résultat redacted et corrélé
-9. Aucun replay de l’agent après démarrage confirmé de la mutation
+Temps 1 — Matérialisation (aucun effet de bord)
+  1. Agent sélectionne le tool de proposition, autorisé et déclaré `mutating` au catalogue
+  2. Runtime écrase l’identité et le contexte d’opération
+  3. Appel Gateway MCP signé IAM
+  4. Le tool valide le schéma et la deadline, puis normalise les paramètres
+  5. Écriture de la commande [ pending ] ; seul le commandId est retourné
+
+Temps 2 — Présentation
+  6. FastAPI lit la commande stockée et rend le résumé, transmis dans le flux SSE
+     le modèle ne rédige pas ce résumé
+
+Temps 3 — Confirmation (hors du chemin du modèle)
+  7. Utilisateur -> API Gateway -> FastAPI, endpoint dédié portant le commandId
+  8. Identité de confiance vérifiée ; transition [ pending ] -> [ confirmed ]
+
+Temps 4 — Exécution
+  9. Agent appelle le tool d’exécution via Gateway MCP, avec le commandId seul
+ 10. Le tool charge la commande stockée et ignore tout argument métier du modèle
+ 11. Transition [ confirmed ] -> [ executed ] et effet de bord dans la même transaction
+ 12. Résultat redacted et corrélé ; aucun replay après démarrage de la mutation
 ```
 
-### 6.5 Streaming des réponses conversationnelles
+> **Décision de référence (`V2-ADR-014`).** La confirmation n’est plus un booléen de tour vérifié par
+> le Runtime : elle porte sur un objet de commande matérialisé par le serveur, et parvient par un
+> appel authentifié dont le modèle ne dispose pas. Seul le `commandId` circule — le contenu de la
+> commande ne transite ni par le modèle, ni par le client, ni par la Gateway. Une divergence entre ce
+> qui est confirmé et ce qui est exécuté n’est donc pas détectée, elle est impossible à produire.
 
-Le protocole retenu est **Server-Sent Events (SSE)**, standard W3C (`EventSource`), sur HTTP
-ordinaire. Ce choix est cohérent avec `V2-ADR-001` : le chemin API Gateway → VPC Link → ALB →
-FastAPI a été retenu précisément pour sa compatibilité avec le streaming HTTP, et Lambda a été
-rejeté en partie à cause du timeout de 29 secondes incompatible avec un processus serveur
-persistant.
+Trois conséquences structurantes de cette séquence :
 
-SSE est adapté car le flux conversationnel est unidirectionnel (serveur → client) : le navigateur
-envoie une requête HTTP standard, FastAPI retourne une `StreamingResponse` dont le contenu progresse
-au fil des tokens produits par Bedrock Converse API.
-
-**Contrainte à gérer en V2-LLD-001 :** API Gateway HTTP API applique un timeout dur de 29 secondes.
-Pour les réponses longues, un pattern de fallback (retour immédiat d'un `operationId` + endpoint de
-poll SSE séparé) doit être défini en `V2-LLD-001`. Le format exact des en-têtes propageant les
-claims entre API Gateway et FastAPI est également défini en `V2-LLD-001` ; l'implémentation
-frontend (`EventSource`) est couverte par `V2-LLD-010`.
+- **l’état `executed` tient lieu d’enregistrement d’idempotence** pour la mutation qu’il porte. Une
+  mutation passée par une commande n’écrit pas d’entrée dans le ledger, qui reste en usage pour les
+  opérations sans commande — uploads documentaires et déclenchements d’ingestion ;
+- **la classe du tool est une propriété du catalogue**, pas un paramètre d’appel : un tool qui ne
+  déclare pas sa classe est traité comme `mutating`, donc inexécutable sans commande confirmée ;
+- **une action mutante consomme deux appels de tool au lieu d’un**, ce qui s’impute au budget
+  `maxToolCalls` de `V2-ADR-005` et doit être pris en compte dans son calibrage.
 
 ### 6.4 Diagramme de flux de données (question → réponse)
 
@@ -201,21 +214,68 @@ AgentCore Runtime : Prompt Construction + Bedrock Converse Invocation
         │                                             corrélation
         │
         └─ tool requis (flux 6.3)
-                │  Tool Selection, confirmation si mutation
+                │  Tool Selection ; la classe du tool est lue au catalogue
                 ▼
         AgentCore Gateway MCP (identité injectée par Runtime)
-                ▼
-        Tool métier : lecture ou mutation confirmée et idempotente
-                ▼
-        Résultat structuré, redacted, corrélé
-                ▼
+                │
+                ├─ tool `read` ──────────────────────► Résultat structuré,
+                │                                       redacted, corrélé
+                │
+                └─ tool `mutating` : matérialisation de la commande [ pending ]
+                        │              aucun effet de bord ; commandId retourné
+                        ▼
+                Confirmation utilisateur — hors du chemin du modèle
+                        │              (§6.3, temps 3 : endpoint FastAPI dédié)
+                        ▼
+                Tool d’exécution : commandId seul, transition et effet de
+                bord dans la même transaction
+                        ▼
+                Résultat structuré, redacted, corrélé
+                        ▼
         Réponse finale : contenu, citations, operationId, référence de corrélation
 ```
 
 Chaque étape correspond à une capacité attribuée par la
 [CAM](capability-allocation-matrix.md) : Retrieval (Domaine 4), Prompt Context Assembly
 (Domaine 4), Prompt Construction et Bedrock Converse Invocation (Domaine 5), Tool Selection
-(Domaine 5), exécution du tool (Domaine 7).
+(Domaine 5), déclaration de la classe de tool et exécution du tool (Domaine 7). La confirmation
+n'est attribuée à aucune capacité du Runtime : elle relève de FastAPI pour l'endpoint et du tool
+d'exécution pour la garantie (`V2-ADR-014`).
+
+### 6.5 Streaming des réponses conversationnelles
+
+Le protocole retenu est **Server-Sent Events (SSE)**, standard W3C (`EventSource`), sur HTTP
+ordinaire. SSE est adapté car le flux conversationnel est unidirectionnel (serveur → client) : le
+navigateur envoie une requête HTTP standard, FastAPI retourne une `StreamingResponse` dont le
+contenu progresse au fil des tokens produits par Bedrock Converse API. Le rejet de Lambda par
+`V2-ADR-001` reste fondé sur l’incompatibilité de son modèle d’exécution avec un processus serveur
+persistant.
+
+**Le protocole ne suffit pas : le type d’API Gateway le contraint (`V2-ADR-011`).** Une
+`StreamingResponse` correcte ne produit pas un flux progressif si un intermédiaire du chemin
+**tamponne** la réponse. C’est le cas d’**API Gateway HTTP API**, qui accumule la réponse entière
+avant de la relayer, sans option pour l’en empêcher : le client reçoit un bloc unique à la fin. Le
+streaming est alors émulé de fait, sans que rien ne le signale.
+
+`V2-ADR-011` tranche ce point : la route conversationnelle passe par un **API Gateway REST API en
+mode `responseTransferMode = STREAM`**, endpoint Regional, via VPC Link V2 vers l’ALB interne. Deux
+conséquences portées par ce choix :
+
+- le plafond de durée d’un flux passe de 29 secondes à **15 minutes**. Le mode asynchrone
+  (`operationId` et endpoint de reprise) cesse d’être le contournement d’une limite pour devenir un
+  mécanisme de reprise après déconnexion réseau ;
+- un **keep-alive est obligatoire** : un tour agentique appelant un tool lent peut rester silencieux
+  plusieurs dizaines de secondes et faire tomber le flux sans lui. L’idle timeout de l’ALB devient
+  un paramètre critique, et non plus un réglage par défaut.
+
+Le mode effectivement servi — `native` ou `emulated` — est **déclaré au client** dans le premier
+événement du flux : aucune dégradation silencieuse. L’annulation, que SSE ne sait pas transporter
+puisque son canal est unidirectionnel, est un **appel authentifié dédié** adossé à un registre
+partagé lu en cohérence forte (`V2-ADR-011`).
+
+Le format exact des en-têtes propageant les claims entre API Gateway et FastAPI est défini en
+`V2-LLD-001` — les mécanismes natifs d’HTTP API ne s’y transposant pas tels quels. L’implémentation
+frontend (`EventSource`) est couverte par `V2-LLD-010`.
 
 ## 7. Identité et zones de confiance
 
@@ -500,10 +560,12 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 ### Décidé par ADR
 
 - Lambda Security Facade remplacée par FastAPI sur ECS/Fargate pour la couche applicative (`V2-ADR-001`) ;
-- streaming SSE pour les réponses conversationnelles (cf. §6.5) ;
+- streaming SSE sur API Gateway REST API en mode `STREAM`, avec keep-alive obligatoire et
+  annulation par appel dédié (`V2-ADR-011`, cf. §6.5) ;
 - orchestration : FastAPI coordonne les appels à Runtime, Runtime exécute les agents custom (`V2-ADR-002`) ;
 - ingestion asynchrone via SQS → service ECS Fargate (`V2-ADR-004`) ;
-- modèle d’identité : résolution serveur, mono-tenant compatible multi-tenant (`V2-ADR-006`).
+- modèle d’identité : résolution serveur, mono-tenant compatible multi-tenant (`V2-ADR-006`) ;
+- confirmation des mutations par objet de commande, hors du chemin du modèle (`V2-ADR-014`, cf. §6.3).
 
 ### À détailler en LLD
 
@@ -516,9 +578,9 @@ GitLab CI avec OIDC AWS est la cible. Les workflows GitHub Actions V1 ne sont re
 
 ## 17. État des décisions architecturales
 
-### ADR acceptés — statut Accepted (Gate V2-G1)
+Les vingt ADR du corpus V2 sont `Accepted`. Aucune décision structurante ne reste ouverte.
 
-Les ADR suivants sont `Accepted` :
+### Gate V2-G1 — frontière, plateforme et données
 
 - `V2-ADR-001` : ingress et frontière de sécurité ;
 - `V2-ADR-002` : responsabilités FastAPI versus AgentCore Runtime ;
@@ -532,23 +594,53 @@ Les ADR suivants sont `Accepted` :
 - `V2-ADR-010` : sauvegarde, restauration et réhydratation ;
 - `V2-ADR-019` : phasage de livraison du RAG (Knowledge Bases en V2, pipeline applicatif en V3).
 
-### ADR au backlog — non encore instruits
+### ADR complémentaires
 
-Les ADR suivants sont identifiés dans le backlog (`architecture/adr/V2-ADR-BACKLOG-FR.md`) et
-référencés comme dépendances par certains LLD (V2-LLD-002, 003, 005, 006) ; ils seront instruits
-à mesure que leurs domaines progressent :
+- `V2-ADR-011` : streaming des réponses et gestion des annulations — REST API en mode `STREAM`,
+  annulation par appel dédié et registre partagé lu en cohérence forte (voir §6.5) ;
+- `V2-ADR-012` : modèles Bedrock, profils d’inférence et fallback — identifiant d’invocation
+  opaque, profil géographique EU, règle du premier token ;
+- `V2-ADR-013` : embeddings et versionnement — `embeddingSpaceId` comme unité d’espace, migration
+  par index parallèle et bascule de pointeur ;
+- `V2-ADR-014` : confirmation forte et objet de commande — matérialisation, confirmation hors du
+  chemin du modèle, exécution atomique (voir §6.3) ;
+- `V2-ADR-015` : politique de mémoire et droit à l’effacement ;
+- `V2-ADR-016` : WAF, quotas et protection contre les abus ;
+- `V2-ADR-017` : classification documentaire et conservation ;
+- `V2-ADR-018` : stratégie de tests RAG — non-régression contre une baseline versionnée, dataset de
+  retrieval déterministe et bloquant ;
+- `V2-ADR-020` : transport et ancrage de confiance de l’identité.
 
-- `V2-ADR-011` à `V2-ADR-018` : WAF, stratégie de tests de sécurité, modèle de données, rétention,
-  suppression, accès aux données, accès multi-agent, et sujets complémentaires selon priorisation.
+### Préconditions à prouver avant implémentation
+
+Plusieurs ADR acceptés portent des **préconditions** : la décision est prise, son activation dépend
+de faits à vérifier au moment de l’implémentation — disponibilité du *response streaming* API
+Gateway REST et des VPC Links V2 en `eu-west-3` (`V2-ADR-011`), liste nominative des régions de
+destination du profil d’inférence EU (`V2-ADR-012`), immuabilité de la dimension d’un index
+S3 Vectors (`V2-ADR-013`), capacité de la Gateway MCP à exposer deux tools distincts
+(`V2-ADR-014`).
+
+Chaque ADR énonce le repli qui s’applique tant que sa preuve n’est pas produite. Ces préconditions
+**ne rouvrent pas les décisions** ; elles conditionnent leur mise en service.
 
 ## 18. Critère de validation du HLD
 
-Le HLD peut passer en statut `Approved` lorsque :
+Le HLD peut passer en statut `Approved` lorsque les critères suivants sont tenus :
 
-- les exigences majeures sont traçables ;
-- les ADR bloquants sont décidés ;
-- les flux et frontières de confiance sont complets ;
-- l’analyse As-Is / To-Be est validée ;
-- les choix de disponibilité, sécurité, coûts et exploitation sont cohérents ;
-- le catalogue LLD couvre tous les domaines nécessaires ;
-- les risques résiduels sont explicitement acceptés ou planifiés.
+| Critère | État |
+|---|---|
+| les exigences majeures sont traçables | tenu |
+| les ADR bloquants sont décidés | tenu — les vingt ADR sont `Accepted` (§17) |
+| les flux et frontières de confiance sont complets | tenu — §6.3 et §6.5 alignés sur `V2-ADR-014` et `V2-ADR-011` |
+| l’analyse As-Is / To-Be est validée | tenu |
+| les choix de disponibilité, sécurité, coûts et exploitation sont cohérents | tenu |
+| le catalogue LLD couvre tous les domaines nécessaires | tenu — `LLD-V2-INDEX-FR.md` couvre les dix domaines |
+| les risques résiduels sont explicitement acceptés ou planifiés | tenu — préconditions énoncées par ADR (§17) |
+
+Le critère de catalogue porte sur la **couverture des domaines**, non sur la rédaction de chaque
+document : six LLD (`V2-LLD-004`, `005`, `007`, `008`, `009`, `010`) restent à écrire. Leur absence
+ne rouvre aucune décision d’architecture — elle conditionne le passage des gates de réalisation,
+pas l’approbation du présent document.
+
+Le passage effectif en `Approved` reste une **décision de validation**, distincte du constat
+ci-dessus.

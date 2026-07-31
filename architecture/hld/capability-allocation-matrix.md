@@ -1,8 +1,9 @@
 # Capability Allocation Matrix — Secure AgentCore V2
 
-- **Version :** 0.1
+- **Version :** 0.2
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Décision de référence :** [`V2-ADR-002`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) — principes P-01 à P-05
+- **Amendements :** [`V2-ADR-014`](../adr/V2-ADR-014-confirmation-commande-signee.md) — Domaines 5 et 7
 - **Contrat associé :** [`runtime-contract.md`](runtime-contract.md)
 - **Statut :** Draft
 
@@ -132,6 +133,12 @@ les niveaux.
 exclusivement sous AgentCore Runtime. FastAPI ne peut pas contourner Runtime pour appeler
 directement Bedrock Converse API sur le chemin conversationnel (P-01, P-02).
 
+**Le Runtime ne porte pas la vérification de confirmation (`V2-ADR-014`).** Il n'est propriétaire
+d'aucune capacité d'autorisation des mutations : la confirmation parvient par un appel authentifié
+dédié auquel il n'a pas accès, et sa vérification appartient au tool d'exécution, au point exact où
+l'effet de bord se produit. Le Runtime sélectionne et invoque le tool ; il n'atteste rien sur ce que
+l'utilisateur a autorisé.
+
 **LLD de référence :** V2-LLD-003 (agents et orchestration).
 
 ---
@@ -166,11 +173,23 @@ Memory doit être vérifiée par les tests industriels.
 | Tool Transport | MCP Gateway | — |
 | Tool Registration | MCP Gateway | — |
 | Tool Version Negotiation | MCP Gateway | — |
+| Tool Class Declaration (`read` / `mutating`) | MCP Gateway | AgentCore Runtime |
 
 **Note d'architecture :** AgentCore Gateway MCP est le seul point d'entrée des tools. Aucun
 tool ne peut être appelé directement par FastAPI ou par le code agent sans passer par la Gateway.
 L'identité injectée côté Runtime écrase tout contexte produit par le modèle avant l'appel à la
 Gateway.
+
+**Classe de tool (`V2-ADR-014`).** Chaque tool déclare sa classe dans le catalogue : `read` (aucun
+effet de bord) ou `mutating`. Trois propriétés en découlent :
+
+- la classe est une propriété du **catalogue**, pas un paramètre d'appel : le modèle ne peut ni la
+  produire, ni la surcharger, ni l'inférer ;
+- **un tool qui ne déclare pas sa classe est traité comme `mutating`** — un oubli de déclaration
+  rend le tool inutilisable sans commande confirmée, jamais exécutable sans confirmation ;
+- un tool `mutating` se décline en deux tools distincts, proposition et exécution, afin que
+  l'absence d'effet de bord de la matérialisation soit vérifiable par inspection du catalogue
+  plutôt que par lecture du code.
 
 **LLD de référence :** V2-LLD-004 (AgentCore Gateway MCP et tools).
 
