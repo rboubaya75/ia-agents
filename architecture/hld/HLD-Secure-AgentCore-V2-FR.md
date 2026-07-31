@@ -3,8 +3,8 @@
 - **Version :** 0.6
 - **Branche :** `migration/secure-agentcore-v2`
 - **Baseline :** Secure AgentCore V1 au commit `20d4b12cb4666fe66eefbdf6b1605fe8f74daa03`
-- **Statut :** Draft — les vingt ADR du corpus V2 sont `Accepted` (§17) ; six LLD restent à rédiger
-  (§18). Le passage en `Approved` est une décision de validation, pas un constat automatique.
+- **Statut :** Approved — les vingt ADR du corpus V2 sont `Accepted` (§17) ; six LLD restent à
+  rédiger (§18) et dépendent de ce document.
 - **Environnement initial :** `test`
 
 ## 1. Résumé exécutif
