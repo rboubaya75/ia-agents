@@ -1,6 +1,6 @@
 # V2-ADR-020 — Transport et ancrage de confiance de l'identité
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-001` (chemin d'ingress et validation JWT à la passerelle), `V2-ADR-006`

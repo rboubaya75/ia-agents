@@ -1,6 +1,6 @@
 # V2-ADR-014 — Confirmation forte et objet de commande
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-006` (identité de confiance et autorisation), `V2-ADR-002` (répartition

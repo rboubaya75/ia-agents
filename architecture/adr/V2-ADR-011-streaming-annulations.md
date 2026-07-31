@@ -1,6 +1,6 @@
 # V2-ADR-011 — Streaming des réponses et gestion des annulations
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-001` (chemin d'ingress), `V2-ADR-002` (responsabilités FastAPI /

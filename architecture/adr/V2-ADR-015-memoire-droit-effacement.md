@@ -1,6 +1,6 @@
 # V2-ADR-015 — Politique de mémoire et droit à l'effacement
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-006` (isolation et suppression coordonnée), `V2-ADR-010` (PITR,

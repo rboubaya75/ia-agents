@@ -1,6 +1,6 @@
 # V2-ADR-012 — Modèles Bedrock, profils d'inférence et stratégie de fallback
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-005` (l'adapter reçoit le modèle en paramètre), `V2-ADR-011` (règle de

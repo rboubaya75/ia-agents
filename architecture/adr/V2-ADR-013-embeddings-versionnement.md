@@ -1,6 +1,6 @@
 # V2-ADR-013 — Embeddings Bedrock et stratégie de versionnement
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-003` (schéma de chunk et index S3 Vectors), `V2-ADR-019` (phasage KB en
