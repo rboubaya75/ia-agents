@@ -1,6 +1,6 @@
 # V2-ADR-018 — Stratégie de tests RAG et seuils de qualité
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-003` (métriques nommées, dataset versionné), `V2-ADR-010` (index

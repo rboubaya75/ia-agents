@@ -1,11 +1,14 @@
 # V2-ADR-013 — Embeddings Bedrock et stratégie de versionnement
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-003` (schéma de chunk et index S3 Vectors), `V2-ADR-019` (phasage KB en
-  V2), `V2-ADR-010` (restauration), `V2-ADR-012` (cycle de vie des modèles Bedrock),
-  `V2-ADR-018` (bloquant pour la capacité de migration, pas pour l'acceptation de cet ADR)
+  V2), `V2-ADR-010` (restauration), `V2-ADR-012` (cycle de vie des modèles Bedrock)
+- **Dépendance inverse :** `V2-ADR-018` dépend de cet ADR (`embeddingSpaceId`, `chunkerVersion`,
+  séquence de bascule) et n'est donc pas listé ci-dessus — le sens est 018 → 013. Sa mesure reste
+  **bloquante pour la capacité de migration** décidée ici, sans l'être pour l'acceptation de cet
+  ADR : voir « Décision — Migration », étape 3.
 - **Préconditions à prouver avant implémentation :** immuabilité de la dimension et de la métrique
   d'un index S3 Vectors, et immuabilité du modèle d'embedding d'une base de connaissances (voir
   « Préconditions »).
@@ -43,7 +46,7 @@ changement de modèle de génération dégrade une réponse ; un changement de m
 | `V2-ADR-010` | l'index vectoriel est un état dérivé, reconstructible depuis S3 |
 | `V2-ADR-019` | en V2 l'embedding est assuré par KB ; l'adapter est le seul point d'échange |
 | `V2-ADR-012` | le cycle de vie d'un modèle Bedrock est subi, surveillé et alerté |
-| `V2-ADR-018` | la qualité du retrieval est mesurée sur un dataset d'évaluation versionné |
+| `V2-ADR-018` | la bascule est conditionnée à une non-régression mesurée sur le dataset de retrieval, contre une baseline versionnée |
 
 ## Le fait technique déterminant — un embedding est un système de coordonnées
 
@@ -179,9 +182,12 @@ La séquence est bornée et son point de non-retour est explicite :
 1. création d'un index cible portant le nouvel `embeddingSpaceId` ; l'index courant continue de
    servir sans modification ;
 2. réindexation complète du corpus depuis S3, qui reste la source de vérité (`V2-ADR-010`) ;
-3. **exécution du dataset d'évaluation de `V2-ADR-018` sur l'index cible**, et comparaison aux
-   valeurs de référence de l'index courant. Un écart au-delà du seuil défini par `V2-ADR-018`
-   interdit la bascule ;
+3. **exécution du dataset de retrieval de `V2-ADR-018` sur l'index cible** — ce dataset seul, à
+   l'exclusion du dataset de génération, parce qu'il est le seul déterministe et donc le seul dont
+   le verdict est reproductible — à `datasetVersion` et `fixturesVersion` constants, puis
+   comparaison à la baseline de l'index courant. Un changement d'`embeddingSpaceId` n'invalide pas
+   cette baseline : c'est précisément l'écart que cette étape mesure. Un écart au-delà de la marge
+   configurée avec la baseline interdit la bascule ;
 4. bascule du pointeur applicatif — opération atomique, unique point de non-retour ;
 5. conservation de l'index précédent pendant une période de grâce définie en `V2-LLD-006`, ce qui
    fait du retour arrière une bascule inverse et non une reconstruction ;
@@ -190,6 +196,29 @@ La séquence est bornée et son point de non-retour est explicite :
 L'étape 3 est ce qui distingue cette décision d'un simple remplacement. Un modèle d'embedding plus
 récent n'est pas meilleur sur un corpus donné par construction : le domaine, la langue et la taille
 des chunks font varier le résultat. **Sans mesure, une migration d'embedding est un pari.**
+
+### Les ingestions pendant la période de grâce
+
+La séquence ci-dessus ne serait complète que si le corpus était figé pendant son déroulement. Il ne
+l'est pas : un document peut être ingéré entre la bascule (étape 4) et la suppression de l'index
+précédent (étape 6). Sans règle, ce document n'existerait que dans le nouvel index, et la bascule
+inverse — présentée à l'étape 5 comme un retour arrière sans reconstruction — servirait un corpus
+silencieusement incomplet. Ce serait la même classe de panne que celle que cet ADR combat : une
+réponse crédible sur un index qui n'est plus celui que l'on croit.
+
+La règle retenue est donc : **pendant la période de grâce, toute ingestion alimente les deux
+index**, chacun dans son propre espace. Deux précisions en découlent.
+
+Ce n'est pas l'état mixte écarté aux options C et D. Chaque index reste homogène — un seul
+`embeddingSpaceId`, un seul jeu de vecteurs comparables entre eux. Ce qui est dupliqué est le
+travail d'ingestion, jamais l'espace d'un index.
+
+L'échec d'une ingestion sur l'index précédent **n'échoue pas l'ingestion**. Il retire la possibilité
+du retour arrière et abrège de fait la période de grâce : c'est une alerte, pas un refus. Servir le
+nouvel index, qui est l'index courant et complet, reste correct.
+
+Cette double ingestion est ce qui rend l'étape 5 vraie plutôt que rassurante, et son coût est ce qui
+borne la durée de la période de grâce — ingérer deux fois n'est acceptable que temporairement.
 
 ## L'invariant de symétrie requête/document
 
@@ -308,7 +337,7 @@ actuelle de `V2-LLD-002` §5.4 — « resynchronisation KB complète » — déc
 | `V2-LLD-002` §7.1 | contrat `VectorRetrievalPort` | exposer l'espace de l'index et le vérifier avant `retrieve` |
 | `V2-LLD-002` §12 | `EMBEDDING_MODEL_ID` seul | ajouter l'identifiant d'espace et les paramètres qui le composent |
 | `V2-LLD-002` §17.2 | réhydratation par resynchronisation complète | borner à l'espace déclaré par l'index restauré |
-| `V2-LLD-006` | attributs `embeddingModelId` / `embeddingVersion` de `documents` | aligner sur `embeddingSpaceId` ; définir la période de grâce de l'index précédent |
+| `V2-LLD-006` | attributs `embeddingModelId` / `embeddingVersion` de `documents` | aligner sur `embeddingSpaceId` ; définir la période de grâce de l'index précédent et la double ingestion qui s'y applique |
 
 Le coût d'un recalcul complet des embeddings et le doublement temporaire du stockage vectoriel sont
 une **entrée** pour `V2-LLD-007`, qui n'est pas encore rédigé : aucune correction n'y est requise,
@@ -337,8 +366,10 @@ seulement dépourvue de procédure de migration.
 
 - **Le choix du modèle d'embedding** : c'est une donnée de configuration, et son classement relève
   de l'évaluation de `V2-ADR-018`. Cet ADR décide un mécanisme de versionnement, pas un modèle.
-- **Les seuils de qualité** autorisant ou interdisant une bascule : fixés par `V2-ADR-018`. Cet ADR
-  décide que la bascule est conditionnée à une mesure, pas quelle valeur cette mesure doit prendre.
+- **Le régime de verdict et la marge d'écart** autorisant ou interdisant une bascule : fixés par
+  `V2-ADR-018`, qui a écarté tout seuil absolu de qualité au profit d'une non-régression contre une
+  baseline versionnée, et renvoyé la valeur initiale de la marge à `V2-LLD-009`. Cet ADR décide que
+  la bascule est conditionnée à une mesure, pas ce que cette mesure doit valoir.
 - **Le reranking** et les stratégies de recherche hybride : hors périmètre, sans effet sur l'espace.
 - **La stratégie de chunking elle-même** (taille, recouvrement, découpage sémantique) : relève de
   `V2-LLD-002`. Cet ADR n'en fixe que la borne supérieure, imposée par le modèle.
@@ -351,9 +382,12 @@ seulement dépourvue de procédure de migration.
   lieu d'un changement de paramètre ;
 - le stockage vectoriel double pendant la durée d'une migration, et le recalcul complet des
   embeddings du corpus a un coût proportionnel à sa taille — à chiffrer dans `V2-LLD-007` ;
-- la bascule est conditionnée à l'existence du dataset d'évaluation de `V2-ADR-018` : sans lui,
-  aucune migration d'embedding n'est autorisée. C'est une dépendance assumée, et elle rend
-  `V2-ADR-018` bloquant pour cette capacité, pas seulement pour la qualité ;
+- la bascule est conditionnée à l'existence du dataset de retrieval de `V2-ADR-018` **et de sa
+  baseline** : sans les deux, aucune migration d'embedding n'est autorisée. C'est une dépendance
+  assumée, et elle rend `V2-ADR-018` bloquant pour cette capacité, pas seulement pour la qualité ;
+- pendant la période de grâce, chaque ingestion est exécutée deux fois : le coût d'embedding à
+  l'ingestion double temporairement, en plus du stockage. C'est la contrepartie d'un retour arrière
+  réellement disponible, et c'est ce qui borne la durée de cette période ;
 - le comportement fail-closed sur divergence d'espace privilégie l'absence de réponse à une réponse
   fausse : une dérive de configuration se manifeste par une perte de retrieval visible, ce qui est
   l'objectif ;
@@ -376,6 +410,11 @@ seulement dépourvue de procédure de migration.
   `V2-ADR-018` exécuté sur les deux index, écart mesuré, bascule effectuée ;
 - **retour arrière après bascule** : effectué par bascule inverse du pointeur, sans reconstruction,
   et vérifié sur le même dataset ;
+- **document ingéré pendant la période de grâce, puis retour arrière** : le document est présent dans
+  l'index redevenu courant — la bascule inverse ne sert jamais un corpus arrêté à la date de la
+  bascule ;
+- **échec d'ingestion sur l'index précédent pendant la période de grâce** : l'ingestion aboutit sur
+  l'index courant, une alerte est produite, et le retour arrière est marqué comme indisponible ;
 - **délai de remise en service mesuré** sur cette migration de test, et enregistré comme valeur de
   référence du seuil d'alerte de cycle de vie ;
 - **restauration après changement d'espace** : la reconstruction se fait dans l'espace déclaré par

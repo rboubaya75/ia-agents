@@ -1,6 +1,6 @@
 # V2-ADR-016 — WAF, quotas et protection contre les abus
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-001` (chemin d'ingress et placement des contrôles), `V2-ADR-006`

@@ -1,6 +1,6 @@
 # V2-ADR-017 — Classification documentaire et conservation
 
-- **Statut :** Draft (propositions — en attente de revue et de validation)
+- **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
 - **Dépendances :** `V2-ADR-003` (attribut `classification` de la table `documents`),

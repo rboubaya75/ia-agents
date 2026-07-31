@@ -3,7 +3,7 @@
 - **Statut :** Accepted
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G1
-- **Dépendances :** V2-ADR-002, V2-ADR-006, V2-ADR-011, V2-ADR-016
+- **Dépendances :** V2-ADR-002, V2-ADR-006
 
 ## Contexte
 
