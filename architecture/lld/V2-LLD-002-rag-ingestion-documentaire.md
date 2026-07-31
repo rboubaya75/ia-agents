@@ -1,6 +1,6 @@
 # V2-LLD-002 — RAG et ingestion documentaire
 
-- **Version :** 0.4
+- **Version :** 0.5
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§6.2, §9)
@@ -17,6 +17,13 @@
 > **Révision v0.3 (revue PR #35, observations) :** distinction `skipped/no_match` vs
 > `skipped/filtered_out` avec seuils d'alerte distincts (§6.2.1, §15.1) ; cohérence de la précondition
 > KB+S3V dans la config data source (§5.2).
+>
+> **Révision v0.5 (revue post-v0.4) :** traçabilité `V2-ADR-014` ajoutée en §1.2 (applicable
+> partiellement : reclassification assouplissante, §11.1 ; mécanisme de confirmation dans
+> `V2-LLD-004`/`V2-LLD-005`) ; justification de `chunkerVersion` corrigée en §5.3 (scindée de
+> `embeddingSpaceId`, référence au régime d'amorçage §16.4) ; renvoi au régime d'amorçage ajouté
+> en §5.5 étape 3 ; reformulation de la cause misconfiguration dans §6.2.1 (post-filtrage FastAPI
+> trop strict, mapping de champs KB incorrect).
 >
 > **Révision v0.4 (alignement sur les ADR complémentaires acceptés) :** `embeddingSpaceId` remplace
 > `embeddingModelId`/`embeddingVersion` et l'index devient l'unité de l'espace d'embedding
@@ -56,6 +63,7 @@
 | V2-ADR-013 | **`embeddingSpaceId`** — identifiant opaque liant modèle, dimension et métrique de distance — remplace `embeddingModelId`/`embeddingVersion` ; un index porte un et un seul espace, fixé à sa création et immuable ; `chunkerVersion` reste distinct (il ne conditionne pas la comparabilité) ; un changement de modèle se fait par **index parallèle + bascule de pointeur** (jamais par resynchronisation en place) ; l'espace est lu depuis l'index interrogé, jamais depuis la configuration, et une divergence est **fail-closed** (`degraded`) ; la taille de chunk est dérivée de la limite d'entrée du modèle et vérifiée au démarrage |
 | V2-ADR-017 | Taxonomie fermée à trois niveaux `internal` / `confidential` / `restricted`, défaut **`confidential`** ; `restricted` n'est jamais indexé ni injecté dans un contexte modèle (préfixe S3 hors data source KB) ; **la classification qui autorise est celle de `documents`**, lue en `BatchGetItem` **avant** le filtre — la métadonnée de chunk n'est qu'un filtre grossier de défense en profondeur, potentiellement obsolète ; la classification est un plafond que l'ACL ne franchit pas ; ordre d'évaluation : tenant → `documents.classification` → ownership/ACL → indexabilité |
 | V2-ADR-018 | **Deux datasets** portés par un même corpus de fixtures : retrieval (déterministe, CI, **bloquant**) et génération (non déterministe, planifié, **publié non bloquant**) ; le verdict est la **non-régression contre une baseline versionnée**, jamais un seuil absolu de qualité ; seuls seuils absolus admis : propriétés binaires de sûreté à zéro ; corpus de fixtures isolé de la production ; régime d'amorçage explicite pour la première exécution |
+| V2-ADR-014 | **Applicable partiellement** : la reclassification assouplissante (§11.1) est une action mutante à conséquence de sécurité ; elle suit le régime de confirmation de `V2-ADR-014` — matérialisée, confirmée hors du chemin du modèle, puis exécutée. Le mécanisme de confirmation (materialization, ledger d'idempotence) est implémenté dans `V2-LLD-004` et `V2-LLD-005`, pas dans ce LLD |
 
 ### 1.3 ADR non applicables
 
@@ -385,7 +393,8 @@ confondus :
 | `tenantId`, `documentId`, `version` | isolation et identification — **filtrables**, socle du filtre `Retrieve` | non (immuables pour une version donnée) |
 | `status` | filtrable ; exclut les documents non `indexed` du retrieval | oui, réconcilié à la ré-ingestion |
 | `classification` | **filtre grossier uniquement** — la valeur qui autorise est celle de `documents` (§4.2, §6.2) | **oui** — une reclassification n'est pas propagée aux chunks sans réindexation |
-| `embeddingSpaceId`, `chunkerVersion` | traçabilité de l'espace et du découpage | non pour un index donné (l'espace est immuable, §4.2) |
+| `embeddingSpaceId` | traçabilité de l'espace | non (l'espace est immuable, §4.2) |
+| `chunkerVersion` | traçabilité du découpage | non pour un index donné (la stratégie de découpage KB est fixe par data source ; un changement de chunker crée un nouveau job dans le même espace) |
 
 La ligne `classification` est le point sensible : sa valeur est figée par KB au moment de
 l'indexation, et `V2-LLD-002` §5.4 énonce déjà que KB ne permet pas de reprendre finement une
@@ -427,7 +436,8 @@ La séquence retenue est bornée et son point de non-retour est explicite :
    à datasetVersion et fixturesVersion constants, comparaison à la baseline
    de l'index courant. Un écart au-delà de la marge configurée INTERDIT la bascule.
    (Un changement d'embeddingSpaceId n'invalide pas la baseline : c'est
-    précisément l'écart que cette étape mesure.)
+    précisément l'écart que cette étape mesure. Si aucune baseline n'existe
+    encore pour ce couple fixtures/topK → régime d'amorçage §16.4.)
 
 4. Bascule du pointeur applicatif : KB_ID / KB_DATA_SOURCE_ID / EMBEDDING_SPACE_ID
    -> opération atomique, UNIQUE POINT DE NON-RETOUR.
@@ -567,7 +577,7 @@ ce cas observable.
 |---|---|---|
 | Droits insuffisants | l'utilisateur n'est ni propriétaire ni bénéficiaire d'un partage | **normal** — le filtre travaille |
 | Faux négatif de reclassification | le chunk porte un niveau **plus restrictif** que `documents` (reclassification assouplissante non encore réindexée) | **normal, transitoire** — perte de rappel, pas d'isolation ; se résorbe à la réindexation suivante |
-| Misconfiguration | métadonnées KB manquantes, filtre ACL trop large côté serveur, mapping de champs incorrect | **anomalie** — c'est ce que le seuil d'alerte cherche à détecter |
+| Misconfiguration | métadonnées KB manquantes, post-filtrage FastAPI trop strict (mapping de champs ACL incorrect, logique ACL erronée), mapping de champs KB incorrect | **anomalie** — c'est ce que le seuil d'alerte cherche à détecter |
 
 Le deuxième cas est la contrepartie assumée du filtre grossier de l'étape 2 (§6.2) : il ne peut
 produire que des **faux négatifs**. Un chunk plus restrictif que sa source écarte un candidat
