@@ -262,7 +262,7 @@ transactionnelle.
 ## Cycle de vie d'une commande
 
 ```text
-                  matérialisation (FastAPI, depuis l'intention du modèle)
+   matérialisation (tool de proposition via Gateway MCP, depuis l'intention du modèle)
                                    │
                                    ▼
                               [ pending ] ──── expiration TTL ────► [ expired ]
@@ -292,6 +292,12 @@ Les propriétés que cet ADR impose, indépendamment du magasin retenu :
   l'idempotence, et c'est une conséquence décidée. Une mutation passée par une commande **n'écrit
   pas d'entrée dans le ledger** de `V2-LLD-006` §5, qui reste réservé aux opérations sans commande
   — uploads documentaires et déclenchements d'ingestion ;
+- **la rétention d'une commande `executed` ne peut pas être inférieure à la fenêtre d'idempotence
+  exigée pour la mutation qu'elle porte.** C'est la contrepartie du point précédent : dès lors que
+  l'état `executed` est le seul enregistrement d'idempotence de cette mutation, sa purge rouvre la
+  possibilité d'un second effet de bord. Cette borne ne se déduit pas des deux TTL ci-dessus — ceux-là
+  bornent l'autorisation, celle-ci borne la garantie de non-rejeu, et les deux fenêtres n'ont ni la
+  même durée ni le même objet ;
 - **aucune transition ne remonte** : une commande n'est pas modifiable. Un changement d'avis
   produit une nouvelle commande, la précédente expirant sans effet ;
 - **une annulation ne transitionne pas la commande** : elle la laisse dans son état courant, où
@@ -405,7 +411,7 @@ déjà des tools mutants et que la confirmation actuelle est le contrôle qui le
 | HLD §6.4 | « Tool Selection, confirmation si mutation » | distinguer les deux appels et situer la confirmation hors du chemin du modèle |
 | `capability-allocation-matrix.md` Domaine 5 | capacités du Runtime | énoncer que le Runtime ne porte pas la vérification de confirmation |
 | `capability-allocation-matrix.md` Domaine 7 | capacités MCP | ajouter la classe de tool (`read`/`mutating`) au catalogue, avec défaut `mutating` |
-| `V2-LLD-006` §5 | ledger d'idempotence, portée « mutations `Trips` » | retirer les mutations via commande de la portée du ledger ; ajouter le magasin de commandes, ses clés et les TTL des deux fenêtres |
+| `V2-LLD-006` §5 | ledger d'idempotence, portée « mutations `Trips` » | retirer les mutations via commande de la portée du ledger ; ajouter le magasin de commandes, ses clés et les TTL des deux fenêtres ; borner la rétention d'une commande `executed` par la fenêtre d'idempotence de la mutation qu'elle porte |
 | `LLD-V2-INDEX-FR.md` | portée `V2-LLD-004` : « confirmation liée à une commande » | aligner sur la décision : deux appels, exécution par référence, classe de tool |
 | `LLD-V2-INDEX-FR.md` | portée `V2-LLD-010` | ajouter le rendu serveur du résumé de commande et le geste de confirmation |
 
@@ -420,8 +426,12 @@ La décision est prise ; son activation dépend de faits à prouver avant implé
   bord doivent tenir dans une transaction unique. Le pattern `TransactWriteItems` de `ADR-0007` §4
   est le candidat, sous réserve que la commande et la cible métier soient dans la même région et
   compatibles avec la limite d'items par transaction ;
-- **comportement du rejeu d'une commande `executed`** : renvoyer le résultat initial suppose que ce
-  résultat soit conservé, ce qui doit être arbitré avec la politique de rétention de `V2-LLD-006` ;
+- **rétention d'une commande `executed`** : renvoyer le résultat initial suppose que ce résultat soit
+  conservé, ce qui doit être arbitré avec la politique de rétention de `V2-LLD-006`. L'enjeu dépasse
+  le confort du rejeu — l'état `executed` tenant lieu d'enregistrement d'idempotence, sa purge rouvre
+  la possibilité d'un second effet de bord. Si la rétention retenue ne peut pas couvrir la fenêtre
+  d'idempotence exigée, la réponse conforme est de conserver au-delà une entrée réduite valant
+  enregistrement de non-rejeu ; jamais de laisser la commande disparaître en silence ;
 - **budget temps de la transaction d'exécution** : la transition conditionnelle et l'effet de bord
   étant indissociables, leur latence cumulée s'impute au tour en cours et doit tenir dans la
   deadline propagée par `operationContext` (`V2-ADR-011`). L'appel de confirmation, lui, est un
@@ -478,6 +488,9 @@ une décision autonome du modèle, et son retrait avant réalisation dégraderai
 - **confirmation par une identité autre que celle qui a fait matérialiser la commande** : refusée,
   y compris avec un `commandId` valide ;
 - **rejeu d'une commande `executed`** : aucun second effet de bord, résultat initial renvoyé ;
+- **rétention d'une commande `executed`** : la commande reste résoluble pendant toute la fenêtre
+  d'idempotence de la mutation qu'elle porte, et un rejeu en fin de fenêtre ne produit pas un second
+  effet de bord ;
 - **deux exécutions concurrentes du même `commandId`** : une seule aboutit, l'autre échoue sur la
   condition transactionnelle sans effet partiel ;
 - **expiration** : une commande `pending` non confirmée et une commande `confirmed` non exécutée

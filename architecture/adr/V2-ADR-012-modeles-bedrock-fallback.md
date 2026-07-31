@@ -9,8 +9,8 @@
   disponibles en `eu-west-3` et liste nominative des régions de destination du profil EU (voir
   « Préconditions »).
 - **Documents impactés :** `V2-LLD-003` §3.2, §5.2.1, §5.4, §8.1, §9.1, §12.1, §13.1 ;
-  `V2-ADR-011` (événement `done`) ; `V2-LLD-007` (attribution des coûts) — voir « Écarts à
-  corriger dans le corpus ».
+  `V2-ADR-011` (événement `done`) ; `V2-LLD-007` (attribution des coûts) ; Charte ou `V2-ADR-006`
+  (exigence de résidence des données, point ouvert) — voir « Écarts à corriger dans le corpus ».
 
 ## Contexte
 
@@ -40,7 +40,7 @@ n'est pas le cas.
 | `V2-LLD-003 §5.4` | une `ThrottlingException` isolée ne doit pas casser une conversation |
 | `V2-LLD-003 §8.2` | toute sortie hors budget produit un `AgentResult` structuré, jamais une exception |
 | `V2-ADR-011` | le flux SSE déclare le mode servi et se termine par `done`, `cancelled` ou `error` |
-| (point ouvert) | l'exigence formelle de résidence hors UE n'est pas encore documentée dans le corpus — voir « Option C » |
+| (point ouvert) | aucune exigence formelle de résidence des données dans l'UE n'est documentée dans le corpus ; l'interdiction du profil global en `staging` et `production` est donc une précaution, pas une conséquence — voir « Option C » |
 | `V2-ADR-008` | le throttling et le coût par invocation sont observables et corrélés |
 
 ## Le fait technique déterminant — un modèle récent ne s'invoque pas par son nom
@@ -129,7 +129,7 @@ Réserver de la capacité. Supprime le throttling par construction, mais impose 
 et un coût plancher indépendant de l'usage — disproportionné pour une V2 dont le trafic n'est pas
 encore mesuré.
 
-## Décision proposée pour l'identifiant d'invocation
+## Décision — identifiant d'invocation
 
 **Option B, encapsulée dans un profil d'inférence applicatif.**
 
@@ -205,7 +205,7 @@ la décision sur la résidence. Sans objet ici.
 Erreur typée immédiate et signal de réessai au client, sans dégradation. Honnête et peu coûteux,
 mais n'apporte aucune disponibilité par lui-même.
 
-## Décision proposée pour le fallback
+## Décision — fallback
 
 **Option B comme repli nominal, Option D comme état terminal, jamais de bascule en cours de flux.**
 
@@ -313,8 +313,22 @@ Trois points en découlent :
   destination. Un repli sans permission est un repli inexistant, et son test de contrôle périodique
   est ce qui le révèle.
 
-Les actions restent `bedrock:InvokeModel` et `bedrock:InvokeModelWithResponseStream` — `Converse`
-et `ConverseStream` s'y ramènent.
+Les actions d'invocation restent `bedrock:InvokeModel` et `bedrock:InvokeModelWithResponseStream` —
+`Converse` et `ConverseStream` s'y ramènent.
+
+Deux actions de lecture s'y ajoutent, qu'aucune invocation ne couvre :
+
+| Action | Ressource | Raison |
+|---|---|---|
+| `bedrock:GetInferenceProfile` | le profil applicatif configuré | résoudre le profil vers les modèles qu'il encapsule |
+| `bedrock:GetFoundationModel` | chaque modèle ainsi résolu | lire son état de cycle de vie |
+
+Elles sont la conséquence directe de deux décisions de cet ADR. L'identifiant d'invocation est
+**opaque** : la sonde de cycle de vie ne peut donc pas déduire de sa forme quel modèle surveiller,
+elle doit résoudre le profil. Et le cycle de vie est **vérifié automatiquement** : sans ces deux
+lectures, la sonde décidée plus bas n'est pas implémentable, et le préavis de six mois n'est reçu
+par personne. Ces actions appartiennent à l'identité de la sonde, non à celle du chemin de
+requête — le domaine ne les utilise jamais.
 
 ## Écarts à corriger dans le corpus
 
@@ -331,6 +345,7 @@ et `ConverseStream` s'y ramènent.
 | `V2-LLD-003 §13.1` | deux lignes bloquantes sur `V2-ADR-012 (backlog)` | lever le blocage |
 | `V2-ADR-011` | contrat de l'événement `done` | ajouter l'identifiant d'invocation servie (extension additive) |
 | `LLD-V2-INDEX-FR.md` | `V2-LLD-007` dépend de `V2-ADR-012` | aucune correction ; la dépendance devient satisfaite |
+| Charte, ou `V2-ADR-006` | aucune exigence de résidence des données n'est documentée, alors que l'interdiction du profil global en `staging` et `production` s'y adosse | instruire l'exigence : soit elle est formalisée et l'interdiction en devient une conséquence, soit elle est écartée et l'interdiction reste une précaution explicitement non fondée. Sans cette instruction, la distinction par environnement décidée ici repose sur une règle dont aucun document n'est propriétaire |
 
 La granularité d'attribution des coûts décidée ici est une **entrée** pour `V2-LLD-007`, qui n'est
 pas encore rédigé : aucune correction n'y est requise, mais la contrainte doit y être reprise.
@@ -402,7 +417,8 @@ correcte ; elle est seulement incomplète.
 - politique IAM privée d'une région de destination : l'échec est observé et diagnosticable, et le
   test documente ce mode de panne intermittent ;
 - **invocation de contrôle du repli** : exécutée, tracée, et son échec produit une alerte ;
-- sonde de cycle de vie : le passage simulé en `Legacy` du primaire ou du repli produit une alerte ;
+- sonde de cycle de vie : la résolution du profil applicatif vers les modèles qu'il encapsule
+  aboutit, et le passage simulé en `Legacy` du primaire ou du repli produit une alerte ;
 - étiquettes de coût du profil applicatif visibles dans Cost Explorer, en tenant compte du délai
   de propagation et du fait qu'elles ne sont pas rétroactives ;
 - réconciliation entre le coût dérivé des compteurs de tokens et la facture de l'environnement, avec

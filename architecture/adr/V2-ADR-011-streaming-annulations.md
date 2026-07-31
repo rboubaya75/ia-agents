@@ -128,7 +128,7 @@ réponse.
 modèle de programmation différent côté FastAPI et frontend ; surcoût de complexité non justifié pour
 un flux unidirectionnel serveur → client.
 
-## Décision proposée pour le transport
+## Décision — transport
 
 Retenir **l'option C**.
 
@@ -216,7 +216,7 @@ d'annulation ; l'annulation est coopérative, donc non instantanée.
 **Limites :** réintroduit toute la complexité de l'option D du transport pour un seul message. Non
 retenu.
 
-## Décision proposée pour l'annulation
+## Décision — annulation
 
 Retenir **l'option B comme mécanisme nominal**, avec l'option A conservée comme **signal
 complémentaire de meilleur effort** : les deux alimentent le même drapeau coopératif. La
@@ -244,9 +244,16 @@ garantie.
   annulation réduit le coût, elle ne l'annule pas.
 
 Le choix technique du registre partagé (table DynamoDB dédiée ou réutilisation d'une table
-existante, TTL, cohérence de lecture) est **délégué à `V2-LLD-006`**, qui possède les modèles de
-données. Cet ADR n'impose que ses propriétés : partagé entre tâches, borné dans le temps et
-autorisable par tenant.
+existante, TTL, forme des clés) est **délégué à `V2-LLD-006`**, qui possède les modèles de
+données. Cet ADR n'impose que ses propriétés : partagé entre tâches, borné dans le temps,
+autorisable par tenant et **lu en cohérence forte à chaque point d'annulation**.
+
+La cohérence forte n'est pas un détail de réalisation délégable. Une lecture à cohérence éventuelle
+peut ne pas voir une marque écrite quelques centaines de millisecondes plus tôt par une autre
+tâche : le tour suivant ou l'appel de tool suivant partirait malgré l'annulation, et la
+consommation facturée continuerait — précisément ce que l'exigence d'arrêt de la consommation
+interdit. C'est aussi la condition sans laquelle la preuve d'annulation inter-tâches ne peut pas
+être tenue.
 
 ## Contrat d'événements SSE
 
