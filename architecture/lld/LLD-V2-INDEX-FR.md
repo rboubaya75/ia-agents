@@ -26,12 +26,21 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu'elle affecte
 
 | ID | LLD | Portée | Dépendances ADR exactes | Statut |
 |---|---|---|---|---|
+<<<<<<< HEAD
 | V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, DNS, IAM workload, secrets | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-019 | v0.2 (Draft) |
 | V2-LLD-002 | RAG et ingestion documentaire | S3, ingestion KB (V2) / applicative (V3), chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-014, V2-ADR-017, V2-ADR-018 | v0.5 (Draft) |
 | V2-LLD-003 | Agents et orchestration | `/agents`, adapter, Converse API, prompts, budgets, streaming, annulations, fallback | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-012 | v0.5 (Draft) |
 | V2-LLD-004 | AgentCore Gateway MCP et tools | catalogue, schémas, IAM, confirmation, idempotence, retry | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-014 | À créer |
 | V2-LLD-005 | Identité, sécurité et conformité | Cognito, autorisation, tenant, KMS, WAF, threat model, audit, rétention du journal d'effacement et rejeu après restauration, autorisation sur lecture directe par niveau de classification | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-010, V2-ADR-014, V2-ADR-015, V2-ADR-016, V2-ADR-017 | À créer |
 | V2-LLD-006 | Données, mémoire, rétention et restauration | modèles, cycle de vie, TTL, backup, effacement et fenêtre résiduelle, journal d'audit d'effacement, rejeu après restauration, espace d'embedding, réhydratation | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-014, V2-ADR-015, V2-ADR-017 | v0.4 (Draft) |
+=======
+| V2-LLD-001 | Plateforme AWS, réseau, ECS et FastAPI | VPC, ECS, compute, ingress, type d'API Gateway et transport du streaming, ancrage de confiance de l'identité et validation JWKS, chemin unique et attachement du WAF, DNS, IAM workload, secrets, politique de clé des groupes de journaux | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-011, V2-ADR-016, V2-ADR-019, V2-ADR-020 | v0.3 (Draft) |
+| V2-LLD-002 | RAG et ingestion documentaire | S3, ingestion KB (V2) / applicative (V3), chunking, embeddings, S3 Vectors, DynamoDB, suppression | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-017, V2-ADR-018 | v0.3 (Draft) |
+| V2-LLD-003 | Agents et orchestration | `/agents`, adapter, Converse API, prompts, budgets, fallback | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-012 | v0.4 (Draft) |
+| V2-LLD-004 | AgentCore Gateway MCP et tools | catalogue, schémas, IAM, confirmation, idempotence, retry | V2-ADR-002, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-014 | À créer |
+| V2-LLD-005 | Identité, sécurité et conformité | Cognito, contrat de validation du token (JWKS, cache, borne de tolérance, claims requis, politique de refus), autorisation, tenant, KMS, WAF et mécanisme de chemin unique, threat model, audit, rétention du journal d'effacement et rejeu après restauration, autorisation sur lecture directe par niveau de classification | V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-010, V2-ADR-014, V2-ADR-015, V2-ADR-016, V2-ADR-017 | À créer |
+| V2-LLD-006 | Données, mémoire, rétention et restauration | modèles, cycle de vie, TTL, backup, effacement, réhydratation | V2-ADR-019, V2-ADR-003, V2-ADR-004, V2-ADR-006, V2-ADR-010, V2-ADR-013, V2-ADR-015, V2-ADR-017 | v0.3 (Draft) |
+>>>>>>> V2-LLD-001 v0.3 — ancrage JWKS de l'identite, streaming REST API STREAM, WAF et chemin unique
 | V2-LLD-007 | Observabilité, SLO et FinOps | OTel, CloudWatch, corrélation, alertes, coûts, SLO | V2-ADR-002, V2-ADR-003, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-009, V2-ADR-012, V2-ADR-013 | À créer |
 | V2-LLD-008 | CI/CD, Terraform et promotion | GitLab CI, OIDC, artefacts, scans, plan, rollback | V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-010 | À créer |
 | V2-LLD-009 | Stratégie de tests et preuves | pyramide, datasets, E2E, sécurité, charge, chaos, DR | V2-ADR-001 à V2-ADR-019 selon applicabilité, avec V2-ADR-018 obligatoire pour le RAG | À créer |
@@ -123,6 +132,14 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu'elle affecte
 
 Doit définir : topologie VPC et subnets, endpoints AWS, egress, dimensionnement du calcul ECS, services, identités de workloads (Task IAM Roles), Security Groups, ingress/API Gateway, DNS, certificats, autoscaling, déploiements contrôlés, health, readiness et graceful shutdown.
 
+Conformément à `V2-ADR-011`, la route conversationnelle est servie par un API Gateway **REST API Regional** en mode `responseTransferMode = STREAM` via **VPC Link V2** vers l'ALB interne. L'`idle_timeout` de l'ALB et l'intervalle de keep-alive SSE sont liés par un invariant vérifié au plan, et l'ALB est délibérément la contrainte la plus serrée de la chaîne.
+
+Conformément à `V2-ADR-020`, l'identité n'est pas ce que la passerelle affirme mais ce que FastAPI vérifie : l'authorizer Cognito rejette le trafic non authentifié, et FastAPI établit l'identité en validant elle-même la signature du token contre le **JWKS Cognito**. Aucun en-tête d'identité n'est lu — les familles `X-Amzn-Oidc-*` et `X-Claims-*` sont retirées du corpus. La frontière du token est **FastAPI, exactement** : `Authorization` est transmis sur le seul segment passerelle → FastAPI, et jamais journalisé. L'indisponibilité du JWKS **refuse** au-delà d'une borne de tolérance déclarée en heures ; elle n'hérite pas de l'exception au refus par défaut que `V2-ADR-016` borne au compteur de quota.
+
+Conformément à `V2-ADR-016`, le LLD porte l'exigence de **chemin unique** CloudFront → API Gateway et statue sur l'**attachement du WAF** au type d'API retenu — deux préconditions bloquantes. Le type d'API est unifié sur REST API pour disposer d'un point d'attachement WAF unique, l'identité étant désormais invariante au type d'API.
+
+La politique de clé KMS des groupes de journaux couvre explicitement le journal d'audit d'effacement de `V2-LLD-006 §8.6`, qui ne vit pas sous le préfixe `/ecs/` : son omission ferait échouer la création du groupe et vaudrait précondition P3 non satisfaite.
+
 ### V2-LLD-002 — RAG et ingestion
 
 Doit définir : formats et tailles, upload et quarantaine, validation et antivirus, parsing, chunking versionné, embeddings Bedrock configurables, schéma S3 Vectors, métadonnées DynamoDB, idempotence, suppression, réindexation, réhydratation, filtres d'isolation, citations, dataset et métriques d'évaluation.
@@ -140,6 +157,8 @@ Doit définir : catalogue et versionnement, schémas stricts, IAM et resource po
 ### V2-LLD-005 — Identité, sécurité et conformité
 
 Doit définir : modèle utilisateur/tenant, claims, scopes, rôles, threat model, WAF, KMS, Secrets Manager, sécurité ECS, egress, sécurité des uploads, prompt injection, data poisoning, exfiltration, audit trail, rétention et effacement.
+
+Doit également couvrir : le contrat complet de validation du token JWKS (algorithme RS256 only, `iss`/`aud` comparés à des valeurs de configuration, `token_use`, cache TTL/borne de tolérance/anti-amplification, comportement en cas d'indisponibilité du JWKS), le mécanisme de chemin unique CloudFront → API Gateway tel que statué en `V2-LLD-001 §7.4`, et l'attachement du WAF avec ses règles de contenu (le LLD-001 ne porte que le point d'attachement).
 
 ### V2-LLD-006 — Données et restauration
 

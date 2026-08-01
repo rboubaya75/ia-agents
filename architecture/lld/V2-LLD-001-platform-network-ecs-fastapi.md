@@ -1,11 +1,12 @@
 # V2-LLD-001 — Plateforme AWS, réseau, ECS et FastAPI
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G2
-- **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§8, §12, §14)
-- **Dépendances ADR :** V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-019
+- **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§5, §6.5, §8, §12, §14)
+- **Dépendances ADR :** V2-ADR-001, V2-ADR-006, V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-011,
+  V2-ADR-016, V2-ADR-019, V2-ADR-020
 
 > **Révision v0.2 (revue PR #35) :** alignement sur `V2-ADR-019`. Le service ECS `ingestion` et
 > son rôle IAM sont désormais explicitement marqués **cible V3 non provisionnée en V2** (l'ingestion
@@ -13,6 +14,28 @@
 > actions KB réellement utilisées en V2 (`Retrieve`, `StartIngestionJob`/`GetIngestionJob`) et non
 > l'accès direct S3 Vectors (réservé à V3). Correction du code de graceful shutdown (lifespan),
 > du chiffrement des logs (CMK) et de l'exception egress AgentCore Runtime.
+
+> **Révision v0.3 :** alignement sur `V2-ADR-011`, `V2-ADR-016` et `V2-ADR-020`, qui nomment tous
+> trois `§7` de ce LLD dans leurs « Écarts à corriger dans le corpus ».
+>
+> - **Transport du streaming (`V2-ADR-011`).** La route conversationnelle passe d'**API Gateway
+>   HTTP API** — qui tamponne systématiquement, de sorte que le « mode direct » de la v0.2 ne
+>   diffusait pas — à **REST API Regional en mode `responseTransferMode = STREAM`** ; le plafond de
+>   29 s disparaît au profit de 15 min (§7, §7.2). Ajout de l'`idle_timeout` ALB et du keep-alive
+>   SSE (§7.3), attendus par `V2-LLD-003 §5.2.2`.
+> - **Ancrage de l'identité (`V2-ADR-020`).** §7.1 est **entièrement réécrit**. Les en-têtes
+>   `X-Amzn-Oidc-*` qu'il décrivait appartiennent à un ALB en `authenticate-cognito` et ne sont
+>   émis par aucun type d'API Gateway ; leur remplacement par un mapping de claims relèverait de
+>   l'option A de cet ADR, **rejetée**. FastAPI vérifie désormais elle-même la signature du token
+>   contre le JWKS Cognito et **ne lit aucun en-tête d'identité**. La frontière du token devient
+>   FastAPI, nommément : `Authorization` est transmis sur le segment passerelle → FastAPI.
+> - **WAF et chemin unique (`V2-ADR-016`).** Nouveau §7.4 : exigence de chemin unique et
+>   attachement du WAF au type d'API retenu, deux préconditions bloquantes de cet ADR. Le type d'API
+>   est **unifié** sur REST API (§7.0) pour un point d'attachement WAF unique — et non, comme une
+>   rédaction antérieure le soutenait, pour un mécanisme d'identité unique : `V2-ADR-020` rend
+>   l'identité invariante au type d'API et annule ce motif.
+> - **Journal d'effacement (`V2-LLD-006 §8.6`).** Ajout de la politique de clé CMK du groupe de
+>   journaux `/${env}/erasure-audit` (§12.1.1).
 
 ## 1. Métadonnées
 
@@ -28,6 +51,10 @@
 | ADR-001 | API Gateway → VPC Link → ALB interne → FastAPI |
 | ADR-007 | VPC dédié, subnets privés/publics, endpoints AWS, Fargate uniquement |
 | ADR-008 | Sidecar ADOT dans chaque task definition |
+| ADR-011 | Route conversationnelle en REST API `STREAM`, VPC Link V2, keep-alive et idle timeout ALB alignés |
+| ADR-016 | Chemin unique CloudFront → API Gateway ; WAF attaché au type d'API retenu |
+| ADR-020 | Identité établie par vérification JWKS côté FastAPI ; aucun en-tête d'identité lu |
+| HLD §6.5 | Streaming SSE réellement progressif, mode effectif déclaré au client |
 
 ### 1.2 ADR applicables — décisions retenues
 
@@ -38,6 +65,9 @@
 | V2-ADR-007 | ECS Fargate uniquement ; VPC avec subnets publics (NAT) et privés (tâches + ALB) ; VPC endpoints ; flag `enable_ecs_platform` |
 | V2-ADR-008 | Sidecar ADOT dans chaque task definition ; export X-Ray + CloudWatch |
 | V2-ADR-009 | Déploiement par nouvelle révision de task definition ECS (pas de Helm) |
+| V2-ADR-011 | Transport du streaming : API Gateway **REST API**, endpoint **Regional**, `responseTransferMode = STREAM`, intégration privée `HTTP_PROXY` via **VPC Link V2** vers l'ALB interne. Keep-alive SSE obligatoire, `idle_timeout` ALB aligné dessus (§7.2, §7.3). L'ADR délègue explicitement à ce LLD le choix d'unifier ou non les familles de routes : **unifié sur REST API** (§7.0), pour le motif WAF de `V2-ADR-016` et non pour un motif d'identité |
+| V2-ADR-016 | Exigence de **chemin unique** CloudFront → API Gateway, portée ici et outillée au plan (§7.4, §16.6) ; statut de l'**attachement du WAF** au type d'API retenu (§7.4), précondition bloquante vérifiée en §16.5. Le contenu des règles WAF relève de `V2-LLD-005` |
+| V2-ADR-020 | Transport et ancrage de l'identité : l'authorizer de la passerelle rejette le non-authentifié, **FastAPI établit l'identité** par vérification de la signature du token contre le **JWKS Cognito** (§7.1). Aucun en-tête d'identité n'est lu — les familles `X-Amzn-Oidc-*` et `X-Claims-*` sont retirées. `Authorization` est transmis sur le seul segment passerelle → FastAPI (§7.1.2) et n'est jamais journalisé. Paramètres de cache, borne de tolérance et fenêtre anti-amplification déclarés en §7.1.4 et §16.4 |
 | V2-ADR-019 | En V2, l'ingestion est déléguée à Bedrock Knowledge Bases : le service ECS `ingestion`, son rôle IAM, sa file SQS et son autoscaling **ne sont pas provisionnés en V2** (cible V3). La plateforme provisionne uniquement le service `fastapi` en V2 |
 
 ### 1.3 ADR non applicables
@@ -418,69 +448,344 @@ côté IAM, `V2-LLD-002` §6.1/§13.1).
 ## 7. Ingress — chemin complet
 
 ```text
-Browser / React
+Browser / React (EventSource)
     │ HTTPS (TLS terminé à CloudFront)
     ▼
 CloudFront + WAF
+    │ cache désactivé sur /api/*, aucun tampon additionnel
+    │ seul chemin joignable vers API Gateway (§7.4, V2-ADR-016)
     │ HTTPS (TLS re-terminé à API Gateway)
     ▼
-API Gateway HTTP API
-    │ JWT Cognito validé, claims extraits
-    │ Timeout max : 29 s (contrainte dure, voir §7.2)
+API Gateway REST API — endpoint Regional (V2-ADR-011)
+    │ WAF attaché au stage (§7.4)
+    │ authorizer Cognito : rejette le non-authentifié (§7.1)
+    │ Authorization transmis tel quel à l'intégration (§7.1.2)
+    │ responseTransferMode = STREAM  → flux progressif, plafond 15 min
+    │ Idle timeout : 5 min (dur)     → keep-alive obligatoire (§7.3)
     ▼
-VPC Link v2
-    │ trafic privé dans le VPC
+VPC Link V2
+    │ trafic privé dans le VPC, cible directe ALB (pas de NLB intermédiaire)
     ▼
 ALB interne (`sg-alb-internal`)
     │ Listener HTTPS 443, certificat ACM
     │ Target Group : tâches ECS `fastapi`, port 8000
-    │ Deregistration delay : 30 s
+    │ Idle timeout : 240 s (§7.3)  ·  Deregistration delay : 30 s
     ▼
 Tâche ECS `fastapi` (`sg-fastapi`)
     │ port 8000
     ▼
-FastAPI (uvicorn)
+FastAPI (uvicorn, StreamingResponse)
+    │ vérification JWKS du token → identité de confiance (§7.1)
+    │ le token s'arrête ici (§7.1.2)
 ```
 
-### 7.1 Headers de propagation des claims
+> **Le contrat d'identité est identique quel que soit le type d'API Gateway** (`V2-ADR-020`).
+> Le schéma ci-dessus nomme un REST API parce que `V2-ADR-011` l'impose sur la route
+> conversationnelle et que §7.0 unifie ; l'établissement de l'identité en §7.1 ne dépend d'aucune
+> propriété de ce type d'API.
 
-API Gateway extrait les claims Cognito et les propage à FastAPI via des en-têtes HTTP dédiés,
-jamais dans le corps de la requête, jamais via l'en-tête `Authorization` au-delà de ce point :
+### 7.0 Type d'API Gateway — décision et périmètre
 
-| En-tête | Valeur | Source |
+`V2-ADR-011` impose le REST API en mode `STREAM` sur la **route conversationnelle** et délègue
+explicitement à ce LLD le choix d'unifier ou non les familles de routes. Le HLD §5 le permet dans
+les deux sens (« les routes non diffusantes **peuvent** rester sur HTTP API »).
+
+**Décision : un seul API Gateway REST API Regional pour toutes les routes.**
+
+**Le motif n'est pas l'identité.** `V2-ADR-020` rend le contrat d'identité **identique sur les deux
+types d'API** : FastAPI vérifie elle-même la signature du token et ne lit aucun en-tête de claims
+(§7.1). L'argument « deux types d'API imposeraient deux familles d'en-têtes d'identité » — retenu
+dans une rédaction antérieure de cette section — est explicitement annulé par cet ADR, qui note
+qu'il « retire un argument de coût à l'unification forcée sur REST API ». Il ne subsiste rien de ce
+motif.
+
+**Le motif est l'attachement du WAF et le chemin unique** (`V2-ADR-016`). AWS WAF ne s'attache pas
+indifféremment à tous les types d'API Gateway : un web ACL s'associe au **stage d'un REST API**, pas
+à un HTTP API. Conserver deux types laisserait les routes documentaires sans WAF au niveau de la
+passerelle — couvertes par le seul CloudFront — et **doublerait** le point d'application de
+l'exigence de chemin unique (§7.4), qui devrait alors être démontrée deux fois plutôt qu'une. Sur un
+contrôle que `V2-ADR-016` classe en précondition bloquante, un point d'application unique n'est pas
+un confort d'exploitation.
+
+**La décision est réversible, et doit le rester.** `V2-ADR-020` précondition 1 prévoit que si la
+vérification nominative révèle que REST API consomme l'en-tête `Authorization` au lieu de le
+transmettre, la route conversationnelle **bascule sur HTTP API sans modifier la décision
+d'identité** (§16.5). Cette bascule reste possible précisément parce que l'unification n'est fondée
+sur aucun mécanisme d'identité : elle coûte une redéclaration de route et l'attachement d'un second
+point WAF, pas une refonte du contrat de confiance.
+
+Le surcoût est réel mais marginal à l'échelle V2 (§14.4) : REST API est facturé plus cher à la
+requête qu'HTTP API, sur un volume `test` de l'ordre de quelques dizaines de milliers d'appels par
+mois. Ce différentiel est accepté comme prix d'un point d'attachement WAF unique.
+
+| Route | Type | Mode de transfert |
 |---|---|---|
-| `X-Amzn-Oidc-Identity` | `sub` Cognito | API Gateway (natif HTTP API) |
-| `X-Amzn-Oidc-Access-Token` | **non transmis** (supprimé par policy) | — |
-| `X-Amzn-Oidc-Data` | payload JWT encodé (claims) | API Gateway (natif HTTP API) |
+| `POST /api/v1/conversations/{id}/messages` | REST API Regional | `STREAM` |
+| `GET /api/v1/operations/{operationId}/stream` | REST API Regional | `STREAM` |
+| Routes documentaires et d'administration | REST API Regional | `BUFFERED` (défaut) |
 
-FastAPI valide et extrait les claims depuis `X-Amzn-Oidc-Data` uniquement — jamais depuis le
-corps de la requête, conformément à la règle de confiance `V2-ADR-006`. Le `sub` devient `actorId`
-après hachage ; `tenantId` est résolu côté serveur.
+`responseTransferMode` est un réglage **par méthode**, pas par API : les routes non diffusantes
+restent en `BUFFERED` sur le même API. L'unification porte sur le type d'API, pas sur le mode.
 
-### 7.2 Stratégie SSE et contrainte timeout 29 s
+> **Endpoint Regional, jamais edge-optimized.** L'idle timeout d'un endpoint edge-optimized est de
+> 30 secondes, ce qui annule l'intérêt du mode `STREAM` (`V2-ADR-011`). La distribution CloudFront
+> de `V2-ADR-001` reste en frontal et lui est **distincte** — c'est notre distribution, pas le
+> CloudFront managé d'un endpoint edge-optimized.
 
-Le protocole de streaming retenu est SSE (`Content-Type: text/event-stream`), décidé au HLD §6.5.
+### 7.1 Transport et ancrage de confiance de l'identité
 
-La contrainte de timeout 29 s d'API Gateway HTTP API est gérée par deux modes :
+`V2-ADR-020` tranche la question que `V2-ADR-001` et `V2-ADR-006` avaient laissée ouverte — **depuis
+quelle source FastAPI relit les claims** — et nomme `§7.1` de ce LLD dans ses écarts. Cette section
+applique sa décision.
 
-**Mode direct (réponses ≤ 25 s) :**
+> **L'identité n'est pas ce que la couche précédente affirme, c'est ce que FastAPI vérifie.**
+
+**Ce que corrige cette section.** Les versions antérieures décrivaient FastAPI extrayant les claims
+d'en-têtes `X-Amzn-Oidc-*` attribués à « API Gateway (natif HTTP API) », puis d'en-têtes `X-Claims-*`
+produits par mapping d'intégration. Les premiers appartiennent à un **Application Load Balancer**
+configuré en `authenticate-cognito` : aucun type d'API Gateway ne les émet, et l'ALB interne de cette
+architecture n'exécute aucune authentification. Les seconds étaient réels mais reposaient sur
+l'option A de `V2-ADR-020`, **rejetée** : faire porter l'identité par un en-tête suppose qu'aucun
+autre émetteur ne peut le produire, c'est-à-dire l'exigence de chemin unique de `V2-ADR-016` — que
+ce même ADR classe en précondition **bloquante non démontrée**. La valeur la plus critique du système
+reposerait sur le fait le moins établi.
+
+#### 7.1.1 Deux contrôles, deux finalités
+
+```text
+API Gateway   authorizer Cognito     rejette le non-authentifié       protège la disponibilité
+FastAPI       vérification JWKS      établit l'identité de confiance  protège l'isolation
+```
+
+Ce n'est pas une redondance. L'authorizer de la passerelle empêche le trafic non authentifié
+d'atteindre le chemin privé — ce que FastAPI ne peut pas faire pour elle-même, puisqu'elle est
+derrière. La vérification FastAPI est le **fondement de l'isolation** `V2-ADR-006` : elle est
+conduite sur le token lui-même, pas sur une affirmation transmise.
+
+Deux propriétés en découlent, et ce sont elles qui motivent le choix :
+
+- **le mécanisme est invariant au type d'API.** La vérification de signature est rigoureusement
+  identique derrière un HTTP API et derrière un REST API, là où tout mapping impose deux contrats à
+  maintenir convergents (§7.0) ;
+- **l'ancrage ne dépend d'aucune précondition non démontrée.** Si le chemin unique de `V2-ADR-016`
+  venait à faillir, une requête forgée atteignant l'ALB ne produirait **aucune identité** : elle
+  serait refusée faute de signature valide. L'échec d'un contrôle réseau reste un problème de
+  disponibilité et ne devient pas une usurpation.
+
+#### 7.1.2 Frontière du token
+
+`V2-ADR-006` interdit qu'un token Cognito atteigne Runtime, MCP ou les tools. Il n'a jamais interdit
+de le transmettre à FastAPI — c'est ce LLD qui avait ajouté « jamais via `Authorization` au-delà de
+ce point », une contrainte qu'aucun ADR n'imposait. `V2-ADR-020` la lève **pour un seul segment** :
+
+| Segment | Token présent | Fondement |
+|---|---|---|
+| Navigateur → CloudFront → API Gateway | oui | authentification |
+| API Gateway → VPC Link → ALB → FastAPI | **oui** | source de vérité de l'identité |
+| FastAPI → AgentCore Runtime | non | `trustedIdentity` produite par FastAPI (`V2-ADR-006`) |
+| Runtime → MCP, tools | non | `V2-ADR-006`, inchangé |
+
+La frontière du token devient **FastAPI, exactement**. Elle n'est pas plus haute qu'avant — le token
+ne va pas plus loin vers Runtime — mais elle est désormais nommée plutôt qu'implicite. L'en-tête
+`Authorization` est transmis tel quel par l'intégration, **sans mapping ni réécriture**.
+
+Le segment ajouté est intégralement privé (VPC Link, ALB interne sans DNS public, tâches en subnets
+privés) et TLS est terminé à chaque saut. Le token n'y transite donc pas en clair au sens réseau,
+mais il devient présent dans un périmètre où il ne l'était pas : `Authorization` est ajouté nommément
+aux valeurs **jamais journalisées**, à toutes les couches, journaux d'erreur compris (§12.4,
+`V2-ADR-008`).
+
+#### 7.1.3 Contrat de validation
+
+FastAPI vérifie le token à chaque requête, sur les clés publiques du JWKS Cognito mises en cache.
+
+| Contrôle | Règle | Refus si |
+|---|---|---|
+| Signature | vérifiée contre la clé du JWKS dont le `kid` correspond | signature invalide, `kid` inconnu après actualisation |
+| `alg` | liste blanche **`RS256` uniquement** | `none`, `HS256` ou tout algorithme hors liste |
+| `iss` | comparé à la valeur de configuration `cognito_issuer` | différent, absent |
+| `aud` | comparé à la valeur de configuration `cognito_app_client_id` | différent, absent |
+| `exp` / `nbf` | horodatage courant, tolérance d'horloge 60 s | expiré, pas encore valide |
+| `token_use` | doit valoir `id` | absent ou différent |
+| `sub` | présent et non vide | absent |
+| `custom:tenantId` | présent — **entrée** de la résolution serveur du tenant | absent |
+
+`iss` et `aud` sont **comparés à des valeurs de configuration**, jamais seulement constatés présents :
+un token correctement signé par un autre pool ou destiné à un autre client applicatif est un token
+valide qui n'est pas le nôtre.
+
+**Ce que FastAPI ne lit pas.** Le chemin de résolution d'identité **ne lit aucun en-tête d'identité**,
+quel que soit son nom — ni `X-Amzn-Oidc-*`, ni `X-Claims-*`, ni aucun équivalent. Il n'y a plus de
+règle d'écrasement à énoncer ni d'occurrence multiple à arbitrer : un en-tête forgé n'a pas à être
+écarté, il n'est jamais consulté. C'est cette absence de lecture qui est vérifiée en preuve (§15),
+et non le bon fonctionnement d'un filtre.
+
+Le `sub` devient `actorId` après hachage ; `tenantId` est **résolu côté serveur** à partir du claim
+`custom:tenantId` et d'un registre, jamais recopié tel quel — le claim est une entrée de la
+résolution, pas son résultat (`V2-ADR-006`). Un `tenantId` présent dans le corps de la requête reste
+sans effet.
+
+**Bibliothèque.** `PyJWT` avec `cryptography`, via un client JWKS avec cache (§7.1.4). La
+configuration est explicite et vérifiée en revue : `algorithms=["RS256"]`, `audience` et `issuer`
+passés à la vérification. `options={"verify_signature": False}` est interdit en toute circonstance,
+y compris en test — un test qui a besoin de désactiver la signature teste autre chose que le chemin
+de production.
+
+#### 7.1.4 Cache JWKS et comportement en panne
+
+Le JWKS est une dépendance externe nouvelle sur le chemin de chaque requête. Elle est mise en cache,
+mais elle existe.
+
+**Son indisponibilité refuse.** `V2-ADR-016` a posé une exception au refus par défaut pour le
+compteur de quota, en la bornant explicitement à ce compteur ; `V2-ADR-020` confirme qu'elle **ne
+s'étend pas au JWKS**. La distinction est la nature du contrôle, pas sa position sur le chemin : un
+contrôle d'équité qui échoue dégrade, un contrôle d'autorisation qui échoue refuse.
+
+Le risque de disponibilité se traite par le cache, jamais par l'assouplissement :
+
+| Paramètre | Valeur | Rôle |
+|---|---|---|
+| `jwks_cache_ttl_seconds` | 3600 (1 h) | TTL nominal des clés en cache |
+| `jwks_stale_tolerance_seconds` | 21600 (6 h) | borne de tolérance au-delà du TTL si le JWKS est injoignable — **exprimée en heures, jamais en jours** |
+| `jwks_refresh_min_interval_seconds` | 60 | fenêtre anti-amplification : au plus une actualisation par intervalle |
+
+- une clé expirée du cache mais non renouvelable en raison d'une indisponibilité du JWKS reste
+  utilisable **jusqu'à la borne de tolérance**, distincte du TTL nominal ;
+- au-delà de cette borne, le refus s'applique et l'événement est alerté comme un **incident de
+  sécurité**, non comme une perte de contrôle d'équité. Sa série de métrique est distincte du refus
+  de quota (`V2-ADR-016`) et du refus d'autorisation : trois causes qui appellent trois réactions
+  d'exploitation différentes ;
+- un `kid` présent dans le token mais absent du cache déclenche **une seule** actualisation avant
+  décision, bornée par `jwks_refresh_min_interval_seconds`. Ce comportement distingue la rotation
+  planifiée de Cognito — nouveau `kid` accepté dès la première actualisation réussie — d'une
+  tentative d'amplification : un `kid` forgé inconnu ne déclenche qu'une tentative, jamais une
+  boucle d'appels au JWKS.
+
+Les trois valeurs sont des **paramètres déclarés** (§16.4), pas les défauts de la bibliothèque
+retenue.
+
+### 7.2 Stratégie SSE — streaming progressif et modes
+
+Le protocole retenu est SSE (`Content-Type: text/event-stream`), décidé au HLD §6.5. Le transport
+qui le rend réellement progressif est décidé par `V2-ADR-011` et réalisé ici.
+
+**Ce que corrige cette section.** La v0.2 décrivait un « mode direct (réponses ≤ 25 s) → streaming
+SSE direct » sur HTTP API. Ce mode **ne diffusait pas** : HTTP API tamponne systématiquement la
+réponse et la relaie en un seul bloc à la fin, sans option pour l'en empêcher. Le code était
+correct, le protocole était correct, et il n'y avait pas de streaming — une dégradation d'autant
+plus dangereuse qu'elle était **silencieuse et non déclarée au frontend**.
+
+**Mode nominal — `native` :**
 ```
 POST /api/v1/conversations/{id}/messages
-→ 200 text/event-stream (streaming SSE direct)
+→ 200 text/event-stream, flux progressif de bout en bout
+  premier événement : meta {"streaming": "native", "operationId": "..."}
 ```
 
-**Mode asynchrone (réponses potentiellement > 25 s) :**
+**Mode de reprise — `operationId` :**
 ```
 POST /api/v1/conversations/{id}/messages?async=true
 → 202 application/json  {"operationId": "op-<uuid>", "status": "processing"}
 
 GET /api/v1/operations/{operationId}/stream
-→ 200 text/event-stream (SSE du résultat dès disponibilité)
+→ 200 text/event-stream (rattachement à l'opération en cours ou résultat persisté)
 ```
 
-Le choix du mode est configurable par feature flag (`STREAMING_MODE=direct|async`).
-CloudFront doit désactiver le cache sur les chemins `/api/*` et transmettre l'en-tête
-`Cache-Control: no-cache` sans buffering additionnel.
+Ce second mode **change de raison d'être**. En v0.2 il contournait la limite de 29 secondes ; il
+n'existe plus pour cela. Il sert désormais à deux cas que le mode nominal ne couvre pas : les flux
+susceptibles de dépasser **15 minutes** (plafond dur de la chaîne) et la **reprise après
+déconnexion réseau**. Une reconnexion ne rejoue pas les fragments déjà émis : elle se rattache par
+`operationId` et reçoit l'état courant ou le résultat final (`V2-ADR-011`).
+
+**Déclaration du mode effectif.** Le premier événement du flux porte `streaming: native |
+emulated`. Le mode `emulated` n'est pas un mode nominal : c'est le repli qui s'applique si la
+précondition d'infrastructure de `V2-ADR-011` n'est pas prouvée (§16.5). Il est **déclaré**, jamais
+subi — c'est précisément ce que la v0.2 ne faisait pas.
+
+**CloudFront** doit désactiver le cache sur `/api/*` et ne pas ajouter de tampon. La confirmation
+que la politique de cache retenue ne tamponne pas le flux est une précondition (§16.5).
+
+### 7.3 Plafonds temporels, idle timeout ALB et keep-alive
+
+Trois plafonds bornent un flux conversationnel. Deux sont durs, un est le nôtre.
+
+| Plafond | Valeur | Nature | Qui le fixe |
+|---|---|---|---|
+| Durée totale d'un flux | 15 min | dur, non ajustable | API Gateway `STREAM` |
+| Idle timeout API Gateway (Regional) | 5 min | dur | API Gateway |
+| **Idle timeout ALB** | **240 s** | **configurable — décidé ici** | ce LLD |
+| Intervalle de keep-alive SSE | 15 s | configurable | ce LLD, borné par l'idle timeout ALB |
+
+**Pourquoi 240 s et non le défaut de 60 s ni les 300 s d'API Gateway.** La valeur retenue place
+délibérément l'ALB comme **la contrainte la plus serrée de la chaîne**, strictement sous les
+5 minutes d'API Gateway. Ce choix n'est pas une marge de confort : il détermine **quel composant
+coupe le flux**, et donc ce que l'exploitation observe. Si API Gateway coupait le premier, le
+symptôme serait une déconnexion côté client sans signal côté serveur — le mode de panne le plus
+coûteux à diagnostiquer. En coupant à l'ALB, la rupture apparaît dans les métriques et les logs
+d'accès d'un composant que nous possédons et instrumentons (§14.2). Le défaut de 60 s, lui, serait
+inutilement serré : il ne protège de rien qu'un keep-alive à 15 s ne couvre déjà.
+
+Cette valeur est celle que `V2-LLD-003 §5.2.2` délègue à ce LLD, et elle en préserve la propriété
+structurante : l'idle timeout ALB reste **la contrainte la plus serrée** de la chaîne.
+
+> **Le sens de la dérivation est inversé par rapport à la rédaction initiale de `V2-LLD-003`.**
+> Sa table annonçait un idle timeout ALB « défaut 60 s » qui « dimensionne le keep-alive ».
+> C'est l'inverse qui s'applique : le keep-alive est fixé à 15 s par `V2-ADR-011`, et l'idle timeout
+> en est **dérivé** par l'invariant ci-dessous. `V2-LLD-003 §5.2.2` est aligné en conséquence — sans
+> quoi le corpus porterait deux valeurs et deux causalités contradictoires pour le même paramètre.
+
+**Keep-alive obligatoire.** Un tour agentique appelant un tool lent peut rester silencieux plusieurs
+dizaines de secondes. FastAPI émet un commentaire SSE (`: ping`) toutes les **15 secondes** — sans
+sémantique applicative, ignoré par `EventSource`. Sans lui, un appel de tool de 70 secondes fait
+tomber le flux et le symptôme observé est une déconnexion inexpliquée, jamais un dépassement de
+budget.
+
+**Invariant vérifié, pas seulement documenté :**
+
+```text
+keep_alive_interval × 4  <=  alb_idle_timeout_seconds  <  apigw_idle_timeout (300 s)
+       15 s × 4 = 60 s   <=          240 s              <         300 s        ✓
+```
+
+Le facteur 4 tolère la perte de trois pings consécutifs avant coupure — un flux ne doit pas tomber
+sur un incident réseau transitoire. Cet invariant est contrôlé par `scripts/terraform_plan_guard.py`
+en **règle de borne numérique**, selon le mode de contrôle introduit par `V2-LLD-006 §16.2` (§16.6).
+Une configuration qui le viole est refusée au plan, pas découverte sur un flux coupé en production.
+
+**Réconciliation avec les budgets agent.** `deadlineEpochMs` de `V2-LLD-003 §5.2.2` (nominal 120 s,
+plafond dur 600 s) reste sous les 15 minutes de la chaîne. Un budget supérieur au plafond de la
+chaîne n'est pas un budget : il est tué par l'infrastructure avant d'être atteint, et le symptôme
+est une déconnexion, pas un `BudgetExceededError`. `V2-LLD-003` refuse ce cas au démarrage.
+
+### 7.4 Chemin unique et attachement du WAF
+
+`V2-ADR-016` nomme deux écarts sur cette section : le chemin nominal décrit ici n'énonçait pas que
+les autres sont fermés, et le type d'API retenu n'était pas rapporté à l'attachement du WAF. Les
+deux sont des préconditions **bloquantes** de cet ADR.
+
+**Exigence de chemin unique.** Les contrôles portés par CloudFront — WAF, Shield, en-têtes de
+sécurité — ne valent que si CloudFront est le **seul** chemin d'accès. Un appel direct au point de
+terminaison API Gateway serait un chemin non décrit qui contourne l'intégralité de cette couche, et
+rendrait fausse toute preuve qui exercerait ces contrôles par le chemin nominal.
+
+**Règle retenue.** L'API Gateway n'accepte que le trafic provenant de la distribution CloudFront du
+système. Le mécanisme précis — secret partagé injecté par CloudFront et vérifié par une resource
+policy, ou origine privée — relève de `V2-LLD-005` ; ce LLD porte l'exigence, sa vérifiabilité au
+plan (§16.6, règle 4) et le fait qu'elle s'applique à **un seul** point d'entrée du fait de §7.0.
+
+**Attachement du WAF.** Un web ACL AWS WAF s'associe au **stage d'un REST API** ; il ne s'associe
+pas à un HTTP API. L'unification de §7.0 fait donc du stage REST API un point d'attachement unique,
+en complément de celui de CloudFront. La compatibilité doit être **vérifiée nominativement sur le
+service** avant implémentation, pas supposée (§16.5) : si elle est infirmée, le WAF ne subsiste que
+sur CloudFront et l'exigence de chemin unique cesse d'être souhaitable pour devenir indispensable.
+
+> **Ce que le chemin unique ne fonde plus.** Avant `V2-ADR-020`, l'identité dépendait de cette
+> exigence : des en-têtes de claims ne sont dignes de confiance que si aucun autre émetteur ne peut
+> les produire. Ce n'est plus le cas — une requête forgée atteignant directement l'ALB ne produit
+> aucune identité (§7.1.1). L'exigence reste **nécessaire et bloquante** pour les contrôles portés
+> par CloudFront ; elle n'est simplement plus le fondement de l'isolation.
+
+Le contenu des règles WAF et leur réglage relèvent de `V2-LLD-005` (`V2-ADR-016`).
 
 ---
 
@@ -591,12 +896,63 @@ Ceci est géré par Terraform (`V2-ADR-009`) via mise à jour de la variable `ta
 |---|---|
 | Secrets (variables d'application) | Secrets Manager, chiffré par KMS CMK dédié |
 | Logs CloudWatch (`/ecs/secure-agentcore-v2/*`) | **chiffrés par CMK dédiée** (`kms_key_id` sur le log group) — cohérent avec la politique CMK de `V2-LLD-006` §11 ; les logs applicatifs peuvent contenir des identifiants de session/tenant même redacted |
+| Journal d'audit d'effacement (`/${env}/erasure-audit`) | **même CMK**, politique de clé étendue explicitement à ce groupe (§12.1.1) — exigé par `V2-LLD-006 §8.6` |
 | Trafic réseau interne VPC | HTTPS entre ALB et FastAPI (TLS 1.2 minimum) |
 | Images ECR | scan automatique à chaque push, chiffrement at rest |
 
 Le rôle de tâche (§5.1) doit alors inclure `kms:Decrypt`/`kms:GenerateDataKey` sur la CMK des logs
 en plus de celle des documents ; le rôle d'exécution ECS (`ecs-task-execution-role`) doit pouvoir
 chiffrer via cette CMK pour écrire dans le log group.
+
+#### 12.1.1 Politique de clé du journal d'audit d'effacement
+
+`V2-LLD-006 §8.6` crée un groupe de journaux `/${env}/erasure-audit` chiffré par la CMK des groupes
+de journaux et renvoie ici pour la **politique de clé**. Ce LLD la fixe.
+
+Le point d'attention est le préfixe. La politique de clé de CloudWatch Logs restreint l'usage par
+`kms:EncryptionContext:aws:logs:arn`, et le journal d'effacement **ne vit pas sous `/ecs/`** : une
+condition portant sur `/ecs/secure-agentcore-v2/*` ne le couvre pas. Il doit être listé
+explicitement.
+
+```json
+{
+  "Sid": "AllowCloudWatchLogsEncryption",
+  "Effect": "Allow",
+  "Principal": { "Service": "logs.eu-west-3.amazonaws.com" },
+  "Action": ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*",
+             "kms:GenerateDataKey*", "kms:Describe*"],
+  "Resource": "*",
+  "Condition": {
+    "ArnEquals": {
+      "kms:EncryptionContext:aws:logs:arn": [
+        "arn:aws:logs:eu-west-3:<account>:log-group:/ecs/secure-agentcore-v2/fastapi",
+        "arn:aws:logs:eu-west-3:<account>:log-group:/<env>/erasure-audit"
+      ]
+    }
+  }
+}
+```
+
+**Conséquence d'une omission — elle n'est pas cosmétique.** Sans cette entrée, la création du groupe
+`/${env}/erasure-audit` échoue : CloudWatch Logs ne peut pas chiffrer avec une clé dont la politique
+ne l'y autorise pas pour ce groupe. Or ce journal est la **source autoritative du rejeu des
+effacements** après restauration (`V2-LLD-006 §13.5`), et son absence est exactement la précondition
+**P3** de `V2-LLD-006 §1.3` — celle dont `V2-ADR-015` dit qu'elle **n'admet aucun repli** et qui rend
+toute restauration PITR interdite plutôt que dégradée. Un oubli de politique de clé au niveau
+plateforme a donc une conséquence directe sur un droit des personnes, pas seulement sur
+l'exploitation. C'est la raison pour laquelle cette entrée est nommée ici et vérifiée en preuve
+(§15).
+
+**Suppression de la clé.** La CMK est partagée entre les journaux applicatifs et le journal
+d'effacement. Sa suppression rendrait ce dernier illisible — donc le rejeu impossible, avec le même
+effet que P3 non satisfaite. La clé est provisionnée avec une fenêtre d'attente de suppression au
+maximum autorisé (30 jours) et `enable_key_rotation = true` ; sa destruction relève d'une décision
+explicite, jamais d'un `terraform destroy` d'environnement. `scripts/terraform_plan_guard.py` traite
+la suppression ou la désactivation de cette clé au même titre qu'une destruction de table portant
+des données (§16.6).
+
+**Nom de la variable.** La CMK est exposée par le module plateforme sous le nom
+`logs_kms_key_arn` (§16.4). C'est le nom canonique ; `V2-LLD-006 §8.6` le consomme sous ce nom.
 
 ### 12.2 Isolation réseau
 
@@ -611,6 +967,25 @@ chiffrer via cette CMK pour écrire dans le log group.
 - Aucun role avec permissions `iam:*`, `ec2:*` ou `sts:AssumeRole` arbitraire
 - Les ARN des ressources sont explicites — pas de `Resource: "*"` sauf pour les APIs de logging/tracing qui l'exigent (CloudWatch Logs, X-Ray)
 - Les tables DynamoDB et buckets S3 sont nommés explicitement dans les policies
+
+### 12.4 Valeurs jamais journalisées
+
+`V2-ADR-020` fait entrer le token dans un périmètre où il n'était pas — le segment passerelle →
+FastAPI (§7.1.2). Ce qui était implicite devient donc une règle nommée.
+
+| Valeur | Portée de l'interdiction | Fondement |
+|---|---|---|
+| En-tête `Authorization` et le JWT qu'il porte | **toutes** les couches : journaux d'accès ALB, journaux d'exécution API Gateway, journaux applicatifs FastAPI, traces ADOT | `V2-ADR-020`, `V2-ADR-008` |
+| `sub` Cognito brut | idem — haché avant tout usage, y compris en journal | `V2-ADR-006` |
+| Clés privées, secrets Secrets Manager | idem | `V2-ADR-008` |
+
+L'interdiction couvre explicitement les **journaux d'erreur et les traces d'exception**, où l'objet
+requête est fréquemment sérialisé en entier : c'est le lieu habituel de la fuite, et le seul endroit
+où une règle formulée uniquement pour le « chemin nominal » ne s'applique pas. La preuve associée
+(§15) échantillonne les journaux d'erreur, pas seulement les journaux nominaux.
+
+Le journal d'exécution d'API Gateway est configuré **sans** journalisation du contenu des requêtes
+(`dataTraceEnabled = false`), qui capturerait les en-têtes.
 
 ---
 
@@ -661,7 +1036,17 @@ Voir LLD-007 pour le détail de l'instrumentation OTel et les SLO.
 | ECS Fargate — service `ingestion` | ~0 USD (V2 : non provisionné) | V3 : scale à 0 au repos |
 | Bedrock Knowledge Bases (ingestion + `Retrieve`) | à la consommation | **coût RAG V2**, détaillé en `V2-LLD-002` §15.3 |
 | ECR stockage | ~1 USD | ~10 GB images |
-| **Total minimum (`enable_ecs_platform = true`)** | **~137 USD/mois** | hors trafic et hors coûts KB |
+| API Gateway REST API | à la requête, ~3,50 USD/million | surcoût vs HTTP API (~1,00 USD/million) — voir note |
+| **Total minimum (`enable_ecs_platform = true`)** | **~137 USD/mois** | hors trafic, hors coûts KB et hors requêtes API |
+
+> **Surcoût du type REST API (§7.0).** L'unification sur REST API coûte ~2,50 USD par million de
+> requêtes de plus qu'HTTP API. À un volume `test` de l'ordre de quelques dizaines de milliers
+> d'appels par mois, le différentiel se chiffre en **centimes** et reste sous le seuil de
+> significativité du total ci-dessus. Il est accepté comme prix d'un mécanisme de propagation des
+> claims unique (§7.1) plutôt que de deux. Ce raisonnement est **à revalider avant production** :
+> à volume élevé, le différentiel redevient une décision, et le point de bascule est le moment où
+> le coût des requêtes dépasse celui de maintenir deux chemins de confiance — un arbitrage à porter
+> en `V2-LLD-007` avec les volumes réels.
 
 > Le coût du RAG en V2 (KB + S3 Vectors + embeddings) est porté par `V2-LLD-002` §15.3, pas par la
 > plateforme : la V2 ne provisionne pas de service ECS `ingestion`. L'endpoint interface SQS
@@ -684,6 +1069,23 @@ indépendamment du trafic, portant le plancher mensuel à ~210 USD pour un profi
 | Health check `/health` retourne 200 | curl depuis l'ALB | HTTP 200, latence < 100 ms |
 | Rollback par révision de task definition antérieure | déploiement d'une mauvaise image → circuit breaker → rollback automatique | service revient à la version précédente en < 5 min |
 | Aucune identité brute (JWT, sub) dans les logs | grep sur logs CloudWatch post-requête | 0 occurrence de token JWT ou de sub Cognito en clair |
+| **Le flux SSE est réellement progressif** (§7.2) | `curl -N` sur la route conversationnelle, horodatage de réception de chaque événement | premier `delta` reçu **avant** la fin de la génération ; écart > 1 s entre le premier et le dernier événement — un bloc unique en fin de flux est un **échec**, pas une latence |
+| Le mode effectif est déclaré au client | lecture du premier événement `meta` | `streaming` présent et conforme au transport réellement servi |
+| Keep-alive émis pendant un silence applicatif (§7.3) | flux avec tool lent simulé (> 90 s de silence) | `: ping` observés à ~15 s d'intervalle ; **flux non rompu** |
+| L'idle timeout ALB est bien la contrainte la plus serrée | flux sans keep-alive (keep-alive désactivé), mesure du délai de rupture | rupture à ~240 s, **journalisée côté ALB** — pas une déconnexion silencieuse côté client |
+| **Aucun en-tête de claims forgé n'a d'effet** (§7.1.3) | requête portant `X-Amzn-Oidc-Data`, `X-Claims-Sub` et `X-Claims-Tenant` forgés, avec un token valide d'un autre tenant | identité résolue = celle du **token vérifié** ; démontré par l'**absence de toute lecture d'en-tête d'identité** dans le chemin de résolution (revue de code + instrumentation), pas par un filtre qui les écarterait |
+| **FastAPI valide réellement le token** (§7.1.3) | token de signature valide mais `aud` incorrect, puis `iss` incorrect, puis expiré — **authorizer de la passerelle désactivé** en environnement de test | les trois refusés par FastAPI. Sans le volet « authorizer désactivé », la preuve n'établit pas que FastAPI valide, seulement que la passerelle valide |
+| **L'ancrage ne dépend pas du chemin unique** (§7.1.1, §7.4) | requête forgée injectée **directement sur l'ALB interne**, hors du chemin API Gateway | aucune identité produite, requête refusée — l'échec du chemin unique reste un problème de disponibilité, pas une usurpation |
+| Le contrat d'identité est invariant au type d'API (§7.0) | même requête sur une route servie par HTTP API et sur une route servie par REST API | comportement de résolution d'identité identique, mesuré des deux côtés |
+| Le JWKS indisponible **au-delà** de la borne de tolérance refuse (§7.1.4) | JWKS rendu injoignable, horloge avancée au-delà de `jwks_stale_tolerance_seconds` | refus, alerté comme **incident de sécurité**, en série de métrique distincte du refus de quota (`V2-ADR-016`) et du refus d'autorisation |
+| Le JWKS indisponible **en deçà** de la borne ne refuse pas (§7.1.4) | JWKS rendu injoignable, dans la fenêtre de tolérance | aucun refus, le cache restant sert les vérifications — ce second volet démontre que la borne est **effective et non décorative** |
+| Un `kid` inconnu ne déclenche qu'une actualisation (§7.1.4) | rafale de tokens portant des `kid` forgés distincts | au plus une requête JWKS par `jwks_refresh_min_interval_seconds` — pas de boucle d'amplification |
+| `Authorization` n'apparaît dans aucun journal (§7.1.2) | grep sur les journaux de **toutes** les couches, échantillon **incluant les journaux d'erreur** | 0 occurrence — les journaux d'erreur sont le lieu habituel de la fuite |
+| Le token s'arrête à FastAPI (§7.1.2, `V2-ADR-006`) | inspection des en-têtes reçus côté Runtime sur une requête authentifiée normale | ni `Authorization` ni équivalent ; seule la `trustedIdentity` produite par FastAPI |
+| Le WAF est effectivement attaché au type d'API retenu (§7.4) | inspection de l'association web ACL ↔ stage REST API | association présente — si impossible, précondition §16.5 infirmée et chemin unique devenu indispensable |
+| API Gateway n'est pas joignable hors CloudFront (§7.4) | appel direct au point de terminaison d'exécution de l'API | refusé — un point joignable directement rend le WAF consultatif |
+| La CMK autorise le chiffrement de `/${env}/erasure-audit` (§12.1.1) | `terraform apply` du groupe de journaux, puis `PutLogEvents` de test | groupe créé et événement écrit — un échec ici vaut **P3 non satisfaite** (`V2-LLD-006 §1.3`), donc restauration interdite |
+| La politique de clé ne couvre pas par simple préfixe | inspection de la condition `kms:EncryptionContext:aws:logs:arn` | l'ARN `/<env>/erasure-audit` figure **explicitement**, pas via un motif `/ecs/*` |
 
 ---
 
@@ -768,8 +1170,26 @@ variable "availability_zones"       { type = list(string); default = ["eu-west-3
 variable "nat_gateway_count"        { type = number; default = 1 }
 variable "fastapi_image_tag"        { type = string }
 variable "fastapi_task_definition_revision" { type = number; default = null }
-variable "logs_kms_key_arn"         { type = string }  # CMK des log groups (§12.1)
+variable "logs_kms_key_arn"         { type = string }  # CMK des log groups (§12.1, §12.1.1)
+variable "alb_idle_timeout_seconds" { type = number; default = 240 }  # §7.3 — < idle API GW (300 s)
+variable "sse_keepalive_seconds"    { type = number; default = 15 }   # §7.3 — × 4 <= idle ALB
+variable "apigw_response_transfer_mode" { type = string; default = "STREAM" }  # §7.0 (V2-ADR-011)
+variable "cognito_issuer"           { type = string }  # §7.1.3 — comparé à iss, jamais déduit
+variable "cognito_app_client_id"    { type = string }  # §7.1.3 — comparé à aud, jamais déduit
+variable "jwks_cache_ttl_seconds"        { type = number; default = 3600 }   # §7.1.4
+variable "jwks_stale_tolerance_seconds"  { type = number; default = 21600 }  # §7.1.4 — heures, jamais jours
+variable "jwks_refresh_min_interval_seconds" { type = number; default = 60 } # §7.1.4 — anti-amplification
 ```
+
+`cognito_issuer` et `cognito_app_client_id` sont des **paramètres**, pas des valeurs dérivées à
+l'exécution du token reçu : c'est ce qui distingue « `iss` et `aud` contrôlés » de « `iss` et `aud`
+présents » (§7.1.3). Les trois paramètres JWKS sont consommés par le service FastAPI en variables
+d'environnement — ils ne sont jamais laissés aux défauts de la bibliothèque de validation.
+
+`alb_idle_timeout_seconds` et `sse_keepalive_seconds` sont liés par l'invariant de §7.3 : ils ne
+sont pas réglables indépendamment. `sse_keepalive_seconds` est également consommé par le service
+FastAPI (variable d'environnement) — une seule source de vérité, pas une constante dupliquée dans le
+code.
 
 Le flag `enable_ingestion_service` conditionne la création du service ECS `ingestion`, son rôle IAM,
 son `sg-ingestion`, son autoscaling SQS et l'endpoint interface SQS (tous §4.2/§5.2/§6.3/§9.2). Il
@@ -780,7 +1200,9 @@ titre que DynamoDB et S3 (conséquence listée dans `V2-ADR-007`).
 
 ### 16.5 Préconditions de vérification avant implémentation
 
-Deux points doivent être vérifiés **avant** de provisionner la plateforme, et tracés comme preuves :
+Les points suivants doivent être vérifiés **avant** de provisionner la plateforme, et tracés comme
+preuves. Chacun énonce le repli qui s'applique tant que sa preuve n'est pas produite — aucune
+précondition ne rouvre une décision, toutes conditionnent une mise en service.
 
 1. **Disponibilité KB + S3 Vectors en `eu-west-3`** (`V2-ADR-019`) : condition d'activation de tout
    le phasage RAG V2. Si non confirmée, l'ingestion V2 bascule sur le pipeline applicatif
@@ -789,3 +1211,65 @@ Deux points doivent être vérifiés **avant** de provisionner la plateforme, et
 2. **Endpoint PrivateLink AgentCore Runtime** (§2.3, §6.2) : si disponible, ajouter l'endpoint et
    supprimer la règle egress `0.0.0.0/0` ; sinon, activer les contrôles compensatoires (VPC Flow
    Logs + alerte) et acter formellement le risque résiduel `test`.
+3. **`responseTransferMode = STREAM` disponible sur API Gateway REST en `eu-west-3`**
+   (`V2-ADR-011`, §7.0) : condition du streaming progressif. **Repli :** le flux reste servi, mais
+   en mode `emulated` déclaré au client dans l'événement `meta` (§7.2) — jamais en silence. Le mode
+   `emulated` est alors le mode nominal *de fait*, ce qui doit être acté et non subi.
+4. **VPC Link V2 vers ALB disponible en `eu-west-3`** (`V2-ADR-011`, §7) : condition du chemin sans
+   saut intermédiaire. **Repli :** VPC Link V1, qui exige un **NLB devant l'ALB** — un composant
+   supplémentaire, un saut réseau de plus et un coût que ni `V2-ADR-007` ni les estimations de §14.4
+   n'ont provisionnés. Ce repli n'est pas neutre : il modifie la topologie de §7 et le total de
+   §14.4, et doit donc être décidé, pas constaté à l'implémentation.
+5. **CloudFront ne tamponne pas le flux avec la politique de cache retenue** (§7.2) : à vérifier par
+   mesure, pas par lecture de configuration — un tampon en amont produit exactement le symptôme que
+   la v0.2 n'avait pas su voir (flux correct en apparence, bloc unique à l'arrivée). La preuve
+   « flux réellement progressif » de §15 est la vérification de bout en bout de ce point.
+6. **Confirmation nominative des plafonds temporels de §7.3** (15 min, 5 min d'idle API Gateway)
+   contre la documentation en vigueur au moment de l'implémentation. Ces valeurs bornent
+   `deadlineEpochMs` de `V2-LLD-003 §5.2.2` : une révision à la baisse se propage directement aux
+   budgets agent.
+7. **Transmission de `Authorization` par API Gateway REST** (`V2-ADR-020`, §7.1.2) : vérifier
+   **nominativement** que la passerelle relaie l'en-tête à l'intégration VPC Link **sans le
+   consommer**. **Repli :** basculer la route conversationnelle sur HTTP API — le contrat d'identité
+   étant invariant au type d'API (§7.1.1), cette bascule ne modifie aucune décision de sécurité et
+   `V2-ADR-011` l'autorise. Elle coûte la redéclaration de la route et un second point
+   d'attachement WAF (§7.4). **Aucun retour à un mapping d'en-têtes de claims n'est acceptable comme
+   alternative** — c'est l'option A rejetée par `V2-ADR-020`.
+8. **Attachement du WAF au type d'API retenu** (`V2-ADR-016`, §7.4) — **bloquante**. Vérifier sur le
+   service que le web ACL s'associe bien au stage du REST API. **Repli :** si l'association est
+   impossible, le WAF ne subsiste que sur CloudFront et la précondition 9 cesse d'être souhaitable
+   pour devenir indispensable ; le risque résiduel est acté explicitement, pas constaté.
+9. **Mécanisme de chemin unique CloudFront → API Gateway** (`V2-ADR-016`, §7.4) — **bloquante**.
+   Existence et vérifiabilité **au plan Terraform** d'un mécanisme rendant CloudFront le seul chemin
+   joignable (§16.6, règle 4). Sans lui, tous les contrôles portés par CloudFront sont contournables
+   et les preuves qui les exercent par le chemin nominal ne démontrent rien. Le mécanisme précis
+   relève de `V2-LLD-005`. **Ce point ne conditionne plus l'identité** (§7.1.1) : son échec est un
+   problème de disponibilité, pas une usurpation.
+10. **Coût de la validation JWKS mesuré** (`V2-ADR-020`, §7.1.4) : latence de la vérification de
+    signature sur clés en cache, mesurée **sur les routes documentaires** — c'est là qu'elle est
+    proportionnellement la plus visible, la route conversationnelle l'amortissant sur une invocation
+    de plusieurs minutes. Non bloquante ; elle informe le dimensionnement de §3.
+
+### 16.6 Règles de garde `terraform_plan_guard.py`
+
+Ce LLD ajoute cinq règles au garde de plan existant. Trois sont **booléennes** (mode historique) ;
+deux sont des **règles de borne numérique**, selon le mode de contrôle introduit par
+`V2-LLD-006 §16.2`.
+
+| # | Règle | Mode | Motif |
+|---|---|---|---|
+| 1 | `enable_ingestion_service` n'est jamais `true` dans un environnement V2 | booléen | `V2-ADR-019` — le pipeline applicatif est V3 (§16.4) |
+| 2 | La CMK des groupes de journaux n'est ni supprimée ni désactivée par le plan | booléen | §12.1.1 — sa perte rend le journal d'effacement illisible, donc le rejeu impossible (effet P3) |
+| 3 | `sse_keepalive_seconds × 4 <= alb_idle_timeout_seconds < 300` | **borne numérique** | §7.3 — un keep-alive trop espacé fait tomber le flux ; un idle ALB ≥ 300 s déplace la coupure sur API Gateway, hors de notre observabilité |
+| 4 | Le mécanisme de chemin unique CloudFront → API Gateway est présent dans le plan | booléen | §7.4 — `V2-ADR-016` précondition bloquante : un point de terminaison joignable directement rend le WAF consultatif |
+| 5 | `jwks_stale_tolerance_seconds <= 86400` | **borne numérique** | §7.1.4 — `V2-ADR-020` borne la tolérance « en heures, non en jours » ; au-delà, un JWKS durablement injoignable ferait accepter des tokens sur des clés non révocables |
+
+Les règles 3 et 5 sont vérifiées **sur le plan**, donc sur les valeurs réellement appliquées — pas
+sur les valeurs par défaut des variables. C'est ce qui les distingue d'une simple `validation` de
+variable Terraform : un `terraform.tfvars` d'environnement qui surcharge l'une des deux valeurs de
+la règle 3 sans l'autre est précisément le cas qu'elle attrape.
+
+La règle 4 ne vérifie que la **présence** du mécanisme, pas sa correction : le plan Terraform peut
+établir qu'une resource policy ou une origine privée existe, il ne peut pas établir qu'elle est
+efficace. Sa correction est démontrée par la preuve d'appel direct de §15, et son contenu relève de
+`V2-LLD-005`.
