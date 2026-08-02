@@ -1,6 +1,6 @@
 # V2-LLD-004 — AgentCore Gateway MCP et tools
 
-- **Version :** 0.1
+- **Version :** 0.1.1
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G2
@@ -138,6 +138,16 @@ Lorsqu'une valeur apparaît dans ce document, c'est qu'elle n'existe nulle part 
 
 Quatre écarts sont apparus à la rédaction. Aucun n'est corrigé par ce document : les corrections sont
 nommées ici et portées par des commits distincts du même lot.
+
+> **État — les quatre sont traités.** L'analyse ci-dessous est conservée : elle porte la
+> justification des corrections, que les documents corrigés ne répètent pas intégralement.
+>
+> | Écart | Corrigé dans |
+> |---|---|
+> | 1 — magasin de commandes sans propriétaire | `V2-LLD-006` v0.5 §1.2 et §5.3 (table, clés, GSI `by-operation`, trois durées, colocalisation transactionnelle) |
+> | 2 — portée du ledger d'idempotence | `V2-LLD-006` v0.5 §5.1 et §5.2 (mutations `Trips` retirées, scope `trip-mutation` supprimé) |
+> | 3 — route de confirmation non nommée | `V2-LLD-001` v0.4 §7.0 (confirmation et annulation nommées, `BUFFERED`) |
+> | 4 — corrections `V2-ADR-014` non appliquées | `V2-ADR-006` §Modèle d'autorisation (septième intrant) ; `V2-ADR-011` §Décision — annulation (fenêtre réduite à la transaction) |
 
 #### Écart 1 — le magasin de commandes n'a pas de propriétaire (bloquant)
 
