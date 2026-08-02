@@ -133,7 +133,7 @@ un flux unidirectionnel serveur → client.
 Retenir **l'option C**.
 
 ```text
-Browser (EventSource)
+Browser (client SSE — l'API navigateur retenue relève de `V2-LLD-010`)
   -> CloudFront (cache désactivé sur /api/*)
   -> API Gateway REST API, endpoint Regional, responseTransferMode = STREAM
   -> VPC Link V2
@@ -183,12 +183,12 @@ rejetée au démarrage, pas découverte en production.
 
 ## Choix du mécanisme d'annulation
 
-SSE est unidirectionnel : `EventSource` ne peut rien envoyer au serveur. L'annulation exige donc un
-mécanisme hors du flux.
+SSE est unidirectionnel : le flux ne porte aucun canal client → serveur, quelle que soit l'API
+navigateur qui le consomme. L'annulation exige donc un mécanisme hors du flux.
 
 ### Option A — Détection de déconnexion seule
 
-Le client ferme `EventSource` ; FastAPI détecte via `request.is_disconnected()`.
+Le client ferme le flux ; FastAPI détecte via `request.is_disconnected()`.
 
 **Avantages :** aucune route supplémentaire ; aucun état partagé.
 
@@ -279,9 +279,16 @@ jeu d'événements minimal, pour que les deux LLD ne divergent pas :
 | `error` | `AgentErrorCode` de `V2-LLD-003 §3.2` | fin en erreur |
 | `: ping` | commentaire SSE | keep-alive, sans sémantique applicative |
 
-**Reprise après déconnexion.** SSE reconnecte automatiquement. En V2, une reconnexion **ne rejoue
-pas** les fragments déjà émis : elle se rattache à l'opération par `operationId` et reçoit l'état
-courant ou le résultat final persisté. Le rejeu token par token est hors périmètre V2.
+**Reprise après déconnexion.** En V2, une reconnexion **ne rejoue pas** les fragments déjà émis :
+elle se rattache à l'opération par `operationId` et reçoit l'état courant ou le résultat final
+persisté. Le rejeu token par token est hors périmètre V2.
+
+*La stratégie de reconnexion elle-même — détection de la coupure, nombre de tentatives, délai —
+relève de `V2-LLD-010`.* Une rédaction antérieure de ce paragraphe affirmait que « SSE reconnecte
+automatiquement » : c'est une propriété de l'API navigateur `EventSource`, non du protocole SSE, et
+elle ne vaut donc que si cette API est retenue. `V2-LLD-010 §5.2` ne la retient pas — `EventSource`
+n'accepte aucun en-tête personnalisé et ne peut donc pas porter l'`Authorization` qu'exige
+`V2-ADR-020`. La reconnexion est réimplémentée côté client, et cet ADR n'en préjuge plus.
 
 ## Écarts à corriger dans le corpus
 

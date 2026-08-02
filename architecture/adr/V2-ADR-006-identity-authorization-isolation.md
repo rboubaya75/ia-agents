@@ -128,6 +128,8 @@ Une suppression utilisateur ou tenant coordonne :
 - Tenant A ne récupère aucun vecteur de Tenant B ;
 - URL présignée inutilisable hors ressource et durée autorisées ;
 - Runtime et tools refusent toute identité non injectée ;
+- une action mutante sans commande confirmée valide est refusée, **y compris pour un acteur autorisé
+  à cette action** — le septième intrant n'est pas couvert par les six autres ;
 - suppression coordonnée source, métadonnées, vecteurs et Memory ;
 - logs et traces sans identifiants bruts.
 
