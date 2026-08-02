@@ -1,6 +1,6 @@
 # V2-LLD-001 — Plateforme AWS, réseau, ECS et FastAPI
 
-- **Version :** 0.3
+- **Version :** 0.4
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Gate :** V2-G2
@@ -36,6 +36,12 @@
 >   l'identité invariante au type d'API et annule ce motif.
 > - **Journal d'effacement (`V2-LLD-006 §8.6`).** Ajout de la politique de clé CMK du groupe de
 >   journaux `/${env}/erasure-audit` (§12.1.1).
+
+> **Révision v0.4 (écart 3 relevé par `V2-LLD-004 §1.7`) :** la route de confirmation de commande
+> (`V2-ADR-014`) et la route d'annulation (`V2-ADR-011`) sont **nommées au tableau des routes**
+> de §7.0, en mode `BUFFERED`. `responseTransferMode` étant un réglage par méthode, une route
+> couverte par la seule ligne générique « routes documentaires et d'administration » n'avait pas de
+> réglage vérifiable au plan — or aucune des deux n'est documentaire.
 
 ## 1. Métadonnées
 
@@ -522,10 +528,23 @@ mois. Ce différentiel est accepté comme prix d'un point d'attachement WAF uniq
 |---|---|---|
 | `POST /api/v1/conversations/{id}/messages` | REST API Regional | `STREAM` |
 | `GET /api/v1/operations/{operationId}/stream` | REST API Regional | `STREAM` |
+| `POST /api/v1/commands/{commandId}/confirm` | REST API Regional | `BUFFERED` |
+| `POST /api/v1/operations/{operationId}/cancel` | REST API Regional | `BUFFERED` |
 | Routes documentaires et d'administration | REST API Regional | `BUFFERED` (défaut) |
 
 `responseTransferMode` est un réglage **par méthode**, pas par API : les routes non diffusantes
 restent en `BUFFERED` sur le même API. L'unification porte sur le type d'API, pas sur le mode.
+
+**Pourquoi ces deux routes courtes sont nommées plutôt que laissées à la ligne générique.** Le mode
+étant réglé par méthode, une route couverte par « routes documentaires et d'administration » n'a pas
+de réglage vérifiable au plan Terraform. Or ces deux-là ne sont pas documentaires : la confirmation
+(`V2-ADR-014`, `V2-LLD-005 §4.6`) est le point d'autorisation de toute action mutante, et
+l'annulation (`V2-ADR-011`) doit rester servie même lorsque la route conversationnelle diffuse. Ce
+sont des appels courts sans diffusion — `BUFFERED` est correct, et l'écrire le rend opposable.
+
+La confirmation ne transporte que le `commandId` en chemin ; le résumé présenté à l'utilisateur est
+rendu par le serveur à partir de la commande stockée, jamais reconstruit depuis la requête
+(`V2-LLD-004 §5.5`).
 
 > **Endpoint Regional, jamais edge-optimized.** L'idle timeout d'un endpoint edge-optimized est de
 > 30 secondes, ce qui annule l'intérêt du mode `STREAM` (`V2-ADR-011`). La distribution CloudFront
