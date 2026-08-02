@@ -59,7 +59,7 @@ des questions de conception ouvertes : ce sont des vérifications sur le service
 | # | Précondition | Origine | Conséquence si non satisfaite |
 |---|---|---|---|
 | P1 | AgentCore Gateway MCP peut exposer **deux tools distincts** — matérialisation et exécution — avec des **politiques d'autorisation distinctes** | `V2-ADR-014` précondition 1 | **Non bloquante pour la séparation.** §9.2 retient deux cibles à rôles IAM distincts comme mécanisme principal, quelle que soit l'issue de P1 ; les politiques Gateway s'y ajoutent en défense supplémentaire si P1 est satisfaite |
-| P2 | Le magasin de commandes porte la **transition conditionnelle et l'effet de bord dans une transaction unique** — région commune et limite d'items compatible | `V2-ADR-014` précondition 2 | **Aucun repli acceptable.** Sans atomicité, deux exécutions concurrentes du même `commandId` passent toutes deux le contrôle (§6.3). Le mécanisme n'est pas activable et `confirmationVerified` reste en vigueur (§1.8) |
+| P2 | Le magasin de commandes porte la **transition conditionnelle et l'effet de bord dans une transaction unique** — région commune et limite d'items compatible | `V2-ADR-014` précondition 2 | **Levée par décision de conception** (`V2-LLD-006 §5.3.3`) : `${env}-commands` est colocalisée avec la cible métier en `eu-west-3`, et une commande porte une mutation — les deux conditions de `TransactWriteItems` sont donc satisfaites par construction, et une règle de garde bloque tout plan qui les romprait. Il n'y avait aucun repli acceptable : sans atomicité, deux exécutions concurrentes du même `commandId` passeraient toutes deux le contrôle (§6.3) |
 | P3 | La rétention d'une commande `executed` peut couvrir la **fenêtre d'idempotence** de la mutation qu'elle porte | `V2-ADR-014` précondition 3 | Repli nommé par l'ADR : conserver au-delà une **entrée réduite valant enregistrement de non-rejeu**. Jamais laisser la commande disparaître en silence (§7.4) |
 | P4 | La latence cumulée de la transaction d'exécution tient dans la **deadline propagée** par `operationContext` | `V2-ADR-014` précondition 4 | Le tour expire pendant une transaction indissociable. Traitement en §8.4 : l'expiration ne produit pas de retry mais une résolution par lecture d'état |
 
@@ -69,7 +69,14 @@ Une cinquième précondition est propre à ce LLD et n'est pas héritée :
 |---|---|---|---|
 | P5 | Le catalogue de la Gateway peut porter un **attribut de classe** par tool, lisible à l'invocation sans être un paramètre d'appel | ce LLD §3.3 | La classe est portée par le **manifeste de catalogue** versionné (§3.1), dont le service dérive sa configuration. La garantie devient une conformité vérifiée en CI plutôt qu'une propriété du service (§3.3) |
 
-**Aucune de ces préconditions n'est levée à ce stade.**
+**État des préconditions.** P2 est **levée** par la décision de colocalisation de
+`V2-LLD-006 §5.3.3`, prise après la rédaction initiale de ce tableau. P1, P3, P4 et P5 restent à
+établir.
+
+La distinction importe pour §1.8 : P2 était la seule sans repli, et sa levée retire l'obstacle
+structurel au mécanisme. Les quatre autres ont chacune un repli nommé dans la colonne ci-dessus — le
+mécanisme est donc **activable**, et ce qui reste conditionné est la qualité de la défense en
+profondeur, non son existence.
 
 ### 1.4 ADR non applicables
 
@@ -210,14 +217,15 @@ diffusion — `BUFFERED` est correct, encore faut-il que ce soit écrit.
 **Correction attendue dans `V2-LLD-001` :** nommer la route de confirmation au tableau des routes,
 en mode `BUFFERED`.
 
-#### Écart 4 — deux corrections demandées par `V2-ADR-014` restent non appliquées dans les ADR
+#### Écart 4 — deux corrections demandées par `V2-ADR-014` non appliquées dans les ADR
 
-`V2-ADR-014` §Écarts à corriger dans le corpus demande deux modifications qui n'ont pas été faites :
+`V2-ADR-014` §Écarts à corriger dans le corpus demande deux modifications qui n'avaient pas été
+faites à la rédaction de ce LLD :
 
 | Document | Passage | Correction demandée par `V2-ADR-014` | État |
 |---|---|---|---|
-| `V2-ADR-006` | « Modèle d'autorisation », points 1 à 6 | ajouter la commande confirmée comme fondement d'autorisation des actions mutantes | **non appliquée** — six intrants, aucun ne mentionne la commande |
-| `V2-ADR-011` | renvoi « la garantie d'idempotence des tools relève de `V2-ADR-014` » | préciser que la fenêtre non annulable est l'**exécution**, et non l'appel de tool entier | **non appliquée** — le texte dit encore « pendant l'exécution d'un tool porteur d'effet de bord » |
+| `V2-ADR-006` | « Modèle d'autorisation », points 1 à 6 | ajouter la commande confirmée comme fondement d'autorisation des actions mutantes | **appliquée** — septième intrant ajouté ; à la rédaction, l'ADR n'en portait que six, dont aucun ne mentionnait la commande |
+| `V2-ADR-011` | renvoi « la garantie d'idempotence des tools relève de `V2-ADR-014` » | préciser que la fenêtre non annulable est l'**exécution**, et non l'appel de tool entier | **appliquée** — fenêtre réduite à la transaction ; à la rédaction, le texte disait encore « pendant l'exécution d'un tool porteur d'effet de bord » |
 
 Le second écart demande une lecture attentive, parce que l'énoncé de `V2-ADR-011` n'est pas faux —
 il est plus large que nécessaire. L'ADR écrit : « jamais **pendant** l'exécution d'un tool porteur
@@ -237,7 +245,7 @@ seule l'exécution est atomique et non interruptible » — et que sa demande de
 **Corrections attendues :** `V2-ADR-006` §Modèle d'autorisation, ajout d'un septième intrant ;
 `V2-ADR-011` §Sémantique d'annulation coopérative, restriction de la fenêtre à l'exécution.
 
-### 1.8 Ce qui reste en vigueur tant que les préconditions ne sont pas levées
+### 1.8 Ce qui reste en vigueur pendant la bascule
 
 `V2-ADR-014` est explicite sur ce point et ce LLD ne l'assouplit pas :
 
@@ -247,6 +255,14 @@ seule l'exécution est atomique et non interruptible » — et que sa demande de
 Le retrait de `confirmationVerified` (`deploy-agentcore/lambda_function_hardened.py`) n'est donc
 **pas** un préalable à la réalisation de ce LLD : c'est sa conclusion. Les deux mécanismes coexistent
 pendant la bascule, et le retrait du premier est conditionné par la preuve M1 (§15).
+
+**Ce que la levée de P2 change, et ce qu'elle ne change pas.** P2 était la seule précondition sans
+repli : tant qu'elle tenait, le mécanisme n'était pas activable et `confirmationVerified` restait le
+seul contrôle. Elle est levée (§1.3), donc le mécanisme est réalisable. Cela **n'avance pas** pour
+autant le retrait du contrôle V1, qui reste conditionné par une preuve — M1, exercée sur le
+mécanisme déployé — et non par l'état des préconditions. Une précondition dit qu'un mécanisme *peut*
+être construit ; une preuve dit qu'il *fonctionne*. Les confondre retirerait le filet avant d'avoir
+vérifié ce qui le remplace.
 
 ---
 
@@ -882,7 +898,8 @@ annule l'effet de bord.
 
 Le pattern candidat est `TransactWriteItems` avec `ConditionExpression`, déjà employé en V1
 (`lambda_function_hardened.py`, `update_trip`). Sa disponibilité pour cette combinaison de tables est
-la précondition P2 — la seule sans repli acceptable.
+la précondition P2 — la seule sans repli acceptable, levée depuis par la colocalisation décidée en
+`V2-LLD-006 §5.3.3` (§1.3).
 
 **Ce que l'échec de condition doit distinguer.** Un refus transactionnel ne dit pas *pourquoi* il a
 échoué. Le tool relit donc l'état après échec, en lecture fortement cohérente, pour produire un code
@@ -1428,9 +1445,9 @@ Aucune de ces valeurs n'est une constante du code — reprise de l'exigence de `
 | `circuit_breaker_failure_threshold` | N échecs consécutifs (§8.3) | ce LLD, §16.1 |
 | `circuit_breaker_probe_delay_ms` | délai avant sonde demi-ouverte | ce LLD, §16.1 |
 | `mcp_protocol_version` | version de protocole acceptée, sans repli silencieux (§3.4) | ce LLD, §16.1 |
-| `command_pending_ttl_seconds` | fenêtre `pending` (I4) | **`V2-LLD-006`** |
-| `command_confirmed_ttl_seconds` | fenêtre `confirmed` (I4) | **`V2-LLD-006`** |
-| `command_executed_retention_seconds` | rétention de non-rejeu (I7) | **`V2-LLD-006`** |
+| `command_pending_window_minutes` | fenêtre `pending` (I4) | **`V2-LLD-006 §5.3.2`** |
+| `command_confirmed_window_seconds` | fenêtre `confirmed` (I4) | **`V2-LLD-006 §5.3.2`** |
+| `command_executed_retention_days` | rétention de non-rejeu (I7) | **`V2-LLD-006 §5.3.2`** |
 | `max_pending_commands_per_actor` | quota (T9) | **`V2-LLD-005 §7.2`** |
 | `maxToolCalls` | budget d'invocation | **`V2-LLD-003 §5`** |
 
@@ -1438,10 +1455,17 @@ Les quatre premières lignes sont les seules valeurs que ce LLD possède. Les ci
 listées pour rendre le contrat lisible d'un seul endroit, et **leur valeur n'est pas reproduite ici**
 (§1.6).
 
-**Invariant inter-paramètres.** `command_confirmed_ttl_seconds` doit être strictement inférieur à
-`command_pending_ttl_seconds` (I4). La vérification appartient à la règle de garde de `V2-LLD-006` ;
+**Invariant inter-paramètres.** La fenêtre `confirmed` doit être strictement inférieure à la fenêtre
+`pending` (I4). Les deux paramètres ne portant pas la même unité — `command_confirmed_window_seconds`
+et `command_pending_window_minutes` — la comparaison se fait après conversion dans une unité commune,
+et non entre les valeurs brutes. La vérification appartient à la règle de garde de `V2-LLD-006` ;
 elle est énoncée ici parce que c'est ce LLD qui en porte le motif — une autorisation ancienne
 n'autorise plus rien.
+
+Les noms ci-dessus sont ceux que `V2-LLD-006 §5.3.2` déclare. Une rédaction antérieure de ce tableau
+en portait d'autres (`command_pending_ttl_seconds`, `command_confirmed_ttl_seconds`,
+`command_executed_retention_seconds`), avec des unités différentes de celles du propriétaire : deux
+jeux de noms pour trois paramètres uniques, dont un seul existe au plan.
 
 ---
 
@@ -1531,8 +1555,9 @@ N2 évite une configuration où le disjoncteur s'ouvre avant que les retries d'u
 
 ## 17. Critères de sortie
 
-- [ ] Préconditions P2 à P5 (§1.3) **vérifiées sur le service** — P2 sans repli reste bloquante ; P1
-      ne conditionne plus que la défense supplémentaire (§9.2) ;
+- [ ] Préconditions P1, P3, P4 et P5 (§1.3) **vérifiées sur le service** — P1 ne conditionne plus que
+      la défense supplémentaire (§9.2) ; P2 est levée par conception (`V2-LLD-006 §5.3.3`) et sa tenue
+      relève de la règle de garde du plan, non d'une vérification sur le service ;
 - [ ] écarts de corpus 1 à 4 (§1.7) corrigés dans `V2-LLD-006`, `V2-LLD-001`, `V2-ADR-006` et
       `V2-ADR-011` ;
 - [ ] magasin de commandes conçu dans `V2-LLD-006` — table, clés, deux TTL portées par un horodatage

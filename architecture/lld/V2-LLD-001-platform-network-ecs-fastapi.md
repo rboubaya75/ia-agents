@@ -313,6 +313,15 @@ côté IAM, `V2-LLD-002` §6.1/§13.1).
       ]
     },
     {
+      "Sid": "CommandStoreConfirmationOnly",
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:UpdateItem"],
+      "Resource": [
+        "arn:aws:dynamodb:eu-west-3:<account>:table/<env>-commands",
+        "arn:aws:dynamodb:eu-west-3:<account>:table/<env>-commands/index/by-operation"
+      ]
+    },
+    {
       "Sid": "S3DocumentSource",
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:HeadObject"],
@@ -348,6 +357,25 @@ côté IAM, `V2-LLD-002` §6.1/§13.1).
 > actions `bedrock-agent:*IngestionJob` est à confirmer contre la documentation IAM Bedrock à
 > l'implémentation (le format `knowledge-base/<id>` et `.../data-source/<id>` est la forme
 > attendue). Les noms de tables DynamoDB exacts sont fixés par `V2-LLD-006`.
+
+**Pourquoi le magasin de commandes a son propre bloc, et pourquoi il est plus étroit.** FastAPI
+touche `${env}-commands` (`V2-LLD-006 §5.3`) sur deux chemins seulement : la découverte de la
+commande à présenter, par requête sur le GSI `by-operation` (`V2-LLD-004 §5.5`), et la transition
+`pending` → `confirmed` de l'endpoint de confirmation (`V2-LLD-005 §4.6`). D'où trois actions, et
+trois seulement :
+
+| Action accordée | Chemin | Ce que son absence casserait |
+|---|---|---|
+| `dynamodb:Query` sur le GSI | découverte par `operationId` | le temps 2 de `V2-ADR-014` — FastAPI ne pourrait plus retrouver la commande qu'en la demandant au modèle, ce que l'invariant I9 interdit |
+| `dynamodb:GetItem` | rendu du résumé, relecture d'état | la carte de confirmation et la résolution d'issue inconnue |
+| `dynamodb:UpdateItem` | transition `pending` → `confirmed` | l'endpoint de confirmation |
+
+**`PutItem` et `DeleteItem` sont délibérément absents.** Créer une commande appartient au tool de
+proposition, qui opère depuis un rôle distinct (`V2-LLD-004 §9.1`) : accorder `PutItem` à FastAPI lui
+donnerait le moyen de fabriquer une autorisation sans passer par la matérialisation, ce qui
+retirerait au mécanisme sa propriété centrale. La suppression, elle, relève du seul TTL
+(`V2-LLD-006 §5.3.4`) — un effacement applicatif rouvrirait la fenêtre de rejeu que la rétention de
+l'état `executed` ferme.
 
 ### 5.2 `ecs-task-role-ingestion` — cible V3, non créé en V2
 

@@ -47,7 +47,7 @@
 | ADR | Décision applicable à ce LLD |
 |---|---|
 | V2-ADR-001 | La frontière applicative est FastAPI ; les champs d'identité fournis par le client sont refusés (§4.1). Le chemin d'ingress est réalisé par `V2-LLD-001` ; ce LLD porte les contrôles qui s'y appliquent |
-| V2-ADR-006 | Composition de l'identité (`actorId`, `subjectId`, `tenantId`, rôles, scopes) — §3 ; modèle d'autorisation à six intrants et refus par défaut — §4 ; partitionnement et filtres par magasin — §4.8 ; journalisation d'identifiants hashés — §12.4 |
+| V2-ADR-006 | Composition de l'identité (`actorId`, `subjectId`, `tenantId`, rôles, scopes) — §3 ; modèle d'autorisation à sept intrants et refus par défaut — §4 ; partitionnement et filtres par magasin — §4.8 ; journalisation d'identifiants hashés — §12.4 |
 | V2-ADR-007 | Contrôles réseau de la plateforme consommés tels quels ; ce LLD porte la politique de clé KMS (§8) et la posture egress au titre de l'exfiltration (§11.5) |
 | V2-ADR-008 | Redaction : `Authorization` et tout JWT ne sont jamais journalisés (§12.4) ; les refus de sécurité forment des séries de métriques distinctes (§15) |
 | V2-ADR-010 | Le journal d'audit d'effacement est hors du périmètre de restauration ; ce LLD fixe sa rétention comme exigence de sécurité et l'autorisation du rejeu (§12.2, §12.3) |
@@ -489,7 +489,9 @@ non nommée n'est pas un risque accepté, c'est un risque ignoré.
 
 ### 4.1 Les intrants
 
-`V2-ADR-006` fixe six intrants ; `V2-ADR-014` en ajoute un septième pour les actions mutantes.
+`V2-ADR-006` fixe **sept** intrants. Le septième — la commande confirmée — y a été ajouté à la
+demande de `V2-ADR-014` ; il n'est donc pas un intrant d'une autre origine qui se surimposerait au
+modèle, mais une composante du modèle lui-même.
 
 | # | Intrant | Source |
 |---|---|---|
