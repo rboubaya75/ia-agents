@@ -1,6 +1,6 @@
 # V2-LLD-006 — Données, mémoire, rétention et restauration
 
-- **Version :** 0.4
+- **Version :** 0.5
 - **Statut :** Draft
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§9, §14)
@@ -27,6 +27,17 @@
 > obligation de rejeu après restauration (§2, §6.2, §8, §9, §13.5) ; la classification documentaire
 > reçoit son domaine fermé, son défaut et le préfixe `restricted/` hors data source KB (§2, §4.3,
 > §7).
+>
+> **Révision v0.5 (écarts 1 et 2 relevés par `V2-LLD-004 §1.7`) :** ce LLD **possède désormais le
+> magasin de commandes** de `V2-ADR-014`. La v0.4 renvoyait cette réalisation à `V2-LLD-004` et
+> `V2-LLD-005`, lesquels la renvoyaient ici : une boucle de délégation ne produit pas de
+> propriétaire, et l'objet le plus critique de l'ADR — celui qui porte l'autorisation de toute
+> action mutante — n'était décrit nulle part. L'arbitrage étant déjà rendu par l'ADR, le §5.3 fixe
+> la table `${env}-commands`, ses clés, son GSI `by-operation`, ses attributs, ses trois durées et
+> la contrainte de colocalisation transactionnelle. Corollaire (écart 2) : les mutations `Trips`
+> **quittent la portée du ledger d'idempotence** (§5.1, §5.2), que `V2-ADR-014` réserve aux
+> opérations sans commande — les y maintenir produisait deux enregistrements pour la même mutation,
+> dont un seul lu.
 
 ## 1. Métadonnées
 
@@ -58,7 +69,7 @@
 | V2-ADR-013 | `embeddingSpaceId` est l'unité de versionnement, opaque et immuable par index ; migration par index parallèle et bascule de pointeur ; période de grâce de l'index précédent (§14.5) ; une restauration reconstruit dans l'espace déclaré par l'index restauré |
 | V2-ADR-015 | `erasureDurableAt` et `residualWindowDays` ; suppression Memory explicite et vérifiée, bloquante ; journal d'audit d'effacement append-only hors périmètre PITR ; rejeu obligatoire après restauration ; `erasure_sla_days` et deux règles de borne du guard |
 | V2-ADR-017 | Domaine fermé de `classification`, défaut `confidential`, deux régimes de reclassification, préfixe `restricted/` hors data source KB, tombstone conservant la classification, rétention indépendante de la classification |
-| V2-ADR-014 | **Applicable indirectement :** une demande d'effacement (§8.4) et une reclassification assouplissante sont des actions mutantes matérialisées puis confirmées hors du chemin du modèle. Le mécanisme de confirmation (matérialisation, ledger d'idempotence de commande) est implémenté dans `V2-LLD-004` et `V2-LLD-005` ; ce LLD n'en porte que le point d'entrée et l'`erasureOperationId` qui en est la trace |
+| V2-ADR-014 | **Magasin de commandes** : table, clés, attributs, les deux fenêtres d'expiration et la rétention de l'état `executed` (§5.3). Le contrat du tool et les invariants du magasin appartiennent à `V2-LLD-004 §6.1`, la part autorisation de la confirmation à `V2-LLD-005 §4.6` ; ce LLD réalise le magasin que ces deux documents consomment. Une demande d'effacement (§8.4) et une reclassification assouplissante (§4.3.2) sont des actions mutantes qui en relèvent |
 
 ### 1.3 Préconditions bloquantes héritées des ADR
 
@@ -121,7 +132,8 @@ mécanisme de sauvegarde, la stratégie de suppression et le RTO/RPO applicable.
 |---|---|---|---|---|---|
 | Métier transactionnel | `Trips` (V1, conservée) | DynamoDB | **PITR obligatoire** | TTL applicatif optionnel (`expiresAt`) | utilisateur |
 | Métadonnées documentaires | `documents` (V2, nouvelle) | DynamoDB | **PITR obligatoire** | supersession par version ; effacement coordonné | tenant |
-| Ledger d'idempotence | mutations `Trips`/uploads/ingestion | DynamoDB | PITR | **TTL 7 jours** (par entrée) | technique |
+| Ledger d'idempotence | uploads documentaires, déclenchement d'ingestion | DynamoDB | PITR | **TTL 7 jours** (par entrée) | technique |
+| Magasin de commandes | autorisation des actions mutantes (`V2-ADR-014`) | DynamoDB | **PITR obligatoire** | deux fenêtres d'expiration + rétention de `executed` (§5.3.2) | identité et métier |
 | Utilisateurs | `users` (nouvelle en V2, trace effacement) | DynamoDB | PITR | conservation liée à l'exigence légale (V2-ADR-015) | identité |
 | Contenu documentaire | fichiers uploadés | S3 (bucket `documents`) | **versioning obligatoire** ; pas de réplication cross-région en V2 | supersession par nouvelle version ; effacement toutes versions | tenant |
 | Index vectoriel | chunks + embeddings | S3 Vectors (via KB en V2) | **aucune** — état dérivé | reconstructible par ré-ingestion **dans l'espace déclaré par l'index** (§14.1) | technique dérivée |
@@ -136,8 +148,8 @@ mécanisme de sauvegarde, la stratégie de suppression et le RTO/RPO applicable.
 
 **Principe fondateur :** *aucune donnée régénérable ne fait l'objet d'une sauvegarde dédiée.*
 Les données régénérables (S3 Vectors, Memory) sont reconstruites depuis leur source (S3 + KB config,
-ou rien). Seules les données irremplaçables (transactionnel, métadonnées, ledger, utilisateurs,
-contenu source, secrets, tfstate) sont sauvegardées.
+ou rien). Seules les données irremplaçables (transactionnel, métadonnées, ledger, commandes,
+utilisateurs, contenu source, secrets, tfstate) sont sauvegardées.
 
 **Ce que « aucune sauvegarde » ne dit pas (V2-ADR-015).** L'absence de sauvegarde signifie qu'aucune
 **copie** ne survit ; elle ne dit rien de la durée de vie de l'**original**. La v0.3 de ce LLD tirait
@@ -348,33 +360,187 @@ d'évolution** du cycle. Les états terminaux (`indexed`, `deleted`, `failed`, `
 `quarantined`) sont identiques dans les deux phases : les requêtes qui filtrent sur l'un de ces
 états ne changent pas à la bascule.
 
-## 5. Ledger d'idempotence (V1 pattern, réutilisé)
+## 5. Idempotence et autorisation des mutations — deux magasins disjoints
 
-### 5.1 Portée V2
+### 5.1 Deux magasins, deux portées
 
-Le pattern V1 (`docs/adr/ADR-0006`, `docs/adr/ADR-0007`) — hash canonique du payload, `mutation_started`
-bloquant tout replay après effet de bord, TTL — est repris pour :
+`V2-ADR-014` a séparé ce que la V1 traitait d'un seul tenant. Une mutation passée par une commande
+tire son idempotence de l'état terminal de cette commande ; une opération sans commande la tire du
+ledger hérité de la V1. Les deux portées sont **disjointes par construction** :
 
-- mutations `Trips` (V1, inchangé) ;
+| Magasin | Portée | Ce qui garantit la non-répétition |
+|---|---|---|
+| Magasin de commandes (§5.3) | toute action mutante passée par une commande — mutations `Trips`, demande d'effacement (§8.4), reclassification assouplissante (§4.3.2) | l'état terminal `executed`, condition de la transaction d'exécution |
+| Ledger d'idempotence (§5.2) | opérations **sans** commande — uploads documentaires, déclenchement d'ingestion KB | le hash canonique du payload et le marqueur `mutation_started` |
+
+**Pourquoi les mutations `Trips` ne sont plus dans la portée du ledger.** Une rédaction antérieure de
+cette section les y maintenait, en reconduction du pattern V1. `V2-ADR-014` les en a retirées :
+
+> « Une mutation passée par une commande **n'écrit pas d'entrée dans le ledger** de `V2-LLD-006` §5,
+> qui reste réservé aux opérations sans commande — uploads documentaires et déclenchements
+> d'ingestion. »
+
+Maintenir les deux formulations produirait **deux enregistrements d'idempotence pour la même
+mutation, dont un seul serait lu** à l'exécution. Le second ne serait pas une redondance
+inoffensive : il donnerait l'apparence d'une garantie à un enregistrement que rien ne consulte, et sa
+purge à sept jours (§5.2) ne dirait rien de la fenêtre réellement protégée — celle de la rétention
+`executed` (§5.3.4).
+
+Le pattern V1 n'est pas abandonné pour autant : il change de porteur. La condition transactionnelle
+du §5.3.3 joue le rôle que `mutation_started` jouait en V1, avec la même propriété — l'effet de bord
+et la marque qui interdit son rejeu sont écrits ensemble, ou pas du tout.
+
+### 5.2 Ledger d'idempotence (V1 pattern, réutilisé)
+
+Le pattern V1 (`docs/adr/ADR-0006`, `docs/adr/ADR-0007`) — hash canonique du payload,
+`mutation_started` bloquant tout replay après effet de bord, TTL — est repris pour les opérations
+qui ne passent pas par une commande :
+
 - uploads documentaires (nouveau, `creationOperationId` généré client ou serveur) ;
 - déclenchement d'ingestion KB (nouveau, `hash(tenantId + documentId + version)` pour éviter double
   `StartIngestionJob`).
 
-### 5.2 Choix de magasin
+Le ledger est porté par une **table dédiée** `${env}-idempotency-ledger` (pas fusionné avec
+`documents` ou `Trips`) :
 
-Le ledger d'idempotence est porté par une **table dédiée** `${env}-idempotency-ledger` (pas fusionné
-avec `documents` ou `Trips`) :
-
-- `pk = scope#hash` (scope = `trip-mutation` / `document-upload` / `document-ingest` ; hash =
-  canonique) ;
+- `pk = scope#hash` (scope = `document-upload` / `document-ingest` ; hash = canonique) ;
 - `sk = createdAt` ;
 - `ttl = 7 jours` (attribut `expiresAt`), suffisant pour couvrir tous les retry raisonnables
   (SQS/HTTP/utilisateur) ;
 - PITR activé (traçabilité en cas d'audit sur un doublon supposé) ;
 - SSE-KMS.
 
+Le scope `trip-mutation` de la rédaction antérieure **n'existe plus** : ces mutations relèvent du
+magasin de commandes. Un scope résiduel écrirait des entrées que rien ne lit.
+
 Ce découplage évite qu'une purge TTL du ledger n'affecte les métadonnées ou métier ; il permet
 aussi de dimensionner indépendamment (le ledger est majoritairement write-once + TTL).
+
+### 5.3 Magasin de commandes (V2-ADR-014)
+
+`V2-ADR-014` délègue le magasin à ce LLD — « le choix du magasin, la valeur des TTL et la forme des
+clés sont délégués à `V2-LLD-006`, qui possède les modèles de données ». `V2-LLD-004 §6.1` en énonce
+les neuf invariants sans porter aucune valeur, et `V2-LLD-005 §4.6` la part autorisation de la
+confirmation. Cette section est la réalisation : elle décide la table, ses clés, ses attributs et ses
+trois durées.
+
+C'est le seul objet durable dont dépend la garantie centrale de `V2-ADR-014` : il porte
+l'autorisation de toute action mutante et, l'état `executed` étant terminal, l'idempotence de cette
+même action.
+
+#### 5.3.1 Schéma
+
+Table dédiée `${env}-commands`, distincte du ledger et des tables métier.
+
+| Élément | Valeur | Justification |
+|---|---|---|
+| `pk` | `commandId` | résolution directe à l'exécution ; seule valeur qui circule (`V2-ADR-014`) |
+| `sk` | *(aucune)* | une commande est un item unique, sans historique de versions |
+| GSI `by-operation` | `pk = tenantId#operationId`, `sk = createdAt` | invariant I9 : FastAPI retrouve la commande à présenter par l'`operationId` qu'elle possède déjà, jamais par une référence relayée par le modèle |
+
+`commandId` est **opaque et non devinable** (invariant I8) : préfixe `cmd_` suivi de 32 caractères
+hexadécimaux issus d'une source aléatoire cryptographique, soit 128 bits d'entropie. Il n'encode ni
+le tenant, ni l'acteur, ni l'action, et n'est pas dérivé du contenu de la commande.
+
+**Le tenant est dans la clé du GSI, pas seulement en attribut.** Un index dont la clé de partition
+serait le seul `operationId` rendrait exprimable la requête d'un tenant sur la commande d'un autre,
+avec pour seul rempart le filtre applicatif. Le préfixer par `tenantId` rend cette requête
+inexprimable — même règle qu'au GSI `by-tenant` de §4.2, et même fondement (`V2-ADR-006`).
+
+| Attribut | Type | Rôle |
+|---|---|---|
+| `commandId` | `S` | clé de partition |
+| `tenantId` | `S` | invariant I2 ; composant de la clé du GSI |
+| `actorId` | `S` | invariant I1 ; comparé à l'identité injectée, à la confirmation comme à l'exécution |
+| `operationId` | `S` | invariant I9 ; composant de la clé du GSI |
+| `toolName` | `S` | tool d'exécution seul habilité à consommer cette commande |
+| `payload` | `M` | valeurs de la mutation telles que matérialisées — le résumé présenté à la confirmation en est rendu, jamais reconstruit depuis la requête |
+| `state` | `S` | `pending` \| `confirmed` \| `executed` |
+| `pendingExpiresAt` | `N` | échéance de la fenêtre de proposition (epoch) |
+| `confirmedExpiresAt` | `N` | échéance de la fenêtre d'exécution (epoch), écrite à la confirmation |
+| `result` | `M` | résultat de l'exécution initiale, renvoyable sur rejeu (invariant I6) |
+| `createdAt`, `confirmedAt`, `executedAt` | `N` | horodatages ; `createdAt` est le `sk` du GSI |
+| `expiresAt` | `N` | TTL DynamoDB — **purge seule**, jamais l'application d'une fenêtre (§5.3.4) |
+
+Il n'existe **pas** d'état `expired` écrit. L'expiration est déduite de la comparaison des
+horodatages à la relecture (`V2-LLD-004 §6.4`) : un état écrit supposerait un balayage périodique
+dont le retard rouvrirait exactement la fenêtre que les horodatages ferment.
+
+#### 5.3.2 Les trois durées
+
+`V2-LLD-004 §7.4` distingue trois durées et refuse de déduire l'une des autres. Ce LLD les chiffre :
+
+| Durée | Variable Terraform | Valeur `test` | Ce qu'elle borne |
+|---|---|---|---|
+| Fenêtre `pending` | `command_pending_window_minutes` | 15 min | validité d'une proposition non confirmée |
+| Fenêtre `confirmed` | `command_confirmed_window_seconds` | 120 s | validité d'une autorisation non exécutée |
+| Rétention `executed` | `command_executed_retention_days` | 7 j | garantie de non-rejeu |
+
+**La deuxième est courte par décision, pas par prudence.** Elle borne l'intervalle entre le geste de
+confirmation et l'exécution — un aller-retour serveur, pas une réflexion utilisateur, laquelle est
+bornée par la première. C'est aussi ce qui donne son effet à l'annulation : `V2-ADR-011` évalue les
+points d'annulation avant l'émission d'un appel de tool, et cette fenêtre borne le délai pendant
+lequel une commande confirmée puis annulée resterait exécutable (`V2-LLD-004 §10.2`).
+
+**La troisième est alignée sur le ledger, et ce n'est pas une coïncidence.** Sept jours est la
+rétention du ledger (§5.2), retenue pour couvrir tout retry raisonnable. Les mutations par commande
+ayant quitté le ledger (§5.1), leur fenêtre d'idempotence doit être **au moins** équivalente : sans
+cela, la séparation dégraderait une garantie déjà tenue en V1. C'est l'invariant I7 de `V2-LLD-004`.
+
+Ces trois valeurs sont des **paramètres Terraform** (§10), jamais des constantes applicatives.
+
+#### 5.3.3 Transaction d'exécution
+
+La condition d'autorisation et l'effet de bord tiennent dans un `TransactWriteItems` unique — forme
+retenue par `V2-ADR-014`, déjà employée en V1 (`lambda_function_hardened.py`, `update_trip`) :
+
+```text
+TransactWriteItems
+  ├── Update  ${env}-commands[commandId]
+  │     ConditionExpression :  state = "confirmed"
+  │                       ET   actorId  = <identité injectée>
+  │                       ET   tenantId = <tenant injecté>
+  │                       ET   confirmedExpiresAt > <maintenant>
+  │     UpdateExpression   :  state ← "executed", result ← <résultat>, executedAt ← now
+  │
+  └── Put / Update  ${env}-Trips[…]            ← l'effet de bord métier
+                                                 (ou la cible métier de l'action)
+
+  échec de la condition ⇒ AUCUNE des deux écritures n'est appliquée
+```
+
+**Contrainte de placement, et pourquoi elle est structurante.** `TransactWriteItems` n'opère que dans
+une seule région et sur des tables du même compte. `${env}-commands` est donc créée dans la région et
+le compte de la cible métier — `eu-west-3`, avec `Trips`. C'est la précondition P2 de `V2-LLD-004` ;
+elle est satisfaite ici par construction. Une cible métier hors région ne rendrait pas la garantie
+coûteuse, elle la rendrait **inapplicable** : il faudrait revenir à « vérifier puis écrire », que
+`V2-ADR-014` refuse. Toute cible métier future relevant d'une commande hérite donc de cette
+contrainte de colocalisation.
+
+La limite d'items par transaction n'est pas contraignante : une commande porte une mutation.
+
+#### 5.3.4 Rétention, TTL et entrée réduite
+
+Le TTL DynamoDB (`expiresAt`) **purge**, il n'applique aucune fenêtre. `V2-LLD-004 §6.4` en fait une
+règle : l'expiration d'une commande est appliquée par la condition sur `confirmedExpiresAt` dans la
+transaction, jamais par le TTL, dont la suppression est différée et non bornée utilement. Une
+commande dont la fenêtre courte est écoulée mais l'item non encore purgé est donc **inexécutable**,
+et c'est la condition transactionnelle qui le garantit.
+
+`expiresAt` est positionné à la borne la plus tardive de l'item :
+
+| État | `expiresAt` |
+|---|---|
+| `pending` | `pendingExpiresAt` + marge de purge |
+| `confirmed` | `confirmedExpiresAt` + marge de purge |
+| `executed` | `executedAt` + `command_executed_retention_days` |
+
+**Si la rétention `executed` ne pouvait pas couvrir la fenêtre d'idempotence exigée** (précondition
+P3 de `V2-LLD-004`), la réponse conforme ne serait pas de laisser la commande disparaître : une
+**entrée réduite** valant enregistrement de non-rejeu serait conservée au-delà — `commandId`,
+`tenantId`, `actorId`, `state = executed`, `executedAt` — sans `payload` ni `result`. Elle ne permet
+plus de renvoyer le résultat initial ; elle permet de refuser un second effet de bord, qui est la
+propriété à préserver. En V2, les sept jours étant alignés sur le ledger, ce repli n'est pas activé.
 
 ## 6. Table `users` (V2, nouvelle — trace d'effacement)
 
@@ -882,6 +1048,9 @@ La valeur exacte relève de l'exploitation ; la contrainte, non. Elle est vérif
 | `documents` items `quarantined` | 7 jours | TTL DynamoDB (`expiresAt`) |
 | `documents` items `deleted` | 30 jours (tombstone) puis purge | script périodique (audit) |
 | `ledger` items | 7 jours | TTL DynamoDB (`expiresAt`) |
+| `commands` items `pending` | `command_pending_window_minutes` (15 min) + marge | TTL DynamoDB — **purge seule**, l'expiration est transactionnelle (§5.3.4) |
+| `commands` items `confirmed` | `command_confirmed_window_seconds` (120 s) + marge | TTL DynamoDB — idem |
+| `commands` items `executed` | `command_executed_retention_days` (7 j), **≥ fenêtre d'idempotence** | TTL DynamoDB (`expiresAt`) |
 | `users` items sans effacement | illimitée | — |
 | `users` items effacés | illimitée (trace) | — |
 | S3 `sources/` version courante | illimitée sauf effacement | — |
@@ -932,6 +1101,7 @@ utilisateur (§8.5) : la classification qualifie la ressource, pas la personne.
 | `Trips` | KMS managée AWS (V1 conservé) | continuité V1, données métier standard |
 | `documents` | **KMS managée client (CMK dédiée)** | rotation contrôlée, séparation des privilèges d'accès (V2-ADR-006) |
 | `ledger` | KMS managée client (CMK dédiée) | même politique que `documents` |
+| `commands` | KMS managée client (CMK dédiée) | porte l'autorisation des actions mutantes et le `payload` matérialisé ; sa lecture doit être aussi contrôlée que celle de la cible métier |
 | `users` | KMS managée client (CMK dédiée) | données identité |
 | S3 `documents` | même CMK que `documents` DynamoDB | cohérence d'accès KMS entre source et métadonnées |
 | S3 Vectors | KMS géré par KB / S3V (config) | délégué au service ; en V3 : passage à CMK dédiée si S3V natif l'expose |
@@ -947,7 +1117,7 @@ Terraform (`V2-LLD-005` pour la politique de clé exacte).
 
 ### 12.1 Ce qui est activé et non désactivable
 
-- PITR sur `Trips`, `documents`, `ledger`, `users` — 35 jours ;
+- PITR sur `Trips`, `documents`, `ledger`, `commands`, `users` — 35 jours ;
 - Versioning S3 sur `documents`, `frontend`, `artefacts`, `tfstate` ;
 - Rétention du journal d'audit d'effacement ≥ fenêtre PITR (§8.6).
 
@@ -1090,6 +1260,31 @@ l'étape de rejeu ci-dessous.
 Ce qui reste vrai de la v0.3 : PITR restaure la **trace** d'effacement, pas la donnée effacée. Une
 demande contraire relèverait d'une exigence légale distincte, hors périmètre (`V2-ADR-015`
 §Périmètre exclu).
+
+#### 13.4.1 Restauration `commands` — pourquoi elle ne réautorise rien
+
+Une restauration PITR de `${env}-commands` à un instant T antérieur ramène des commandes dans un
+état révolu : une commande alors `confirmed` et depuis exécutée redevient `confirmed`, et une
+commande depuis expirée redevient exécutable *en apparence*. La question mérite d'être posée
+explicitement, parce qu'une réponse négligente rouvrirait la faille que `V2-ADR-014` ferme.
+
+**Elle ne réautorise rien, et c'est `confirmedExpiresAt` qui le garantit.** L'exécution est
+conditionnée par `confirmedExpiresAt > maintenant` (§5.3.3). Une fenêtre de 120 secondes restaurée
+depuis un instant antérieur à la restauration elle-même est nécessairement échue : aucune procédure
+de restauration ne s'exécute en moins de deux minutes. La condition échoue, la transaction est
+refusée, et l'effet de bord n'est pas rejoué.
+
+C'est la contrepartie concrète de la règle du §5.3.4. Une expiration reposant sur le TTL n'offrirait
+pas cette propriété : le TTL restauré porterait une échéance passée, l'item resterait lisible jusqu'à
+sa repurge, et rien dans la condition d'exécution ne s'y opposerait. La table `commands` reste donc
+dans le périmètre PITR — contrairement au journal d'audit d'effacement (§8.6), dont l'exclusion tient
+à une autre propriété : lui n'a aucun horodatage qui rende inoffensive sa restauration.
+
+Ce que la restauration peut en revanche produire : une commande `executed` ramenée à `confirmed`
+perd son `result`, donc la capacité de répondre à un rejeu par le résultat initial (invariant I6).
+Le rejeu ne produira pas de second effet de bord — la fenêtre est échue — mais renverra
+`COMMAND_EXPIRED` là où il aurait renvoyé le résultat. C'est une **dégradation de la qualité de
+réponse, pas de la garantie de sûreté** ; elle est acceptée et n'appelle pas de rejeu (§13.5).
 
 ### 13.5 Rejeu des effacements après restauration (V2-ADR-015)
 
@@ -1329,11 +1524,12 @@ garantit **si elle est respectée dans l'ordre**. Deux garde-fous supplémentair
 
 | Règle | Ressource | Comportement bloqué |
 |---|---|---|
-| PITR obligatoire | `aws_dynamodb_table` tables `Trips`, `documents`, `ledger`, `users` | plan qui passe `point_in_time_recovery.enabled = false` |
+| PITR obligatoire | `aws_dynamodb_table` tables `Trips`, `documents`, `ledger`, `commands`, `users` | plan qui passe `point_in_time_recovery.enabled = false` |
 | Destruction interdite | mêmes tables | plan qui contient `destroy` sans variable `CONFIRM_DESTROY_DYNAMODB=<table_name>` |
 | Versioning obligatoire | `aws_s3_bucket_versioning` `documents`, `frontend`, `artefacts`, `tfstate` | plan qui passe `status = Suspended` |
 | Destruction interdite | buckets S3 versionnés + KMS CMK utilisées | plan qui contient `destroy` sans variable `CONFIRM_DESTROY_S3=<bucket>` ou `CONFIRM_DESTROY_KMS=<key>` |
-| SSE-KMS obligatoire | `documents`, `ledger`, `users` DynamoDB et bucket `documents` | plan qui retire `server_side_encryption` ou passe à SSE-S3 sur `documents` bucket |
+| SSE-KMS obligatoire | `documents`, `ledger`, `commands`, `users` DynamoDB et bucket `documents` | plan qui retire `server_side_encryption` ou passe à SSE-S3 sur `documents` bucket |
+| Colocalisation transactionnelle | `${env}-commands` et la cible métier d'une action mutante (`Trips`) | plan qui les placerait dans deux régions ou deux comptes — `TransactWriteItems` deviendrait inapplicable et la garantie de `V2-ADR-014` retomberait sur « vérifier puis écrire » (§5.3.3) |
 | Public block obligatoire | tous buckets S3 | plan qui met un `block_public_*` à `false` |
 | Indépendance du journal d'effacement | `aws_cloudwatch_log_group.erasure_audit` | plan qui porterait le journal d'effacement sur une ressource couverte par le PITR (table DynamoDB) — l'indépendance de §8.6 est une contrainte de plan, pas une convention |
 | Destruction interdite | `aws_cloudwatch_log_group.erasure_audit` | plan qui contient `destroy` sans `CONFIRM_DESTROY_ERASURE_AUDIT` — sa perte prive le rejeu (§13.5) de sa source |
@@ -1347,9 +1543,11 @@ plancher pourrait être franchi par un simple changement de variable.
 
 | Règle | Expression | Ce que son absence permettrait |
 |---|---|---|
-| Plancher d'effacement | `erasure_sla_days >= residualWindowDays` où `residualWindowDays = max(fenêtres PITR de Trips, documents, users, ledger)` | Annoncer un délai d'effacement que l'architecture ne peut pas tenir (§6.4) |
+| Plancher d'effacement | `erasure_sla_days >= residualWindowDays` où `residualWindowDays = max(fenêtres PITR de Trips, documents, users, ledger, commands)` | Annoncer un délai d'effacement que l'architecture ne peut pas tenir (§6.4) |
 | Rétention du journal | `erasure_audit_retention_days >= max(fenêtres PITR)` | Une restauration au bord de la fenêtre PITR ne disposerait plus de la liste des effacements à rejouer (§8.6) |
 | Expiration mémoire de session | `memory_session_ttl_days < residualWindowDays` | La mémoire de session constituerait un second résidu, non borné et de nature différente de celui du PITR (§9.3) |
+| Fenêtre d'exécution bornée | `command_confirmed_window_seconds <= 300` | Une commande confirmée puis annulée resterait exécutable plus longtemps que le délai d'annulation attendu par `V2-ADR-011` (`V2-LLD-004 §10.2`) |
+| Idempotence non dégradée | `command_executed_retention_days >= ledger_ttl_days` | Les mutations passées par une commande ayant quitté le ledger (§5.1), une rétention plus courte offrirait une fenêtre de non-rejeu inférieure à celle déjà tenue en V1 — invariant I7 de `V2-LLD-004` |
 
 Trois propriétés de ces règles méritent d'être notées.
 
@@ -1425,6 +1623,13 @@ pas, le DR drill (§17.2) est la seule occasion où la procédure est éprouvée
 | **Retour arrière après bascule d'espace** : effectué par bascule inverse du pointeur, sans reconstruction, dans la période de grâce, vérifié sur le même dataset | migration de test | Oui |
 | Métriques qualité retrieval post-réhydratation dans marge d'éval (`V2-ADR-018`) | qualité DR drill | Oui |
 | Ledger d'idempotence : TTL effectif à 7 jours | intégration | Oui |
+| **Exécution d'une commande hors fenêtre `confirmed`** : la transaction est refusée et **aucun effet de bord n'est appliqué**, y compris lorsque l'item n'a pas encore été purgé par le TTL (§5.3.4) | intégration négative | **Oui** |
+| **Exécution d'une commande par un autre acteur ou un autre tenant** : refusée, avec le même code que pour une commande inexistante (`V2-LLD-004 §6.3`) | intégration négative | **Oui** |
+| **Double exécution concurrente du même `commandId`** : une seule aboutit, une seule mutation métier existe, la seconde renvoie le résultat initial | intégration concurrence | **Oui** |
+| **Restauration PITR de `commands`** : aucune commande restaurée n'est exécutable, la fenêtre `confirmed` étant échue (§13.4.1) | DR drill | **Oui** |
+| Aucune mutation passée par une commande n'écrit d'entrée dans le ledger ; aucun scope `trip-mutation` n'existe (§5.1) | intégration + statique | **Oui** |
+| GSI `by-operation` : une requête portant l'`operationId` d'un autre tenant ne renvoie aucune commande | intégration isolation | **Oui** |
+| Plan plaçant `commands` et la cible métier hors d'une même région/compte : bloqué par le guard | statique CI | **Oui** |
 | Aucune donnée durable métier ou documentaire dans Memory (revue statique) | statique | Oui |
 
 ### 17.2 DR drill trimestriel
