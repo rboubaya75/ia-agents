@@ -190,8 +190,11 @@ token d'accès suffit, ce qui aligne le corpus sur la lettre de `V2-ADR-006`.
 **Correction attendue dans `V2-LLD-001 §7.1.3` :** `token_use` vaut `access` ; la ligne
 `custom:tenantId` est retirée de la table des claims requis ; la phrase « `tenantId` est résolu côté
 serveur à partir du claim `custom:tenantId` et d'un registre » devient « à partir de `sub` et du
-registre ». Le reste de la table — liste blanche `RS256`, `iss`/`aud` comparés à la configuration,
-`exp`/`nbf`, `sub` présent — est inchangé et reste la référence.
+registre ». Un point supplémentaire, relevé en §3.1 : la phrase « le `sub` devient `actorId` après
+hachage » est remplacée par « le `sub` est l'`actorId`, transmis tel quel à `trustedIdentity` — le
+hachage produit `subjectId`, pas `actorId` ». Le reste de la table — liste blanche `RS256`,
+`iss`/`aud` comparés à la configuration, `exp`/`nbf`, `sub` présent — est inchangé et reste la
+référence.
 
 Le gain n'est pas seulement de conformité : il permet de **borner la fenêtre de révocation** à la
 durée de cache du registre plutôt qu'à la durée de vie du token (§3.7).
@@ -252,7 +255,7 @@ irréversible. La vérification est décrite en §4.7 et repose sur une précond
 
 ### 2.2 App clients
 
-Un seul client applicatif en V2.
+Un seul client applicatif en V2 dans le cas nominal — sous réserve de la précondition 4 de §17.2 : si l'attestation MFA n'est pas disponible sur le jeton d'accès, un second client est provisionné, configuré en MFA obligatoire, réservé aux comptes portant le rôle `platform_admin`.
 
 | Paramètre | Valeur | Motif |
 |---|---|---|
@@ -591,9 +594,12 @@ tenants.
 
 **URL présignées.** Lorsqu'une lecture directe est servie par une URL présignée S3, elle est émise
 **après** les étapes 1 à 3, liée à un objet unique, en lecture seule, et d'une durée de vie
-strictement inférieure à la fenêtre de révocation effective (§3.7) — sans quoi une URL survivrait à
-la suspension du compte qui l'a obtenue. C'est la preuve « URL présignée inutilisable hors ressource
-et durée autorisées » de `V2-ADR-006`.
+`presigned_url_lifetime_seconds` (§17.1), contrainte par N8 à rester inférieure à la fenêtre de
+révocation effective (§3.7) — sans quoi une URL survivrait à la suspension du compte qui l'a
+obtenue. L'URL est émise et consommée dans le même flux : elle n'est ni mise en cache, ni
+partagée, ni stockée par le client. Sa durée courte est une contrainte de conception — le
+transfert S3 démarre bien avant l'expiration. C'est la preuve « URL présignée inutilisable hors
+ressource et durée autorisées » de `V2-ADR-006`.
 
 ### 4.6 Endpoint de confirmation
 
@@ -911,9 +917,15 @@ une invocation vivante d'une fuite.
 compteur.
 
 ```text
-clé      : SUBJ#<subjectId>
+clé      : ACTOR#<actorId>
 attribut : inflight = { "<invocationId>": <expiryEpochSeconds>, ... }
 ```
+
+La clé utilise `actorId` (l'UUID Cognito, §3.1) et non `subjectId`. `subjectId` est le
+pseudonyme des journaux, métriques et traces (§12.4) ; une clé DynamoDB n'est pas un journal. Le
+hachage tronqué à 48 bits (`safe_hash`) serait inadéquat ici : une collision assignerait deux
+identités au même compteur, faussant l'admission sans violer l'isolation. `actorId` n'est pas une
+donnée identifiante par lui-même (§3.1) et ne présente aucun risque de collision.
 
 L'admission est une **écriture conditionnelle unique** qui, dans la même opération :
 purge les entrées dont l'échéance est dépassée, compte celles qui restent, refuse si le compte
@@ -1447,7 +1459,7 @@ elle-même relève de `V2-LLD-007`.
 | S28 | L'analyseur ne dispose d'aucun accès sortant vers internet | §10.3 |
 | S29 | Aucun en-tête `Authorization` n'apparaît dans les journaux d'aucune couche, **journaux WAF et journaux d'erreur compris** | `V2-ADR-020`, §6.6 |
 | S30 | Aucun jeton Cognito n'atteint Runtime, MCP ou un tool, vérifié par inspection des en-têtes reçus côté Runtime | `V2-ADR-006` |
-| S31 | Le contrat Runtime refuse `cognitoToken`, `authorizationHeader`, `actorIdRaw`, `tenantIdRaw` | `runtime-contract.md` §5 |
+| S31 | Le contrat Runtime refuse `cognitoToken`, `authorizationHeader`, `actorIdRaw`, `tenantIdRaw` | `runtime-contract.md` §4 |
 | S32 | Le rôle CI/CD peut écrire un secret et ne peut pas le déchiffrer | §8.3 |
 | S33 | `ecs-task-role-fastapi` ne peut pas déchiffrer hors des services de sa condition `ViaService` | §8.2 |
 | S34 | Une restauration dont le journal d'audit d'effacement est absent ou de rétention insuffisante est **refusée**, pas dégradée | `V2-ADR-015` |
@@ -1485,6 +1497,7 @@ résolu, et non seulement décrit.
 | `token_budget_window_days` | *(sans défaut)* | `V2-ADR-016`, gardé |
 | `bedrock_servable_concurrency_ssm_param` | *(sans défaut)* | §7.5 — alimenté à la découverte de capacité |
 | `erasure_audit_retention_days` | *(sans défaut)* | §12.2, gardé contre la fenêtre PITR |
+| `presigned_url_lifetime_seconds` | *(sans défaut)* | §4.5 — durée des URL présignées S3 ; doit satisfaire N8 |
 
 **Les variables sans défaut sont délibérément sans défaut.** `V2-ADR-016` et la Charte §4.2 excluent
 qu'un LLD invente des valeurs de politique de service ; une valeur par défaut serait exactement cela,
@@ -1532,7 +1545,7 @@ structurel (`V2-LLD-001 §16.6`).
 | N5 | `somme(quotaIdentité) / plafond_plateforme == taux_sursouscription` déclaré | non déclaré ou incohérent |
 | N6 | `plafond_plateforme <= ` capacité servable (SSM, §7.5) | supérieur, ou paramètre SSM absent ou nul |
 | N7 | `token_budget_window_days` déclaré | absent |
-| N8 | Durée de vie des URL présignées `< authz_registry_cache_ttl_seconds` | supérieure ou égale |
+| N8 | `presigned_url_lifetime_seconds < authz_registry_cache_ttl_seconds` | supérieur ou égal — une URL présignée ne doit pas survivre à la borne de révocation |
 
 **Structurelle**
 
