@@ -70,6 +70,8 @@ jobs:
             architecture/lld/V2-LLD-001-platform-network-ecs-fastapi.md \
             architecture/lld/V2-LLD-002-rag-ingestion-documentaire.md \
             architecture/lld/V2-LLD-003-agents-orchestration.md \
+            architecture/lld/V2-LLD-004-mcp-gateway-tools.md \
+            architecture/lld/V2-LLD-005-identite-securite-conformite.md \
             architecture/lld/V2-LLD-006-donnees-memoire-retention-restauration.md \
             architecture/adr/V2-ADR-BACKLOG-FR.md \
             architecture/adr/V2-ADR-001-ingress-security-boundary.md \

@@ -499,7 +499,7 @@ non nommée n'est pas un risque accepté, c'est un risque ignoré.
 | 4 | type et classification de la ressource | `documents` pour un document (`V2-ADR-017`) |
 | 5 | ownership ou partage explicite | §4.4 |
 | 6 | politique de rétention et de conformité | `V2-LLD-006 §10` |
-| 7 | **commande confirmée** | magasin de commandes (`V2-ADR-014`), pour les seules actions mutantes déclenchées par le modèle |
+| 7 | **commande confirmée** | magasin de commandes (`V2-ADR-014`, réalisé en `V2-LLD-006 §5.3`), pour les seules actions mutantes déclenchées par le modèle |
 
 **Champs refusés dans le corps de la requête.** `actorId`, `tenantId`, `subjectId`, `roles`,
 `scopes`, `trustedIdentity`, `classification` sur un chemin qui ne la modifie pas, toute clé de

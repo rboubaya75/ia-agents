@@ -60,9 +60,18 @@ Les décisions sont fondées sur :
 3. action demandée ;
 4. type et classification de ressource ;
 5. ownership ou partage explicite ;
-6. politique de rétention et de conformité.
+6. politique de rétention et de conformité ;
+7. pour une action mutante, l’existence d’une **commande confirmée** non expirée, dont l’acteur et
+   le tenant sont ceux résolus aux points 1 et 2 (`V2-ADR-014`).
 
 Un refus est la valeur par défaut lorsqu’une information manque.
+
+Le septième intrant n’est pas une redondance des six premiers. Ceux-ci établissent qu’un acteur *a
+le droit* d’exécuter une action ; la commande confirmée établit qu’il *a effectivement demandé
+celle-ci*, sur ces valeurs-là, hors du chemin du modèle. Un droit ne vaut pas intention : sans ce
+septième intrant, une action mutante fabriquée par le modèle et non voulue par l’utilisateur reste
+autorisée dès lors que l’acteur en aurait eu le droit. Sa vérification est portée par la condition
+transactionnelle décrite en `V2-ADR-014`, pas par un contrôle applicatif séparé.
 
 ## Partitionnement et filtres
 

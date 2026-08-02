@@ -227,9 +227,18 @@ garantie.
 
 - avant l'invocation du modèle pour un nouveau tour ;
 - avant l'émission d'un appel de tool ;
-- jamais **pendant** l'exécution d'un tool porteur d'effet de bord. Interrompre un tool en vol
-  laisserait un effet partiellement appliqué : l'annulation attend la fin de l'appel en cours, puis
-  s'arrête. La garantie d'idempotence des tools relève de `V2-ADR-014` et de `V2-LLD-004`.
+- jamais **pendant la transaction** qui applique l'effet de bord d'un tool. La fenêtre non annulable
+  est cette transaction seule, **pas l'appel de tool entier** : la résolution de la référence de
+  commande, sa lecture et la construction de la mutation la précèdent, et restent interruptibles —
+  aucune ne laisse d'état partiel. Un tool de proposition, qui ne porte par construction aucun effet
+  de bord (`V2-ADR-014`), reste annulable sur toute sa durée. La garantie d'idempotence des tools
+  relève de `V2-ADR-014` et de `V2-LLD-004`.
+
+Cette formulation remplace celle des rédactions antérieures — « l'annulation attend la fin de
+l'appel en cours » — qui décrivait une fenêtre plus large que nécessaire. Immobiliser l'annulation
+sur l'appel entier suspendrait le contrôle pendant des phases qui, elles, s'interrompent sans
+conséquence. C'est la réduction que `V2-ADR-014` revendique en rendant l'exécution atomique : seule
+la transaction est indissociable.
 
 **Effets d'une annulation :**
 
