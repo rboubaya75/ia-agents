@@ -36,7 +36,20 @@
 | E6 | Une déconnexion ne produit ni perte silencieuse, ni doublon d'effet de bord | `V2-ADR-011`, `V2-ADR-014` |
 | E7 | Les refus pour quota, pour autorisation et pour throttling sont trois situations distinctes pour l'utilisateur | `V2-ADR-016` |
 | E8 | Les citations sont traçables jusqu'à leur source | `V2-ADR-003`, HLD §9 |
-| E9 | L'interface est utilisable au clavier et avec un lecteur d'écran, y compris pendant le streaming | Charte §7 |
+| E9 | L'interface est utilisable au clavier et avec un lecteur d'écran, y compris pendant le streaming | **ce LLD** — voir ci-dessous |
+
+**E9 n'a pas d'origine dans le corpus, et il faut le dire.** Les huit premières exigences dérivent
+d'un ADR ou de la Charte. L'accessibilité, elle, n'est mentionnée nulle part : ni dans la Charte —
+dont le §6 « Exigences non fonctionnelles » couvre sécurité, disponibilité, performance/FinOps et
+exploitabilité, sans un mot sur l'accessibilité — ni dans le HLD, ni dans aucun ADR. E9 est donc une
+exigence que **ce LLD ajoute de son propre chef**, au titre de la qualité attendue d'une interface,
+et non une contrainte héritée.
+
+La distinction a une conséquence de gouvernance : une exigence sans document supérieur ne peut pas
+être invoquée comme bloquante à une revue d'architecture. Si l'accessibilité doit avoir ce statut,
+elle relève d'un amendement de la Charte §6, pas d'une décision de LLD. En l'état, les preuves P18 et
+P19 (§16) sont marquées bloquantes **par décision de ce LLD**, ce qui engage sa réalisation sans
+engager le corpus.
 
 ### 1.2 ADR applicables — décisions retenues
 
@@ -57,7 +70,7 @@
 |---|---|
 | V2-ADR-003, V2-ADR-004, V2-ADR-013, V2-ADR-017, V2-ADR-018, V2-ADR-019 | RAG, ingestion, embeddings, classification et évaluation : le client en rend les résultats (citations, statut d'ingestion, niveau de classification) mais n'en décide aucun mécanisme |
 | V2-ADR-005, V2-ADR-012 | Framework agentique et fallback modèle : invisibles du client, à l'exception du drapeau `degraded` qu'il affiche (§11.4) |
-| V2-ADR-007, V2-ADR-009, V2-ADR-010 | Plateforme, CI/CD et sauvegarde : le build et le déploiement du bundle relèvent de `V2-LLD-008`, l'hébergement de `V2-LLD-001` |
+| V2-ADR-007, V2-ADR-009, V2-ADR-010 | Plateforme, CI/CD et sauvegarde : le build et le déploiement du bundle relèvent de `V2-LLD-008`, le bucket qui le porte de `V2-LLD-006 §7.3` |
 | V2-ADR-015 | Effacement : le client en porte le point d'entrée, qui est une action mutante ordinaire au sens de `V2-ADR-014` (§7.8) — aucune mécanique propre |
 
 ### 1.4 Périmètre et exclusions
@@ -65,10 +78,18 @@
 **Dans le périmètre.** L'application `frontend/`, son bundle, sa configuration d'exécution, ses
 contrats de consommation d'API, ses tests.
 
-**Hors périmètre.** L'hébergement S3/CloudFront et la politique de cache (`V2-LLD-001 §7.4`,
-`V2-LLD-006 §7.3`) ; le contenu des règles WAF (`V2-LLD-005`) ; le pipeline de build (`V2-LLD-008`) ;
-toute interface d'administration au-delà de la gestion documentaire d'un utilisateur — les écrans
-`platform_admin` sont V3.
+**Hors périmètre.** Le bucket qui porte le bundle (`V2-LLD-006 §7.3`) ; le contenu des règles WAF
+(`V2-LLD-005`) ; le pipeline de build et de déploiement (`V2-LLD-008`) ; toute interface
+d'administration au-delà de la gestion documentaire d'un utilisateur — les écrans `platform_admin`
+sont V3.
+
+> **Écart mineur relevé au passage.** La **distribution CloudFront qui sert le frontend** et sa
+> politique de cache n'ont pas de propriétaire nommé. `V2-LLD-001 §1.4` exclut explicitement le
+> frontend de son périmètre, et son §7 ne décrit CloudFront que comme frontal de l'API. `V2-LLD-006
+> §7.3` porte le bucket, pas la distribution. Ce LLD ne se l'attribue pas — il n'a pas la compétence
+> plateforme — mais le §17.1 en dépend pour la règle de cache de l'`index.html` et du fichier de
+> configuration d'exécution (§15.1), et le §12.2 pour l'en-tête de CSP. Le propriétaire naturel est
+> `V2-LLD-001`, qui devrait lever l'exclusion pour cette seule ressource.
 
 ### 1.5 Ce dont ce LLD hérite de la V1
 
@@ -90,11 +111,15 @@ fixées ici concernent le comportement du navigateur et rien d'autre.
 
 ### 1.7 Écarts de corpus relevés par ce LLD
 
-Trois écarts sont apparus à la rédaction. Aucun n'est corrigé par ce document.
+Trois écarts sont apparus à la rédaction.
 
-#### Écart 1 — « SSE reconnecte automatiquement » ne vaut pas pour le transport retenu (bloquant)
+> **État.** L'écart 1 est **corrigé dans le même lot** que ce LLD (`V2-ADR-011`, trois passages).
+> L'écart 2 attend une correction dans `V2-LLD-001`. L'écart 3 est tranché ici et ne demande de
+> correction nulle part ailleurs.
 
-`V2-ADR-011` §Contrat d'événements SSE écrit :
+#### Écart 1 — `V2-ADR-011` prête au protocole SSE des propriétés de l'API `EventSource` (bloquant, corrigé)
+
+`V2-ADR-011` §Contrat d'événements SSE écrivait :
 
 > « **Reprise après déconnexion.** SSE reconnecte automatiquement. En V2, une reconnexion **ne
 > rejoue pas** les fragments déjà émis : elle se rattache à l'opération par `operationId` et reçoit
@@ -122,14 +147,28 @@ Ce n'est pas une régression : le comportement de `EventSource` — reconnexion 
 `Last-Event-ID` — aurait de toute façon dû être encadré, puisque `V2-ADR-011` refuse le rejeu des
 fragments. Mais le corpus le présente comme acquis, et il ne l'est pas.
 
-**Correction attendue dans `V2-ADR-011` :** remplacer « SSE reconnecte automatiquement » par une
-formulation qui n'attribue pas au protocole une propriété de l'API `EventSource`, et renvoyer la
-stratégie de reconnexion à ce LLD.
+**Le diagramme de la décision portait la même erreur.** Le §Décision — transport de `V2-ADR-011`
+commençait par « `Browser (EventSource)` », c'est-à-dire qu'il nommait l'API navigateur dans le
+chemin retenu — alors que cet ADR décide le transport *réseau* et non le client qui le consomme. Ce
+n'est pas une redite de l'écart : c'est le même présupposé, à un endroit plus visible, et il aurait
+survécu à une correction du seul paragraphe de reprise.
+
+**Correction — appliquée dans le même lot que ce LLD.** `V2-ADR-011` porte désormais :
+
+| Passage | Avant | Après |
+|---|---|---|
+| §Décision — transport | `Browser (EventSource)` | `Browser (client SSE — l'API navigateur retenue relève de V2-LLD-010)` |
+| §Contrat d'événements SSE | « SSE reconnecte automatiquement » | la phrase est retirée ; la stratégie de reconnexion est renvoyée à ce LLD, avec le motif |
+| §Choix du mécanisme d'annulation | « `EventSource` ne peut rien envoyer au serveur » | formulation neutre : le flux ne porte aucun canal client → serveur, quelle que soit l'API |
+
+L'ADR ne préjuge plus du client. La décision de transport réseau — REST API en mode `STREAM` — est
+inchangée : elle n'a jamais dépendu du choix d'API navigateur.
 
 #### Écart 2 — le jeu d'événements SSE n'a pas d'événement de commande
 
 `V2-ADR-011` fixe sept événements : `meta`, `delta`, `citation`, `done`, `cancelled`, `error`,
-`: ping`. Aucun ne porte le résumé de commande que `V2-ADR-014` §Présentation exige.
+`: ping`. Aucun ne porte le résumé de commande qu'exige `V2-ADR-014` §La séquence d'une action
+mutante, dont le temps 2 est nommé « Présentation ».
 
 Le temps 2 de la séquence de `V2-ADR-014` dit pourtant : « FastAPI lit la commande stockée et rend
 le résumé, **transmis au client dans le flux SSE** ». Sans événement dédié, ce résumé ne peut
@@ -168,7 +207,7 @@ décision étant prise ici.
 |---|---|---|
 | Framework | React 19 | continuité V1 ; aucun besoin V2 n'appelle un changement |
 | Langage | TypeScript strict | les contrats d'API sont typés et vérifiés au build (§15.3) |
-| Build | Vite | continuité V1 ; produit un bundle statique, seul artefact que `V2-LLD-001` héberge |
+| Build | Vite | continuité V1 ; produit un bundle statique, seul artefact que ce LLD livre |
 | Styles | Tailwind | continuité V1 |
 | Auth | `amazon-cognito-identity-js` | continuité V1, avec un `Storage` personnalisé (§4.2) |
 | Markdown | `react-markdown` | continuité V1, **sans** `rehype-raw` (§12.3) |
@@ -232,7 +271,7 @@ sont construites côté serveur. Vu du client, cela se traduit par une règle un
 
 | Champ | Pourquoi le client ne peut pas le produire | Refus attendu |
 |---|---|---|
-| `actorId`, `tenantId`, `subjectId` | résolus côté serveur depuis le jeton (`V2-ADR-006`) | 400, code dédié (`V2-LLD-005 §4.6`) |
+| `actorId`, `tenantId`, `subjectId` | résolus côté serveur depuis le jeton (`V2-ADR-006`) | 400, code dédié (`V2-LLD-005 §4.1`) |
 | `roles`, `scopes`, `trustedIdentity` | l'autorisation est calculée, pas déclarée | 400 |
 | `modelOverride`, `systemPrompt` | la configuration de génération appartient à `V2-LLD-003` | 400 |
 | `toolName` | la sélection d'outil appartient au modèle sous contrôle Gateway (`V2-LLD-004`) | 400 |
@@ -900,7 +939,7 @@ l'utilisateur et expose une information de structure interne.
 | Invocation agentique | `budget_exceeded`, `deadline_exceeded`, `tool_denied`, `model_throttled`, `tool_unavailable`, `memory_unavailable` | `V2-LLD-003 §3.2` |
 | Commande | `COMMAND_NOT_CONFIRMED`, `COMMAND_EXPIRED`, `COMMAND_NOT_FOUND`, `COMMAND_FORBIDDEN` | `V2-LLD-004 §6.3` |
 | Quota | refus de quota d'identité, refus de quota de commandes `pending`, refus de quota de documents en ingestion | `V2-ADR-016` |
-| Contrat | champ interdit | `V2-LLD-005 §4.6` |
+| Contrat | champ interdit | `V2-LLD-005 §4.1` |
 
 **`COMMAND_FORBIDDEN` et `COMMAND_NOT_FOUND` reçoivent le même message.** `V2-LLD-004 §6.3` les a
 délibérément rendus indistinguables côté serveur pour ne pas offrir d'oracle d'existence ; les
@@ -964,7 +1003,7 @@ qu'aucun autre document ne le signale. C'est un point de vérification au plan (
 
 `react-markdown` est utilisé pour rendre les réponses du modèle. C'est la principale surface
 d'injection de l'application, parce que le contenu rendu est produit par un système que l'on ne
-contrôle pas et qu'une injection indirecte peut orienter (`V2-ADR-014` §11.3).
+contrôle pas et qu'une injection indirecte peut orienter (`V2-LLD-005 §11.3`).
 
 | Règle | Motif |
 |---|---|
@@ -1158,9 +1197,9 @@ qui ne repose que sur la relecture est une décision qui sera annulée par méga
 
 ### 17.1 Déploiement
 
-Le bundle est un artefact statique déposé sur le bucket `frontend` et servi par CloudFront
-(`V2-LLD-001`, `V2-LLD-006 §7.3`). Le pipeline relève de `V2-LLD-008`. Deux règles concernent
-directement ce LLD :
+Le bundle est un artefact statique déposé sur le bucket `frontend` (`V2-LLD-006 §7.3`) et servi par
+CloudFront — dont la propriété reste à attribuer (§1.4). Le pipeline relève de `V2-LLD-008`. Deux
+règles concernent directement ce LLD :
 
 - **l'`index.html` et le fichier de configuration d'exécution ne sont pas mis en cache
   agressivement**, sinon un changement de configuration met un temps indéterminé à s'appliquer

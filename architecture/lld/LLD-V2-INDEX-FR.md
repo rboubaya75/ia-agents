@@ -195,7 +195,7 @@ Réalisé en `V2-LLD-010` v0.1. Trois décisions structurent le document. **Le t
 
 Sur issue inconnue — coupure avant le premier événement, rattachements épuisés, confirmation sans réponse — le client **relit l'état, il ne rejoue jamais le geste**, transposition côté navigateur de la règle que `V2-LLD-004 §8.4` applique côté serveur.
 
-Ce LLD relève trois écarts de corpus qu'il ne corrige pas lui-même : `V2-ADR-011` attribue au protocole SSE la reconnexion automatique, qui est une propriété de l'API `EventSource` inutilisable ici (bloquant) ; son jeu d'événements ne comporte aucun événement de commande, alors que `V2-ADR-014` exige que le résumé soit transmis dans le flux ; et le stockage du jeton dans le navigateur n'est arbitré par aucun document, la V1 héritant du défaut `localStorage` de sa bibliothèque d'authentification.
+Ce LLD relève trois écarts de corpus. Le premier était bloquant et est **corrigé dans le même lot** : `V2-ADR-011` prêtait au protocole SSE des propriétés de l'API `EventSource` — la reconnexion automatique, mais aussi le `Browser (EventSource)` de son diagramme de décision et la formulation de son mécanisme d'annulation. L'ADR ne préjuge plus du client ; sa décision de transport réseau, REST API en mode `STREAM`, est inchangée puisqu'elle n'en a jamais dépendu. Le deuxième attend une correction dans `V2-LLD-001` : le jeu d'événements SSE ne comporte aucun événement de commande, alors que `V2-ADR-014` exige que le résumé soit transmis dans le flux. Le troisième est tranché ici — le stockage du jeton dans le navigateur n'était arbitré par aucun document, la V1 héritant du défaut `localStorage` de sa bibliothèque d'authentification.
 
 ## 6. Ordre de production recommandé
 
