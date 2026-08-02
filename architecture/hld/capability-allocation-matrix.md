@@ -1,9 +1,10 @@
 # Capability Allocation Matrix — Secure AgentCore V2
 
-- **Version :** 0.2
+- **Version :** 0.3
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Décision de référence :** [`V2-ADR-002`](../adr/V2-ADR-002-fastapi-agentcore-responsibilities.md) — principes P-01 à P-05
-- **Amendements :** [`V2-ADR-014`](../adr/V2-ADR-014-confirmation-commande-signee.md) — Domaines 5 et 7
+- **Amendements :** [`V2-ADR-014`](../adr/V2-ADR-014-confirmation-commande-signee.md) — Domaines 5 et 7 ;
+  [`V2-ADR-020`](../adr/V2-ADR-020-identite-transport-ancrage-confiance.md) — Domaine 1
 - **Contrat associé :** [`runtime-contract.md`](runtime-contract.md)
 - **Statut :** Draft
 
@@ -31,12 +32,8 @@ constitue un amendement à cet ADR.
 | User Authentication | Cognito | API Gateway |
 | MFA | Cognito | Utilisateur |
 | Identity Federation | Cognito | API Gateway |
-| JWT Signature Validation | Cognito Authorizer | API Gateway |
-| JWT Expiration Validation | Cognito Authorizer | API Gateway |
-| JWT Audience Validation | Cognito Authorizer | API Gateway |
-| JWT Issuer Validation | Cognito Authorizer | API Gateway |
-| Claims Extraction | API Gateway | FastAPI |
-| Claims Propagation | API Gateway | FastAPI |
+| Unauthenticated Traffic Rejection | Cognito Authorizer | API Gateway |
+| Identity Establishment (JWT/JWKS) | FastAPI | — |
 | Business Authorization (RBAC/ABAC) | FastAPI | AgentCore Runtime |
 | Actor Identity Resolution | FastAPI | AgentCore Runtime |
 | Tenant Resolution | FastAPI | AgentCore Runtime |
@@ -46,12 +43,26 @@ revendications sensibles (actorId, tenantId, rôles) sont résolues par FastAPI 
 la `trustedIdentity` du contrat interne (voir [`runtime-contract.md`](runtime-contract.md)).
 AgentCore Runtime ne reçoit jamais de JWT.
 
-**Claims Extraction vs Claims Propagation :** Extraction désigne le parsing du JWT validé et la
-lecture des claims Cognito (`sub`, `custom:tenantId`, rôles) par API Gateway. Propagation désigne
-le forwarding de ces claims vers FastAPI via des en-têtes HTTP dédiés injectés côté serveur
-(distincts de l'en-tête `Authorization`), jamais dans le corps de la requête. FastAPI ne fait donc
-jamais confiance à un claim porté par le payload applicatif — seuls les en-têtes injectés par API
-Gateway sont une source valide (P-03). Le format exact des en-têtes est défini en LLD-005.
+**Ancrage d'identité — décision `V2-ADR-020` :** Les deux capacités ci-dessus sont distinctes et
+ont chacune un propriétaire unique (P-01) ; elles ne sont pas deux implémentations d'un même
+contrôle.
+
+`Unauthenticated Traffic Rejection` est ce que l'authorizer Cognito apporte au système : il
+rejette le trafic non authentifié — par vérification de signature, d'expiration, d'audience et
+d'émetteur — et **ne propage aucun claim** au-delà.
+
+`Identity Establishment` est ce que FastAPI apporte : l'identité n'est pas ce que la passerelle
+affirme, mais ce que FastAPI vérifie, en validant elle-même la signature du **jeton d'accès**
+contre le **JWKS Cognito**. FastAPI ne lit aucun en-tête d'identité, quel qu'en soit le nom — les
+familles `X-Amzn-Oidc-*` et `X-Claims-*` ne sont ni lues ni évaluées. L'`actorId` est le claim
+`sub` du jeton vérifié, transmis tel quel à `trustedIdentity` ; le `tenantId` est résolu par le
+registre serveur indexé par `sub`, sans claim personnalisé (P-03 — `V2-ADR-020`,
+`V2-LLD-005 §3`). FastAPI ne fait donc jamais confiance à un claim porté par le payload
+applicatif.
+
+La conservation des deux capacités est la défense en profondeur de la CAM Domaine 10 : la seconde
+ne suppose pas que la première a filtré, et la preuve `V2-LLD-005 §16` S2 l'exerce **authorizer
+désactivé**.
 
 **LLD de référence :** V2-LLD-005 (identité, sécurité et conformité).
 
@@ -276,7 +287,7 @@ Elles constituent des violations de gouvernance bloquantes en revue de code.
 
 | Composant indisponible | Comportement attendu | Capacités impactées (CAM) |
 |---|---|---|
-| API Gateway | Aucune requête n'atteint FastAPI ; échec au niveau CloudFront/client, aucun état applicatif partiel | Domaine 1 — Claims Extraction, Claims Propagation ; Domaine 2 — Rate Limiting Configuration |
+| API Gateway | Aucune requête n'atteint FastAPI ; échec au niveau CloudFront/client, aucun état applicatif partiel | Domaine 1 — Unauthenticated Traffic Rejection ; Domaine 2 — Rate Limiting Configuration |
 | RAG (S3 Vectors) | Réponse sans retrieval pour les parcours explicitement autorisés (`retrievalContext.status = degraded`) | Domaine 4 — Retrieval Pipeline, Context Construction |
 | AgentCore Memory | Poursuite sans mémoire durable | Domaine 6 — tous |
 | Gateway MCP | Réponse sans mutation, erreur explicite pour les actions requises | Domaine 7 — tous |

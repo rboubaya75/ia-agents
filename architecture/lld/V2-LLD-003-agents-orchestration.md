@@ -1,6 +1,6 @@
 # V2-LLD-003 — Agents et orchestration
 
-- **Version :** 0.5
+- **Version :** 0.6
 - **Statut :** Draft (propositions — en attente de revue)
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md` (§10)
@@ -10,6 +10,17 @@
   `V2-ADR-012`
 - **Gate :** V2-G2
 
+> **Révision v0.6 (alignement sur `V2-ADR-020` et `V2-LLD-005`) :** `TrustedIdentity` revient aux
+> deux champs de `runtime-contract.md` §2. `roles`/`scopes`, ajoutés en v0.3, sont **retirés** : la
+> CAM Domaine 1 attribue `Business Authorization` à FastAPI et l'interdit à Runtime, et
+> `V2-LLD-005 §3.6` en tire la conséquence — un composant qui reçoit des rôles finit par les
+> évaluer. Le filtre d'exposition (§6.2) consomme la `tool_allowlist` résolue par FastAPI, qui est
+> le **résultat** de la décision d'autorisation et non ses intrants ; le filtre ne perd aucune
+> capacité. `actor_id` cesse d'être décrit comme un condensat : c'est le claim `sub` du jeton
+> d'accès vérifié, transmis tel quel (`V2-LLD-005 §3.1`), le hachage produisant `subjectId` qui ne
+> franchit pas ce contrat. Namespace Memory (§2.5) : `isolation_hash` (SHA-256 complet) remplace
+> `hash`, la troncature à 48 bits étant réservée aux journaux (`V2-LLD-005 §3.2`).
+>
 > **Révision v0.5 (alignement sur `V2-ADR-011` et `V2-ADR-012` acceptés) :** les six marqueurs
 > `⚠ ADR MANQUANT` sont levés. Streaming (`V2-ADR-011`) — le maillon faible n'était pas Runtime mais
 > l'ingress : Runtime diffuse nativement, le transport exige REST API en mode `STREAM` et le mode
@@ -174,7 +185,7 @@ agents/
 ├── domain/
 │   ├── orchestrator.py       # orchestrateur principal (instancie l'adapter, applique budgets)
 │   ├── budget_guard.py       # vérification et propagation des budgets emboîtés
-│   ├── tool_allowlist.py     # validation de la tool allowlist par tenant/rôle
+│   ├── tool_allowlist.py     # validation de la tool allowlist du parcours (AgentConfig)
 │   ├── prompt_registry.py    # chargement et versionnement des prompts système
 │   └── context_builder.py   # assemblage du contexte agent (identité + retrieval + memory policy)
 │
@@ -290,7 +301,7 @@ qui relève du Domaine 5 (comportement agentique).
 |---|---|
 | **Quand lire ?** | Une seule lecture par invocation, **avant le premier tour**, pour hydrater le contexte (préférences + résumé conversationnel). Pas de relecture par tour (coût tokens + latence). |
 | **Quand écrire ?** | Une seule écriture par invocation, **après le dernier tour réussi**, avec le résumé/préférences mis à jour. Aucune écriture si l'invocation échoue avant production d'un `AgentResult` valide. |
-| **Namespace** | Dérivé de `trustedIdentity` : `namespace = hash(tenantId + "#" + actorId)`. Formule exacte et politique alignées sur `V2-LLD-005`/`V2-LLD-006`. Jamais dérivé d'un claim brut. |
+| **Namespace** | Dérivé de `trustedIdentity` : `namespace = isolation_hash(tenantId + "#" + actorId)` — SHA-256 complet (64 hex), formule et nom définis en `V2-LLD-005 §3.3`. `safe_hash` (48 bits) est réservé aux journaux ; une collision de namespace est une violation d'isolation, pas une ambiguïté de log. Jamais dérivé d'un claim brut. |
 | **Confiance du contenu** | Le contenu Memory (préférences saisies par l'utilisateur, résumés dérivés de conversations) est traité comme **donnée non fiable** au même titre que `retrievalContext` : le prompt système interdit d'exécuter une instruction qui y figurerait. |
 | **Comptage tokens** | Les tokens injectés depuis Memory dans le prompt final **comptent** dans `agent.tokens_used` et dans le budget `maxTokens` (§5.2). |
 | **Indisponibilité** | Si Memory est indisponible en lecture, l'invocation continue sans contexte mémorisé et `AgentResult.degraded = true` (voir §8.1). Une écriture échouée est journalisée et retentée hors chemin critique, sans casser la réponse. |
@@ -356,16 +367,22 @@ class AgentConfig:
     fallback_invocation_id: Optional[str]   # repli à quota distinct (V2-ADR-012, §5.4).
                                 # None = repli non configuré : la séquence §5.4 saute l'étape 2.
     prompt_version: str         # ex. "v1" (chargé depuis PromptRegistry)
-    tool_allowlist: list[str]   # noms des tools MCP autorisés pour ce parcours
+    tool_allowlist: list[str]   # noms des tools MCP exposables pour ce parcours,
+                                # résolus côté FastAPI à partir des rôles (V2-LLD-005 §4.7) :
+                                # Runtime reçoit le résultat de la décision, pas les rôles
 
 @dataclass(frozen=True)
 class TrustedIdentity:
-    actor_id: str               # hash(sub Cognito) — jamais le sub brut
-    tenant_id: str              # résolu côté serveur FastAPI
-    roles: tuple[str, ...]      # rôles résolus côté serveur (ADR-006) — tuple = immuable
-    scopes: tuple[str, ...]     # scopes autorisés (ADR-006)
-    # roles/scopes permettent au filtre d'exposition tool (§6) de dépendre du rôle ;
-    # ils ne remplacent pas l'autorisation MCP Gateway (P-01)
+    actor_id: str               # claim sub du jeton d'accès vérifié, tel quel
+                                # (V2-LLD-005 §3.1) — le hachage produit subjectId,
+                                # destiné aux journaux, et ne franchit pas ce contrat
+    tenant_id: str              # résolu côté serveur par le registre (V2-LLD-005 §3.4)
+    # Deux champs, et deux seulement — conforme à runtime-contract.md §2.
+    # roles/scopes ne franchissent PAS cette frontière (V2-LLD-005 §3.6) : la CAM
+    # Domaine 1 attribue Business Authorization à FastAPI et l'interdit à Runtime ;
+    # un composant qui reçoit des rôles finit par les évaluer. La décision est prise
+    # avant l'invocation, et ce qui traverse est son résultat — la tool_allowlist
+    # résolue de AgentConfig (§3.2, §6.2) — jamais ses intrants.
 
 @dataclass(frozen=True)
 class OperationContext:
@@ -809,6 +826,8 @@ class ToolExposureFilter:
     Filtre d'exposition (P-04) : restreint le catalogue de tools présenté au modèle
     pour un parcours donné. N'est PAS l'autorisation d'exécution (propriété MCP Gateway).
     La liste est injectée depuis AgentConfig, jamais construite par le modèle.
+    Elle est résolue côté FastAPI à partir des rôles (V2-LLD-005 §4.7) : ce filtre
+    consomme le résultat d'une décision d'autorisation, il n'en prend aucune.
     """
 
     def check(self, tool_name: str) -> None:

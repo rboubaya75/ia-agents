@@ -353,15 +353,17 @@ Le principe V1 reste la baseline : l’acteur provient d’un claim Cognito vali
 ### 7.5 Diagramme des flux d'identité
 
 ```text
-JWT Cognito (id_token)
-        │  Cognito Authorizer : signature, expiration, audience, issuer
+JWT Cognito (access_token)
+        │  Cognito Authorizer : rejette le trafic non authentifié
+        │  (signature, expiration, audience, issuer) — ne propage aucun claim
         ▼
-Claims (sub, custom:tenantId, rôles)
-        │  API Gateway : extraction, puis propagation par en-têtes serveur
-        │  dédiés (jamais dans le corps de la requête, jamais l'en-tête
-        │  Authorization au-delà de ce point)
+Authorization transmis à FastAPI, et à FastAPI seulement
+        │  aucun en-tête d'identité n'est lu, quel qu'en soit son nom
         ▼
-FastAPI : Actor Identity Resolution + Tenant Resolution
+FastAPI : vérifie elle-même la signature contre le JWKS Cognito
+        │  actorId = claim sub du jeton vérifié, tel quel
+        │  tenantId, rôles et accountStatus résolus par le registre serveur
+        │  indexé par sub — aucun claim personnalisé (V2-LLD-005 §3.4)
         │  + Business Authorization (RBAC/ABAC)
         ▼
 trustedIdentity { actorId, tenantId }
