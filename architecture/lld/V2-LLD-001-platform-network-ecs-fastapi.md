@@ -606,9 +606,8 @@ FastAPI vérifie le token à chaque requête, sur les clés publiques du JWKS Co
 | `iss` | comparé à la valeur de configuration `cognito_issuer` | différent, absent |
 | `aud` | comparé à la valeur de configuration `cognito_app_client_id` | différent, absent |
 | `exp` / `nbf` | horodatage courant, tolérance d'horloge 60 s | expiré, pas encore valide |
-| `token_use` | doit valoir `id` | absent ou différent |
+| `token_use` | doit valoir `access` | absent ou différent |
 | `sub` | présent et non vide | absent |
-| `custom:tenantId` | présent — **entrée** de la résolution serveur du tenant | absent |
 
 `iss` et `aud` sont **comparés à des valeurs de configuration**, jamais seulement constatés présents :
 un token correctement signé par un autre pool ou destiné à un autre client applicatif est un token
@@ -620,9 +619,10 @@ règle d'écrasement à énoncer ni d'occurrence multiple à arbitrer : un en-t�
 écarté, il n'est jamais consulté. C'est cette absence de lecture qui est vérifiée en preuve (§15),
 et non le bon fonctionnement d'un filtre.
 
-Le `sub` devient `actorId` après hachage ; `tenantId` est **résolu côté serveur** à partir du claim
-`custom:tenantId` et d'un registre, jamais recopié tel quel — le claim est une entrée de la
-résolution, pas son résultat (`V2-ADR-006`). Un `tenantId` présent dans le corps de la requête reste
+Le `sub` est l'`actorId`, transmis tel quel à `trustedIdentity` — le hachage produit `subjectId`
+(`safe_hash(actorId)`), pas `actorId`. Le `tenantId` est **résolu côté serveur** à partir de `sub`
+et du registre d'autorisation (`V2-ADR-006`, `V2-LLD-005 §3.4`), sans claim personnalisé. Aucun
+claim `custom:tenantId` n'est requis ni lu. Un `tenantId` présent dans le corps de la requête reste
 sans effet.
 
 **Bibliothèque.** `PyJWT` avec `cryptography`, via un client JWKS avec cache (§7.1.4). La

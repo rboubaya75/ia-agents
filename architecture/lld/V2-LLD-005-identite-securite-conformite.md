@@ -17,8 +17,10 @@
 
 > **Trois écarts de corpus sont relevés et tranchés ici** (§1.7). Ils ne sont pas des précisions de
 > rédaction : chacun porte sur une valeur qui gouverne l'isolation. Les corrections qu'ils appellent
-> dans `capability-allocation-matrix.md`, `V2-LLD-001 §7.1.3` et `V2-LLD-003 §5.3` sont nommées et
-> ne sont pas appliquées par ce LLD.
+> dans `HLD §7.5`, `capability-allocation-matrix.md`, `V2-LLD-001 §7.1.3` et `V2-LLD-003 §2.5` sont
+> nommées ici et **appliquées dans le même lot de livraison**, par des commits distincts de celui
+> qui porte ce LLD — la décision et sa propagation restent séparées et relisibles l'une sans
+> l'autre.
 
 ## 1. Métadonnées
 
@@ -138,9 +140,22 @@ Trois écarts sont apparus à la rédaction. Chacun porte sur une valeur qui gou
 aucun n'est corrigé par ce document — les corrections sont nommées et relèvent des documents
 concernés.
 
-#### Écart 1 — la CAM décrit un mécanisme d'identité annulé par `V2-ADR-020`, et délègue ici son format
+#### Écart 1 — la CAM **et le HLD** décrivent un mécanisme d'identité annulé par `V2-ADR-020`
 
-`capability-allocation-matrix.md` Domaine 1 porte encore :
+Deux documents portent le mécanisme rejeté, et le second prime sur le premier.
+
+**`HLD-Secure-AgentCore-V2-FR.md §7.5`** — le diagramme des flux d'identité porte l'option A au
+complet : `JWT Cognito (id_token)`, puis `Claims (sub, custom:tenantId, rôles)`, puis
+« API Gateway : extraction, puis propagation par en-têtes serveur dédiés ». Les trois éléments que
+`V2-ADR-020` a écartés — le jeton d'identité, le claim personnalisé et la propagation par
+en-têtes — y figurent dans le document de référence de l'architecture.
+
+**Correction attendue dans `HLD §7.5` :** le diagramme part du **jeton d'accès** ; l'authorizer
+rejette le non-authentifié sans propager de claim ; `Authorization` est transmis à FastAPI et à
+FastAPI seulement ; FastAPI vérifie elle-même la signature contre le JWKS et résout `tenantId` par
+le registre indexé par `sub`.
+
+**`capability-allocation-matrix.md` Domaine 1** porte encore :
 
 > « Propagation désigne le forwarding de ces claims vers FastAPI via des en-têtes HTTP dédiés
 > injectés côté serveur (distincts de l'en-tête `Authorization`) […] seuls les en-têtes injectés
@@ -215,8 +230,9 @@ diagnostic, c'est une violation de `V2-ADR-006`.
 hexadécimaux). La troncature reste réservée aux journaux et aux métriques. Deux fonctions distinctes,
 deux usages distincts, et le nom de chacune le dit.
 
-**Correction attendue dans `V2-LLD-003 §5.3` :** remplacer `hash(...)` par la formule nommée de §3.3
-de ce LLD.
+**Correction attendue dans `V2-LLD-003 §2.5` :** remplacer `hash(...)` par la formule nommée de §3.3
+de ce LLD. (La formule est dans le tableau Memory de §2.5, pas dans §5.3 qui porte les budgets
+d'invocation.)
 
 ---
 
@@ -442,6 +458,11 @@ identité, ce LLD le fixe :
 capacité d'en faire quelque chose — et un composant qui reçoit des rôles finit par les évaluer. La
 décision d'autorisation est prise avant l'invocation ; ce qui traverse la frontière est son
 résultat, pas ses intrants.
+
+**Ce que consomme le filtre d'exposition des tools.** `V2-LLD-003 §6.2` restreint le catalogue de
+tools présenté au modèle. Ce filtre consomme la `tool_allowlist` d'`AgentConfig` — **résolue par
+FastAPI à partir des rôles** (§4.7) — et non les rôles eux-mêmes. Il perd ainsi zéro capacité tout
+en restant du bon côté de la frontière : il applique une décision, il n'en prend aucune.
 
 Les champs interdits de `runtime-contract.md` §4 (`cognitoToken`, `authorizationHeader`,
 `actorIdRaw`, `tenantIdRaw`, …) sont reconduits sans modification, et le test de contrat qui les
@@ -1557,8 +1578,8 @@ structurel (`V2-LLD-001 §16.6`).
 
 ## 18. Critères de sortie
 
-- [ ] Les trois écarts de §1.7 sont corrigés dans `capability-allocation-matrix.md`,
-      `V2-LLD-001 §7.1.3` et `V2-LLD-003 §5.3`
+- [x] Les trois écarts de §1.7 sont corrigés dans `HLD §7.5`, `capability-allocation-matrix.md`
+      Domaine 1, `V2-LLD-001 §7.1.3` et `V2-LLD-003 §2.5` — appliqué dans le même lot
 - [ ] P1 (attachement WAF) vérifiée nominativement sur le service — ou §5.2 démontré suffisant sans elle
 - [ ] P2 (chemin unique) réalisée et prouvée par S8 **et** S9
 - [ ] P3 (journal d'audit indépendant) satisfaite — sans quoi la restauration reste interdite
