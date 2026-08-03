@@ -28,6 +28,15 @@ variable "alb_dns_name" {
   description = "Nom DNS de l'ALB interne, cible de l'integration privee."
 }
 
+# Le Host attendu par les taches (`uri`) et la cible reellement joignable par le VPC
+# Link v2 (`integration_target`) sont deux informations distinctes depuis que l'API
+# Gateway REST route au travers d'un VPC Link v2 : l'ARN designe l'ALB au niveau
+# reseau, le DNS reste la valeur d'en-tete Host vue par l'integration HTTP_PROXY.
+variable "alb_arn" {
+  type        = string
+  description = "ARN de l'ALB interne. Requis par `integration_target` pour toute integration REST API adossee a un VPC Link v2 (V2-LLD-001 §7)."
+}
+
 variable "alb_listener_scheme" {
   type        = string
   description = "Schema de l'URI d'integration : https en nominal, http sur le repli en clair du socle."

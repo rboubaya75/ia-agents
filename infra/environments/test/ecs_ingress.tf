@@ -27,6 +27,7 @@ module "api_gateway_v2_ingress" {
   vpc_link_subnet_ids         = module.vpc_ecs_platform[0].private_subnet_ids
   vpc_link_security_group_ids = [module.vpc_ecs_platform[0].security_group_ids.vpc_link]
   alb_dns_name                = module.vpc_ecs_platform[0].alb_dns_name
+  alb_arn                     = module.vpc_ecs_platform[0].alb_arn
   alb_listener_scheme         = module.vpc_ecs_platform[0].alb_listener_scheme
   alb_listener_port           = module.vpc_ecs_platform[0].alb_listener_port
 

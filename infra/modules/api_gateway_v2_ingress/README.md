@@ -68,7 +68,7 @@ intra-VPC, que les Security Groups de §6 bornent déjà.
 | Variable | Rôle |
 |---|---|
 | `vpc_link_subnet_ids`, `vpc_link_security_group_ids` | ENIs du VPC Link — les sous-réseaux privés et `sg-vpc-link` du socle |
-| `alb_dns_name`, `alb_listener_scheme`, `alb_listener_port` | Cible de l'intégration privée, fournis par les sorties du socle |
+| `alb_dns_name`, `alb_arn`, `alb_listener_scheme`, `alb_listener_port` | Cible de l'intégration privée, fournis par les sorties du socle. `alb_arn` alimente `integration_target`, exigé par PutIntegration dès que `connection_id` référence un VPC Link v2 |
 | `cognito_user_pool_arn` | Pool adossant l'authorizer (§7.1) |
 | `conversation_response_transfer_mode` | `STREAM` par défaut ; `BUFFERED` est le repli de la précondition 3 |
 | `origin_verify_secret` | Valeur partagée avec CloudFront, 32 caractères minimum |

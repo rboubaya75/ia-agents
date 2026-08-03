@@ -188,6 +188,12 @@ resource "aws_api_gateway_integration" "this" {
   connection_type = "VPC_LINK"
   connection_id   = aws_apigatewayv2_vpc_link.this.id
 
+  # Le VPC Link v2 ne porte pas seul la cible : PutIntegration exige `integration_target`
+  # des lors que `connection_id` reference un VPC Link v2 (l'ARN de l'ALB), faute de quoi
+  # l'API renvoie « IntegrationTarget is required for VpcLinkV2 ». `uri` reste la valeur
+  # d'en-tete Host, elle ne route plus la requete.
+  integration_target = var.alb_arn
+
   # §7.0 — réglage par méthode et non par API.
   response_transfer_mode = each.value.transfer_mode
 
