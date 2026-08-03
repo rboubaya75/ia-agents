@@ -237,3 +237,40 @@ output "fastapi_ecr_repository_arn" {
   description = "ARN du depot ECR du service fastapi."
   value       = module.fastapi_container_repository.repository_arn
 }
+
+# ---------------------------------------------------------------------------
+# Ingress V2 — V2-LLD-001 §7.
+# Toutes les sorties valent null tant que enable_ecs_ingress est faux.
+# ---------------------------------------------------------------------------
+
+output "ecs_ingress_rest_api_id" {
+  description = "Identifiant du REST API V2."
+  value       = try(module.api_gateway_v2_ingress[0].rest_api_id, null)
+}
+
+output "ecs_ingress_stage_arn" {
+  description = "ARN du stage de la passerelle V2, cible de l'association WAF."
+  value       = try(module.api_gateway_v2_ingress[0].stage_arn, null)
+}
+
+output "ecs_ingress_invoke_url" {
+  description = "URL d'invocation du stage V2. Refuse tout appel qui ne passe pas par CloudFront."
+  value       = try(module.api_gateway_v2_ingress[0].invoke_url, null)
+}
+
+output "ecs_ingress_vpc_link_id" {
+  description = "Identifiant du VPC Link V2 vers l'ALB interne."
+  value       = try(module.api_gateway_v2_ingress[0].vpc_link_id, null)
+}
+
+output "ecs_ingress_access_log_group_name" {
+  description = "Groupe de journaux d'acces du stage V2."
+  value       = try(module.api_gateway_v2_ingress[0].access_log_group_name, null)
+}
+
+# Le front V2 est servi et appele depuis cette meme origine : c'est la valeur a placer
+# dans VITE_API_BASE_URL, et elle rend tout preflight CORS sans objet.
+output "ecs_ingress_public_base_url" {
+  description = "Origine publique du chemin V2, CloudFront. Vide tant que l'ingress n'est pas provisionne."
+  value       = var.enable_ecs_ingress && var.enable_ecs_platform ? "https://${module.frontend_static_site.cloudfront_domain_name}" : null
+}

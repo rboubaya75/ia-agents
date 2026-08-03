@@ -49,9 +49,7 @@ resource "aws_lb_target_group" "fastapi" {
   })
 }
 
-# The listener is HTTPS only (§7). It is created once an ACM certificate is supplied;
-# without one there is nothing to terminate TLS with, and an HTTP listener would
-# silently downgrade the VPC Link leg.
+# The listener is HTTPS whenever an ACM certificate is supplied (§7).
 resource "aws_lb_listener" "https" {
   count = var.alb_certificate_arn == "" ? 0 : 1
 
@@ -60,6 +58,26 @@ resource "aws_lb_listener" "https" {
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   certificate_arn   = var.alb_certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.fastapi.arn
+  }
+
+  tags = var.common_tags
+}
+
+# Repli en clair, sur activation explicite seulement — le motif est exposé sur
+# `alb_plaintext_listener_enabled` dans variables.tf. Il dégrade le tronçon VPC Link,
+# et c'est pourquoi l'absence de certificat ne l'implique jamais : sans l'un ni l'autre,
+# l'ALB reste sans listener et le déploiement est visiblement incomplet plutôt que
+# silencieusement affaibli.
+resource "aws_lb_listener" "http" {
+  count = var.alb_plaintext_listener_enabled ? 1 : 0
+
+  load_balancer_arn = aws_lb.internal.arn
+  port              = 80
+  protocol          = "HTTP"
 
   default_action {
     type             = "forward"

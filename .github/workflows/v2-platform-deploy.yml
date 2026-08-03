@@ -33,6 +33,7 @@ on:
           - registry-only
           - image-only
           - platform-only
+          - frontend-only
           - full
         default: full
       image_tag:
@@ -40,6 +41,11 @@ on:
         required: false
         type: string
         default: ""
+      assume_plaintext_alb_listener:
+        description: "Ecart assume a V2-LLD-001 §7 : listener HTTP 80 sur l'ALB interne, faute de certificat ACM pour son nom genere. Le troncon VPC Link vers ALB circule alors en clair dans les sous-reseaux prives. Test uniquement."
+        required: false
+        type: boolean
+        default: false
       confirm_deploy:
         description: "Requis pour executer la phase selectionnee"
         required: true
@@ -522,6 +528,7 @@ jobs:
           IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
           COGNITO_ISSUER: ${{ steps.preflight.outputs.cognito_issuer }}
           COGNITO_APP_CLIENT_ID: ${{ steps.preflight.outputs.cognito_app_client_id }}
+          PLAINTEXT_LISTENER: ${{ inputs.assume_plaintext_alb_listener }}
         working-directory: ${{ env.STACK_PATH }}
         run: |
           agentcore_args=()
@@ -548,11 +555,16 @@ jobs:
             echo "Plan de controle V1 preserve avec le tag: ${v1_tag}"
           fi
 
+          # Le socle et son ingress sont planifies ensemble : la passerelle vise l'ALB
+          # du meme apply, et Terraform ordonne seul. Les separer demanderait deux
+          # applies dont le premier laisserait un service demarre et injoignable.
           set +e
           terraform plan \
             -detailed-exitcode \
             -lock-timeout=60s \
             -var="enable_ecs_platform=true" \
+            -var="enable_ecs_ingress=true" \
+            -var="alb_plaintext_listener_enabled=${PLAINTEXT_LISTENER}" \
             -var="fastapi_image_tag=${IMAGE_TAG}" \
             -var="cognito_issuer=${COGNITO_ISSUER}" \
             -var="cognito_app_client_id=${COGNITO_APP_CLIENT_ID}" \
@@ -574,27 +586,58 @@ jobs:
           terraform show -no-color tfplan-v2-platform > tfplan-v2-platform.txt
           terraform show -json tfplan-v2-platform > tfplan-v2-platform.json
 
-      # alb.tf ne cree le listener HTTPS que si un certificat ACM est fourni. Sans lui
-      # les taches demarrent, s'enregistrent dans le target group, et rien ne peut les
-      # atteindre. Le constat est tire du plan et non des tfvars : c'est le plan qui
-      # decide, et lui seul integre les valeurs venues de toutes les sources.
-      - name: Report ALB listener coverage
+      # Le chemin navigateur n'existe que si chacun de ses maillons est planifie. Le
+      # constat est tire du plan et non des tfvars : lui seul integre les valeurs venues
+      # de toutes les sources, et un maillon manquant produit un service demarre mais
+      # injoignable — l'exact symptome qu'un deploiement « reussi » masquerait.
+      - name: Report ingress path coverage
         working-directory: ${{ env.STACK_PATH }}
         run: |
-          listeners="$(jq '[.planned_values | .. | objects
-            | select(.type? == "aws_lb_listener")] | length' tfplan-v2-platform.json)"
+          count_of() {
+            jq --arg t "$1" '[.planned_values | .. | objects
+              | select(.type? == $t)] | length' tfplan-v2-platform.json
+          }
+
+          listeners="$(count_of aws_lb_listener)"
+          vpc_links="$(count_of aws_apigatewayv2_vpc_link)"
+          rest_apis="$(count_of aws_api_gateway_rest_api)"
+          policies="$(count_of aws_api_gateway_rest_api_policy)"
+
+          {
+            echo "### Chemin d'ingress planifie"
+            echo ""
+            echo "| Maillon | Planifie |"
+            echo "| --- | --- |"
+            echo "| Listener ALB | ${listeners} |"
+            echo "| VPC Link V2 | ${vpc_links} |"
+            echo "| REST API | ${rest_apis} |"
+            echo "| Politique de chemin unique | ${policies} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$listeners" = "0" ]; then
             {
-              echo "> **ALB sans listener.** \`alb_certificate_arn\` n'est pas renseigne :"
-              echo "> le listener HTTPS de V2-LLD-001 §7 n'est pas planifie. Le service"
-              echo "> demarrera, mais aucun chemin ne mene aux taches. Le VPC Link et la"
-              echo "> route API Gateway restent eux aussi a provisionner (§16.5,"
-              echo "> precondition 4)."
+              echo ""
+              echo "> **ALB sans listener.** Ni certificat ACM ni repli en clair assume :"
+              echo "> rien ne mene aux taches. Fournir \`alb_certificate_arn\`, ou relancer"
+              echo "> avec \`assume_plaintext_alb_listener\`."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "AVERTISSEMENT : aucun listener ALB n'est planifie."
-          else
-            echo "Listener HTTPS planifie."
+            echo "Aucun listener ALB n'est planifie : le chemin navigateur serait interrompu."
+            exit 1
+          fi
+
+          if [ "$vpc_links" = "0" ] || [ "$rest_apis" = "0" ]; then
+            echo "Le VPC Link ou le REST API manque au plan : enable_ecs_ingress n'a pas pris."
+            exit 1
+          fi
+
+          if [ "${{ inputs.assume_plaintext_alb_listener }}" = "true" ]; then
+            {
+              echo ""
+              echo "> **Ecart assume a V2-LLD-001 §7.** Le listener de l'ALB est en clair :"
+              echo "> le troncon VPC Link vers ALB circule en HTTP dans les sous-reseaux"
+              echo "> prives. TLS reste termine a CloudFront puis a API Gateway, et aucun"
+              echo "> trafic en clair ne sort du VPC."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # Le garde porte les cinq regles du socle V2 (V2-LLD-001 §16.6) en plus du
@@ -806,12 +849,176 @@ jobs:
             echo "| Cibles saines | ${healthy} |"
             echo "| ALB interne | \`${ALB_DNS_NAME}\` |"
             echo ""
-            echo "L'ALB est interne. Le chemin navigateur reste a provisionner :"
-            echo "VPC Link puis route API Gateway vers le target group ci-dessus"
-            echo "(V2-LLD-001 §8, precondition 4 de §16.5)."
+            echo "L'ALB est interne : il n'est joignable que par le VPC Link."
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$running" = "0" ]; then
             echo "Aucune tache en cours d'execution."
             exit 1
           fi
+
+  frontend-publish:
+    name: Publish V2 Frontend
+    needs: [deployment-request-gate, quality-gate, platform-verify]
+    runs-on: ubuntu-latest
+    if: |
+      !cancelled() &&
+      needs.quality-gate.result == 'success' &&
+      (needs.platform-verify.result == 'success' || needs.platform-verify.result == 'skipped') &&
+      (inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full')
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-frontend-publish
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Read delivery outputs
+        id: delivery
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform init
+          terraform output -json > outputs.json
+
+          base_url="$(jq -r '.ecs_ingress_public_base_url.value // ""' outputs.json)"
+          bucket="$(jq -r '.frontend_bucket_name.value // ""' outputs.json)"
+          distribution="$(jq -r '.cloudfront_distribution_id.value // ""' outputs.json)"
+          user_pool_id="$(jq -r '.cognito_user_pool_id.value // ""' outputs.json)"
+          client_id="$(jq -r '.cognito_web_client_id.value // ""' outputs.json)"
+
+          # Sans ingress, le front n'aurait aucune origine a appeler. Publier quand meme
+          # livrerait une interface qui echoue au premier message, ce qui est pire qu'un
+          # echec ici.
+          if [ -z "$base_url" ]; then
+            echo "L'ingress V2 n'est pas provisionne : aucune origine publique a servir au front."
+            echo "Executer d'abord ce workflow avec deploy_mode=platform-only ou full."
+            exit 1
+          fi
+
+          for name in bucket distribution user_pool_id client_id; do
+            if [ -z "${!name}" ]; then
+              echo "Sortie manquante pour la livraison du front : ${name}."
+              exit 1
+            fi
+          done
+
+          {
+            echo "base_url=${base_url}"
+            echo "bucket=${bucket}"
+            echo "distribution=${distribution}"
+            echo "user_pool_id=${user_pool_id}"
+            echo "client_id=${client_id}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Le front est servi par CloudFront et appelle /api/* sur cette meme origine. Meme
+      # origine des deux cotes : aucun preflight CORS, et le jeton ne franchit jamais de
+      # frontiere d'origine (V2-LLD-010 §15.1).
+      - name: Generate production environment
+        working-directory: frontend
+        env:
+          BASE_URL: ${{ steps.delivery.outputs.base_url }}
+          USER_POOL_ID: ${{ steps.delivery.outputs.user_pool_id }}
+          CLIENT_ID: ${{ steps.delivery.outputs.client_id }}
+        run: |
+          {
+            echo "VITE_COGNITO_USER_POOL_ID=${USER_POOL_ID}"
+            echo "VITE_COGNITO_CLIENT_ID=${CLIENT_ID}"
+            echo "VITE_COGNITO_REGION=${AWS_REGION}"
+            echo "VITE_API_BASE_URL=${BASE_URL}"
+          } > .env.production
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      # config.json porte les valeurs reglables sans reconstruction (V2-LLD-010 §15.1) :
+      # il est synchronise sans cache, sinon une correction de marge attendrait
+      # l'expiration de l'objet chez chaque client.
+      - name: Publish assets
+        env:
+          BUCKET: ${{ steps.delivery.outputs.bucket }}
+        working-directory: frontend
+        run: |
+          aws s3 sync dist/ "s3://${BUCKET}" --delete \
+            --exclude config.json --exclude index.html
+          aws s3 cp dist/index.html "s3://${BUCKET}/index.html" \
+            --cache-control "no-cache, no-store, must-revalidate"
+          if [ -f dist/config.json ]; then
+            aws s3 cp dist/config.json "s3://${BUCKET}/config.json" \
+              --cache-control "no-cache, no-store, must-revalidate"
+          fi
+
+      - name: Invalidate distribution
+        env:
+          DISTRIBUTION: ${{ steps.delivery.outputs.distribution }}
+        run: aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths "/*"
+
+      # Preuve minimale que le chemin complet repond. Sans jeton, la passerelle doit
+      # rejeter : un 200 signalerait un authorizer inoperant, et une erreur 5xx un
+      # maillon casse entre CloudFront et les taches.
+      - name: Verify the browser path answers
+        env:
+          BASE_URL: ${{ steps.delivery.outputs.base_url }}
+        run: |
+          root="$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/")"
+          if [ "$root" != "200" ]; then
+            echo "CloudFront ne sert pas le front : ${root}."
+            exit 1
+          fi
+
+          api="$(curl -s -o /dev/null -w '%{http_code}' \
+            -X POST "${BASE_URL}/api/v1/conversations/preuve/messages" \
+            -H 'Content-Type: application/json' \
+            --data '{"message":"preuve"}')"
+
+          {
+            echo "### Chemin navigateur"
+            echo ""
+            echo "| Appel | Code |"
+            echo "| --- | --- |"
+            echo "| \`GET /\` | ${root} |"
+            echo "| \`POST /api/v1/conversations/{id}/messages\` sans jeton | ${api} |"
+            echo ""
+            echo "Front servi sur ${BASE_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          case "$api" in
+            401|403)
+              echo "La passerelle rejette l'appel non authentifie : chemin complet operationnel."
+              ;;
+            200)
+              echo "La route conversationnelle repond 200 sans jeton : l'authorizer ne s'applique pas."
+              exit 1
+              ;;
+            *)
+              echo "Reponse inattendue de la route conversationnelle : ${api}."
+              echo "Un maillon du chemin CloudFront -> API Gateway -> VPC Link -> ALB est casse."
+              exit 1
+              ;;
+          esac

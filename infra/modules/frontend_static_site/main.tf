@@ -103,6 +103,67 @@ resource "aws_cloudfront_distribution" "frontend" {
     origin_id                = local.origin_id
   }
 
+  # L'iteration porte sur une cle et non sur l'objet : `api_origin` est sensible, et
+  # Terraform refuse une valeur sensible en `for_each`. Le corps du bloc lit la variable
+  # directement, ce qui preserve la marque de sensibilite la ou elle compte.
+  dynamic "origin" {
+    for_each = var.api_origin == null ? [] : ["api"]
+
+    content {
+      domain_name = var.api_origin.domain_name
+      origin_path = var.api_origin.origin_path
+      origin_id   = local.api_origin_id
+
+      custom_origin_config {
+        http_port                = 80
+        https_port               = 443
+        origin_protocol_policy   = "https-only"
+        origin_ssl_protocols     = ["TLSv1.2"]
+        origin_read_timeout      = 60
+        origin_keepalive_timeout = 60
+      }
+
+      # Le secret voyage de CloudFront à API Gateway uniquement. Le navigateur ne le voit
+      # jamais : c'est ce qui rend l'appel direct de la passerelle inexploitable.
+      custom_header {
+        name  = var.api_origin.verify_header_name
+        value = var.api_origin_verify_secret
+      }
+    }
+  }
+
+  # §7.2 — aucun cache et aucun tampon supplémentaire sur le chemin conversationnel. La
+  # précondition 5 de §16.5 demande de le vérifier par mesure et non par lecture : ces
+  # réglages sont nécessaires, ils ne suffisent pas à prouver que le flux est progressif.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.api_origin == null ? [] : ["api"]
+
+    content {
+      path_pattern           = "/api/*"
+      target_origin_id       = local.api_origin_id
+      viewer_protocol_policy = "https-only"
+      allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+      cached_methods         = ["GET", "HEAD"]
+      compress               = false
+
+      min_ttl     = 0
+      default_ttl = 0
+      max_ttl     = 0
+
+      forwarded_values {
+        query_string = true
+
+        # Authorization doit atteindre l'authorizer de la passerelle puis FastAPI. Sans
+        # cette ligne, CloudFront le retire et toute requête authentifiée devient anonyme.
+        headers = ["Authorization", "Content-Type", "Accept", "Last-Event-ID"]
+
+        cookies {
+          forward = "none"
+        }
+      }
+    }
+  }
+
   default_cache_behavior {
     target_origin_id           = local.origin_id
     viewer_protocol_policy     = "redirect-to-https"

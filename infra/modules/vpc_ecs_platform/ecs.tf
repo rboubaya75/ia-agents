@@ -119,7 +119,9 @@ resource "aws_ecs_service" "fastapi" {
     ignore_changes = [desired_count]
   }
 
-  depends_on = [aws_lb_listener.https]
+  # Les deux listeners sont mutuellement exclusifs ; la liste concatenee vaut donc
+  # toujours un element, et la tache n'est jamais enregistree avant qu'un chemin existe.
+  depends_on = [aws_lb_listener.https, aws_lb_listener.http]
 
   tags = var.common_tags
 }

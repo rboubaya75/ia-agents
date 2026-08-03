@@ -1,0 +1,272 @@
+# V2-LLD-001 §7 — chemin d'ingress V2 : REST API Regional -> VPC Link -> ALB interne.
+#
+# Le type d'API suit la décision de §7.0 : un seul REST API Regional pour toutes les
+# routes. Le motif n'est pas l'identité — `V2-ADR-020` rend le contrat d'identité
+# invariant au type d'API — mais l'attachement du WAF et le point d'application unique
+# de l'exigence de chemin unique (§7.4). Un HTTP API n'accepte ni web ACL au stage ni
+# politique de ressource, et laisserait la précondition 9 de §16.5 sans mécanisme
+# vérifiable au plan.
+
+locals {
+  api_name = "${var.name_prefix}-v2-api"
+
+  # §7 — l'intégration vise le listener de l'ALB par son nom DNS. Le VPC Link porte le
+  # trafic dans le VPC ; le nom n'est jamais résolu depuis l'internet.
+  alb_origin = "${var.alb_listener_scheme}://${var.alb_dns_name}:${var.alb_listener_port}"
+
+  # Les deux routes servies par le socle. §7.0 les nomme plutôt que de les laisser à une
+  # ligne générique, parce que `responseTransferMode` se règle par méthode : une route
+  # couverte par un `{proxy+}` n'aurait aucun réglage opposable au plan Terraform.
+  routes = {
+    messages = {
+      path_parts     = ["api", "v1", "conversations", "{conversation_id}", "messages"]
+      http_method    = "POST"
+      transfer_mode  = var.conversation_response_transfer_mode
+      request_params = { "method.request.path.conversation_id" = true }
+      integration_params = {
+        "integration.request.path.conversation_id" = "method.request.path.conversation_id"
+      }
+      uri = "${local.alb_origin}/api/v1/conversations/{conversation_id}/messages"
+    }
+    cancel = {
+      path_parts     = ["api", "v1", "operations", "{operation_id}", "cancel"]
+      http_method    = "POST"
+      transfer_mode  = "BUFFERED"
+      request_params = { "method.request.path.operation_id" = true }
+      integration_params = {
+        "integration.request.path.operation_id" = "method.request.path.operation_id"
+      }
+      uri = "${local.alb_origin}/api/v1/operations/{operation_id}/cancel"
+    }
+  }
+
+  # Les segments de chemin sont créés une seule fois et partagés : `api`, `api/v1` et la
+  # suite sont communs aux deux routes. La clé est le chemin complet, la valeur son
+  # parent, ce qui laisse Terraform ordonner la création sans `depends_on`.
+  path_segments = {
+    for path in distinct(flatten([
+      for route in local.routes : [
+        for index in range(length(route.path_parts)) :
+        join("/", slice(route.path_parts, 0, index + 1))
+      ]
+      ])) : path => {
+      part   = element(split("/", path), length(split("/", path)) - 1)
+      parent = length(split("/", path)) == 1 ? "" : join("/", slice(split("/", path), 0, length(split("/", path)) - 1))
+    }
+  }
+}
+
+resource "aws_api_gateway_rest_api" "this" {
+  name        = local.api_name
+  description = "Ingress V2 vers le service FastAPI sur ECS (V2-LLD-001 §7)."
+
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+
+  tags = var.common_tags
+}
+
+# §7 — VPC Link V2 : cible directe l'ALB, sans NLB intermédiaire. C'est la précondition
+# 4 de §16.5 ; son repli, VPC Link V1 devant un NLB, ajoute un composant, un saut réseau
+# et un coût que §14.4 n'a pas provisionnés — il n'est pas implémenté ici, précisément
+# pour qu'il reste une décision et non un glissement.
+resource "aws_apigatewayv2_vpc_link" "this" {
+  name               = "${var.name_prefix}-v2-link"
+  subnet_ids         = var.vpc_link_subnet_ids
+  security_group_ids = var.vpc_link_security_group_ids
+
+  tags = var.common_tags
+}
+
+resource "aws_api_gateway_resource" "this" {
+  for_each = local.path_segments
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = each.value.parent == "" ? aws_api_gateway_rest_api.this.root_resource_id : aws_api_gateway_resource.this[each.value.parent].id
+  path_part   = each.value.part
+}
+
+# §7.1 — l'authorizer rejette le non authentifié au bord. FastAPI revérifie la signature
+# par JWKS derrière : la passerelle ne remplace pas cette vérification, elle épargne au
+# socle le trafic anonyme.
+resource "aws_api_gateway_authorizer" "cognito" {
+  name          = "${var.name_prefix}-v2-cognito"
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  type          = "COGNITO_USER_POOLS"
+  provider_arns = [var.cognito_user_pool_arn]
+
+  # §7.1.2 — l'en-tête est transmis tel quel à l'intégration, jamais consommé ni
+  # retraduit en claims. C'est l'option A explicitement rejetée par V2-ADR-020.
+  identity_source = "method.request.header.Authorization"
+}
+
+resource "aws_api_gateway_method" "this" {
+  for_each = local.routes
+
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  resource_id   = aws_api_gateway_resource.this[join("/", each.value.path_parts)].id
+  http_method   = each.value.http_method
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito.id
+
+  request_parameters = each.value.request_params
+}
+
+resource "aws_api_gateway_integration" "this" {
+  for_each = local.routes
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = aws_api_gateway_resource.this[join("/", each.value.path_parts)].id
+  http_method = aws_api_gateway_method.this[each.key].http_method
+
+  type                    = "HTTP_PROXY"
+  integration_http_method = each.value.http_method
+  uri                     = each.value.uri
+
+  connection_type = "VPC_LINK"
+  connection_id   = aws_apigatewayv2_vpc_link.this.id
+
+  # §7.0 — réglage par méthode et non par API.
+  response_transfer_mode = each.value.transfer_mode
+
+  timeout_milliseconds = var.integration_timeout_milliseconds
+
+  request_parameters = each.value.integration_params
+}
+
+# §7.4, précondition 9 de §16.5 — mécanisme de chemin unique.
+#
+# Le filtre porte sur l'adresse source et non sur l'en-tête secret injecté par
+# CloudFront. Une politique de ressource API Gateway ne sait pas lire un en-tête
+# arbitraire : `aws:RequestHeader` n'existe pas parmi les clés de condition globales, et
+# une condition bâtie dessus ne serait pas « permissive à tort » — la clé étant absente,
+# un `StringNotEquals` vaudrait vrai à chaque requête et le `Deny` fermerait la
+# passerelle à tout le monde. Le seul mécanisme déclaratif disponible ici est la liste
+# de préfixes gérée `com.amazonaws.global.cloudfront.origin-facing`, qu'AWS maintient et
+# qui énumère les adresses par lesquelles CloudFront joint une origine.
+#
+# L'en-tête secret est conservé côté CloudFront comme second facteur : il n'est opposable
+# qu'à travers une règle WAF, donc seulement une fois la précondition 8 levée. Tant que
+# `web_acl_arn` est vide, c'est l'adresse source qui porte seule le contrôle.
+#
+# La politique établit la présence du mécanisme ; son efficacité se démontre par l'appel
+# direct de §15, pas par lecture du plan.
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
+data "aws_iam_policy_document" "single_path" {
+  statement {
+    sid       = "AllowInvokeThroughAnyCaller"
+    effect    = "Allow"
+    actions   = ["execute-api:Invoke"]
+    resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    sid       = "DenyWhenNotThroughCloudFront"
+    effect    = "Deny"
+    actions   = ["execute-api:Invoke"]
+    resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "NotIpAddress"
+      variable = "aws:SourceIp"
+      values   = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.entries[*].cidr
+    }
+  }
+}
+
+resource "aws_api_gateway_rest_api_policy" "single_path" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  policy      = data.aws_iam_policy_document.single_path.json
+}
+
+resource "aws_cloudwatch_log_group" "access" {
+  name              = "/aws/apigateway/${local.api_name}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.logs_kms_key_arn == "" ? null : var.logs_kms_key_arn
+
+  tags = var.common_tags
+}
+
+# Le redéploiement suit le contenu de l'API. Sans ce déclencheur, une modification de
+# route ou d'intégration resterait dans la définition sans jamais atteindre le stage —
+# le plan serait vert et le comportement inchangé.
+resource "aws_api_gateway_deployment" "this" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.this,
+      aws_api_gateway_method.this,
+      aws_api_gateway_integration.this,
+      aws_api_gateway_authorizer.cognito,
+      aws_api_gateway_rest_api_policy.single_path.policy,
+    ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_api_gateway_stage" "this" {
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  deployment_id = aws_api_gateway_deployment.this.id
+  stage_name    = var.stage_name
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.access.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      resourcePath   = "$context.resourcePath"
+      status         = "$context.status"
+      responseLength = "$context.responseLength"
+      integrationErr = "$context.integration.error"
+      # Jamais le corps ni l'en-tête Authorization : le jeton s'arrête à FastAPI (§7.1.2)
+      # et un journal d'accès qui le porterait le ferait vivre bien au-delà.
+    })
+  }
+
+  tags = var.common_tags
+}
+
+resource "aws_api_gateway_method_settings" "this" {
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  stage_name  = aws_api_gateway_stage.this.stage_name
+  method_path = "*/*"
+
+  settings {
+    throttling_rate_limit  = var.throttling_rate_limit
+    throttling_burst_limit = var.throttling_burst_limit
+
+    # Le cache reste désactivé : une réponse conversationnelle est propre à un acteur et
+    # à une conversation, la mettre en cache la servirait à un autre.
+    caching_enabled = false
+  }
+}
+
+# §7.4, précondition 8 de §16.5 — l'association se fait au stage d'un REST API. Sur
+# échec de la précondition, le WAF ne subsiste que sur CloudFront et le risque résiduel
+# est acté ; la variable vide traduit exactement cet état.
+resource "aws_wafv2_web_acl_association" "this" {
+  count = var.web_acl_arn == "" ? 0 : 1
+
+  resource_arn = aws_api_gateway_stage.this.arn
+  web_acl_arn  = var.web_acl_arn
+}

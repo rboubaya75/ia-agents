@@ -17,7 +17,8 @@ calcul tant que l'image FastAPI n'existe pas.
 | Élément | Raison |
 |---|---|
 | Service ECS `ingestion`, `ecs-task-role-ingestion`, `sg-ingestion` | cible V3 (`V2-ADR-019`, `V2-LLD-001` §4.2, §5.2, §6.3). Seul l'endpoint SQS est câblé, derrière `enable_ingestion_service` |
-| VPC Link, API Gateway, CloudFront, WAF | la précondition 4 de `§16.5` (VPC Link V2 vers ALB en `eu-west-3`) n'est pas vérifiée, et son repli change la topologie de `§7`. Le module crée le `sg-vpc-link` que le VPC Link consommera |
+| VPC Link, API Gateway, WAF | portés par le module `api_gateway_v2_ingress`. Ce module crée le `sg-vpc-link` que le VPC Link consomme, et expose le listener de l'ALB par `alb_listener_arn`, `alb_listener_port` et `alb_listener_scheme` |
+| CloudFront | porté par `frontend_static_site`, qui ajoute le comportement `/api/*` lorsque son entrée `api_origin` est renseignée |
 | Certificat ACM, Route 53 | `§8` — fournis par l'environnement via `alb_certificate_arn` |
 | Tables DynamoDB, bucket documents, Knowledge Base | `V2-LLD-006` et `V2-LLD-002`. Le module ne fait que référencer leurs ARN pour la politique de rôle |
 
@@ -32,6 +33,14 @@ réversibles par une variable ou une valeur — aucun n'est structurel.
 | Sidecar `adot-collector` absent de la task definition | §4.1 | ajout du second conteneur |
 | VPC endpoint `xray` non provisionné | §2.3 | ajout à `local.interface_endpoint_services` |
 | Actions X-Ray absentes du rôle de tâche | §5.1 | ajout au `statement` `WriteOwnLogs` |
+
+Un sixième écart porte sur le listener de l'ALB. `§7` veut HTTPS 443 avec certificat ACM ; ACM
+n'émet pas pour le nom généré de l'ALB, et il n'existe ni domaine possédé ni CA privée.
+`alb_plaintext_listener_enabled` crée alors un listener HTTP 80 — faux par défaut, parce que
+l'absence de certificat ne doit jamais impliquer la dégradation. Sans l'un ni l'autre, l'ALB reste
+sans listener : le déploiement est visiblement incomplet plutôt que silencieusement affaibli. Le
+tronçon VPC Link → ALB circule alors en clair **dans les sous-réseaux privés** ; TLS reste terminé
+à CloudFront puis à API Gateway, et aucun trafic en clair ne quitte le VPC.
 
 Un cinquième écart n'est pas un choix de périmètre mais une précondition non levée : l'endpoint
 `bedrock-agentcore` n'est pas provisionné et `sg-fastapi` conserve donc son egress `0.0.0.0/0`

@@ -35,3 +35,36 @@ variable "common_tags" {
   description = "Common tags applied to resources supporting tags."
   default     = {}
 }
+
+# V2-LLD-001 §7, §7.4 — origine API optionnelle.
+#
+# Renseignée, elle ajoute un comportement `/api/*` visant API Gateway et injecte
+# l'en-tête secret que la politique de ressource de la passerelle exige. C'est ce qui
+# fait de CloudFront le seul chemin joignable (V2-ADR-016, précondition 9 de §16.5).
+#
+# Elle sert aussi le front : servi et appelé depuis la même origine, le chemin
+# conversationnel n'a aucun préflight CORS à négocier, et le jeton ne traverse jamais
+# une frontière d'origine.
+#
+# Nulle par défaut : le chemin V1 ne déclare pas d'origine API et n'est pas modifié.
+#
+# Le secret est porté par `api_origin_verify_secret` et non par un champ de cet objet.
+# Une valeur sensible contamine toute expression qui la touche — y compris le simple
+# test « une origine API est-elle déclarée ? » — et Terraform refuse une valeur sensible
+# en `for_each`. Séparer garde la marque de sensibilité sur le seul secret.
+variable "api_origin" {
+  type = object({
+    domain_name        = string
+    origin_path        = string
+    verify_header_name = string
+  })
+  description = "Origine API Gateway servie sous /api/*. Null pour ne pas en déclarer."
+  default     = null
+}
+
+variable "api_origin_verify_secret" {
+  type        = string
+  description = "Valeur de l'en-tête de vérification injecté vers l'origine API. Requis dès que api_origin est renseigné."
+  default     = ""
+  sensitive   = true
+}

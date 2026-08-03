@@ -283,3 +283,31 @@ variable "documents_cmk_arn" {
   description = "CMK protegeant le bucket documents (V2-LLD-001 §5.1)."
   default     = ""
 }
+
+# ---------------------------------------------------------------------------
+# Ingress V2 — V2-LLD-001 §7
+# ---------------------------------------------------------------------------
+
+variable "enable_ecs_ingress" {
+  type        = bool
+  description = "Provisionne le chemin CloudFront -> API Gateway -> VPC Link -> ALB interne (V2-LLD-001 §7). Sans effet tant que enable_ecs_platform vaut false : la passerelle n'aurait aucun ALB a viser."
+  default     = false
+}
+
+variable "alb_plaintext_listener_enabled" {
+  type        = bool
+  description = "Ecart assume a V2-LLD-001 §7 : listener HTTP 80 sur l'ALB interne faute de certificat ACM pour son nom genere. Le tronçon VPC Link -> ALB circule alors en clair dans les sous-reseaux prives. Test uniquement."
+  default     = false
+}
+
+variable "apigw_integration_timeout_milliseconds" {
+  type        = number
+  description = "Plafond d'une invocation d'integration API Gateway. Borne deadlineEpochMs de V2-LLD-003 §5.2.2 (V2-LLD-001 §7.3)."
+  default     = 300000
+}
+
+variable "apigw_web_acl_arn" {
+  type        = string
+  description = "Web ACL WAF associe au stage de la passerelle V2 (V2-ADR-016, precondition 8 de V2-LLD-001 §16.5). Vide = WAF sur CloudFront seul, risque residuel acte."
+  default     = ""
+}
