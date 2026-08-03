@@ -73,6 +73,7 @@ jobs:
             architecture/lld/V2-LLD-004-mcp-gateway-tools.md \
             architecture/lld/V2-LLD-005-identite-securite-conformite.md \
             architecture/lld/V2-LLD-006-donnees-memoire-retention-restauration.md \
+            architecture/lld/V2-LLD-010-frontend-react.md \
             architecture/adr/V2-ADR-BACKLOG-FR.md \
             architecture/adr/V2-ADR-001-ingress-security-boundary.md \
             architecture/adr/V2-ADR-002-fastapi-agentcore-responsibilities.md \

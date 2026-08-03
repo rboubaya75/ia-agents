@@ -405,10 +405,15 @@ Le ledger est porté par une **table dédiée** `${env}-idempotency-ledger` (pas
 
 - `pk = scope#hash` (scope = `document-upload` / `document-ingest` ; hash = canonique) ;
 - `sk = createdAt` ;
-- `ttl = 7 jours` (attribut `expiresAt`), suffisant pour couvrir tous les retry raisonnables
-  (SQS/HTTP/utilisateur) ;
+- `ttl = ledger_ttl_days` (attribut `expiresAt`), **7 jours** en `test` — suffisant pour couvrir tous
+  les retry raisonnables (SQS/HTTP/utilisateur) ;
 - PITR activé (traçabilité en cas d'audit sur un doublon supposé) ;
 - SSE-KMS.
+
+`ledger_ttl_days` est un **paramètre Terraform**, au même titre que les trois durées du magasin de
+commandes (§5.3.2). Ce n'est pas une uniformisation cosmétique : la règle de garde « idempotence non
+dégradée » de §16.2 compare `command_executed_retention_days` à cette valeur, et une comparaison dont
+un membre est une constante applicative n'est pas vérifiable au plan.
 
 Le scope `trip-mutation` de la rédaction antérieure **n'existe plus** : ces mutations relèvent du
 magasin de commandes. Un scope résiduel écrirait des entrées que rien ne lit.
@@ -1047,7 +1052,7 @@ La valeur exacte relève de l'exploitation ; la contrainte, non. Elle est vérif
 | `documents` items `superseded` | 90 jours après supersession | script périodique + cycle de vie source |
 | `documents` items `quarantined` | 7 jours | TTL DynamoDB (`expiresAt`) |
 | `documents` items `deleted` | 30 jours (tombstone) puis purge | script périodique (audit) |
-| `ledger` items | 7 jours | TTL DynamoDB (`expiresAt`) |
+| `ledger` items | `ledger_ttl_days` (7 j) | TTL DynamoDB (`expiresAt`) |
 | `commands` items `pending` | `command_pending_window_minutes` (15 min) + marge | TTL DynamoDB — **purge seule**, l'expiration est transactionnelle (§5.3.4) |
 | `commands` items `confirmed` | `command_confirmed_window_seconds` (120 s) + marge | TTL DynamoDB — idem |
 | `commands` items `executed` | `command_executed_retention_days` (7 j), **≥ fenêtre d'idempotence** | TTL DynamoDB (`expiresAt`) |
@@ -1622,7 +1627,7 @@ pas, le DR drill (§17.2) est la seule occasion où la procédure est éprouvée
 | **Délai de remise en service** mesuré sur une migration d'espace de test, enregistré comme valeur de référence du seuil d'alerte de cycle de vie (§14.5.2) | DR drill / migration de test | Oui (métrique publiée) |
 | **Retour arrière après bascule d'espace** : effectué par bascule inverse du pointeur, sans reconstruction, dans la période de grâce, vérifié sur le même dataset | migration de test | Oui |
 | Métriques qualité retrieval post-réhydratation dans marge d'éval (`V2-ADR-018`) | qualité DR drill | Oui |
-| Ledger d'idempotence : TTL effectif à 7 jours | intégration | Oui |
+| Ledger d'idempotence : TTL effectif égal à `ledger_ttl_days` | intégration | Oui |
 | **Exécution d'une commande hors fenêtre `confirmed`** : la transaction est refusée et **aucun effet de bord n'est appliqué**, y compris lorsque l'item n'a pas encore été purgé par le TTL (§5.3.4) | intégration négative | **Oui** |
 | **Exécution d'une commande par un autre acteur ou un autre tenant** : refusée, avec le même code que pour une commande inexistante (`V2-LLD-004 §6.3`) | intégration négative | **Oui** |
 | **Double exécution concurrente du même `commandId`** : une seule aboutit, une seule mutation métier existe, la seconde renvoie le résultat initial | intégration concurrence | **Oui** |

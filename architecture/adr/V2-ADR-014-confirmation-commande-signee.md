@@ -400,20 +400,22 @@ déjà des tools mutants et que la confirmation actuelle est le contrôle qui le
 
 ## Écarts à corriger dans le corpus
 
-À corriger dans le même lot que l'acceptation de cet ADR :
+À corriger dans le même lot que l'acceptation de cet ADR. La colonne **État** est tenue à jour au fur
+et à mesure des corrections ; elle n'ajoute aucune exigence, elle évite qu'un lecteur de cet ADR seul
+croie en attente une correction déjà faite.
 
-| Document | Passage | Correction attendue |
-|---|---|---|
-| `V2-ADR-BACKLOG-FR.md` | intitulé « Confirmation forte et objet de commande signé » | retirer « signé » ; le contenu ne circule pas, seule la référence circule |
-| `V2-ADR-006` | « Modèle d'autorisation », points 1 à 6 | ajouter la commande confirmée comme fondement d'autorisation des actions mutantes |
-| `V2-ADR-011` | renvoi « la garantie d'idempotence des tools relève de `V2-ADR-014` » | préciser que la fenêtre non annulable est l'exécution, et non l'appel de tool entier |
-| HLD §6.3 | « 3. Confirmation vérifiée pour les mutations » | remplacer par la séquence matérialisation → confirmation hors modèle → exécution atomique |
-| HLD §6.4 | « Tool Selection, confirmation si mutation » | distinguer les deux appels et situer la confirmation hors du chemin du modèle |
-| `capability-allocation-matrix.md` Domaine 5 | capacités du Runtime | énoncer que le Runtime ne porte pas la vérification de confirmation |
-| `capability-allocation-matrix.md` Domaine 7 | capacités MCP | ajouter la classe de tool (`read`/`mutating`) au catalogue, avec défaut `mutating` |
-| `V2-LLD-006` §5 | ledger d'idempotence, portée « mutations `Trips` » | retirer les mutations via commande de la portée du ledger ; ajouter le magasin de commandes, ses clés et les TTL des deux fenêtres ; borner la rétention d'une commande `executed` par la fenêtre d'idempotence de la mutation qu'elle porte |
-| `LLD-V2-INDEX-FR.md` | portée `V2-LLD-004` : « confirmation liée à une commande » | aligner sur la décision : deux appels, exécution par référence, classe de tool |
-| `LLD-V2-INDEX-FR.md` | portée `V2-LLD-010` | ajouter le rendu serveur du résumé de commande et le geste de confirmation |
+| Document | Passage | Correction attendue | État |
+|---|---|---|---|
+| `V2-ADR-BACKLOG-FR.md` | intitulé « Confirmation forte et objet de commande signé » | retirer « signé » ; le contenu ne circule pas, seule la référence circule | appliquée |
+| `V2-ADR-006` | « Modèle d'autorisation », points 1 à 6 | ajouter la commande confirmée comme fondement d'autorisation des actions mutantes | **appliquée** — septième intrant |
+| `V2-ADR-011` | renvoi « la garantie d'idempotence des tools relève de `V2-ADR-014` » | préciser que la fenêtre non annulable est l'exécution, et non l'appel de tool entier | **appliquée** |
+| HLD §6.3 | « 3. Confirmation vérifiée pour les mutations » | remplacer par la séquence matérialisation → confirmation hors modèle → exécution atomique | appliquée |
+| HLD §6.4 | « Tool Selection, confirmation si mutation » | distinguer les deux appels et situer la confirmation hors du chemin du modèle | appliquée |
+| `capability-allocation-matrix.md` Domaine 5 | capacités du Runtime | énoncer que le Runtime ne porte pas la vérification de confirmation | appliquée |
+| `capability-allocation-matrix.md` Domaine 7 | capacités MCP | ajouter la classe de tool (`read`/`mutating`) au catalogue, avec défaut `mutating` | appliquée |
+| `V2-LLD-006` §5 | ledger d'idempotence, portée « mutations `Trips` » | retirer les mutations via commande de la portée du ledger ; ajouter le magasin de commandes, ses clés et les TTL des deux fenêtres ; borner la rétention d'une commande `executed` par la fenêtre d'idempotence de la mutation qu'elle porte | **appliquée** — §5.1, §5.3 |
+| `LLD-V2-INDEX-FR.md` | portée `V2-LLD-004` : « confirmation liée à une commande » | aligner sur la décision : deux appels, exécution par référence, classe de tool | appliquée |
+| `LLD-V2-INDEX-FR.md` | portée `V2-LLD-010` | ajouter le rendu serveur du résumé de commande et le geste de confirmation | en attente — suit la rédaction de `V2-LLD-010` |
 
 ## Préconditions
 

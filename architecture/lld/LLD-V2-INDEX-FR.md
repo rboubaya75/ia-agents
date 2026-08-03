@@ -1,6 +1,6 @@
 # Catalogue des LLD — Secure AgentCore V2
 
-- **Version :** 0.7
+- **Version :** 0.8
 - **Branche cible :** `migration/secure-agentcore-v2`
 - **Statut :** Draft
 - **HLD de référence :** `architecture/hld/HLD-Secure-AgentCore-V2-FR.md`
@@ -35,7 +35,7 @@ Une dépendance ADR marquée dans ce catalogue est bloquante lorsqu'elle affecte
 | V2-LLD-007 | Observabilité, SLO et FinOps | OTel, CloudWatch, corrélation, alertes, coûts, SLO | V2-ADR-002, V2-ADR-003, V2-ADR-005, V2-ADR-006, V2-ADR-008, V2-ADR-009, V2-ADR-012, V2-ADR-013 | À créer |
 | V2-LLD-008 | CI/CD, Terraform et promotion | GitLab CI, OIDC, artefacts, scans, plan, rollback | V2-ADR-007, V2-ADR-008, V2-ADR-009, V2-ADR-010 | À créer |
 | V2-LLD-009 | Stratégie de tests et preuves | pyramide, datasets, E2E, sécurité, charge, chaos, DR | V2-ADR-001 à V2-ADR-019 selon applicabilité, avec V2-ADR-018 obligatoire pour le RAG | À créer |
-| V2-LLD-010 | Frontend React V2 | streaming, uploads, citations, auth, reprise, accessibilité | V2-ADR-001, V2-ADR-002, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-014, V2-ADR-016 | À créer |
+| V2-LLD-010 | Frontend React | transport SSE côté client, geste de confirmation d'action mutante, stockage et renouvellement du jeton, reprise des opérations ambiguës, uploads et suivi d'ingestion, citations, sécurité navigateur, accessibilité | V2-ADR-001, V2-ADR-002, V2-ADR-006, V2-ADR-008, V2-ADR-011, V2-ADR-014, V2-ADR-016, V2-ADR-020 | v0.1 (Draft) |
 
 ## 4. Structure minimale d'un LLD
 
@@ -190,6 +190,12 @@ Doit définir : identifiants de risques, matrice de traçabilité, tests unitair
 ### V2-LLD-010 — Frontend
 
 Doit définir : architecture React, streaming, citations, upload, suivi d'ingestion, historique, préférences, renouvellement de token, reprise des opérations ambiguës, confirmations, sécurité navigateur, accessibilité et tests.
+
+Réalisé en `V2-LLD-010` v0.1. Trois décisions structurent le document. **Le transport n'est pas `EventSource`** : cette API n'accepte aucun en-tête personnalisé, or `V2-ADR-020` fait de l'en-tête `Authorization` le transport de l'identité et interdit le jeton en URL ; le flux est donc lu par `fetch` et un analyseur SSE explicite, ce qui oblige à réimplémenter la reconnexion que le corpus présentait comme acquise. **Le résumé de commande arrive par un événement SSE dédié et n'est jamais rendu en markdown** : si le rendu serveur transitait par le même canal que le texte du modèle, celui-ci pourrait imiter une carte de confirmation, et la garantie de `V2-ADR-014` serait perdue en pratique alors qu'elle serait tenue en principe — la séparation des canaux est ce qui rend la contrainte vérifiable par un test. **Le jeton d'accès ne réside que dans la mémoire du module**, le jeton de rafraîchissement en `sessionStorage` et jamais en `localStorage`, décision qui ne vaut que couplée à une CSP sans `unsafe-inline` et à un rendu markdown sans HTML brut.
+
+Sur issue inconnue — coupure avant le premier événement, rattachements épuisés, confirmation sans réponse — le client **relit l'état, il ne rejoue jamais le geste**, transposition côté navigateur de la règle que `V2-LLD-004 §8.4` applique côté serveur.
+
+Ce LLD relève trois écarts de corpus. Le premier était bloquant et est **corrigé dans le même lot** : `V2-ADR-011` prêtait au protocole SSE des propriétés de l'API `EventSource` — la reconnexion automatique, mais aussi le `Browser (EventSource)` de son diagramme de décision et la formulation de son mécanisme d'annulation. L'ADR ne préjuge plus du client ; sa décision de transport réseau, REST API en mode `STREAM`, est inchangée puisqu'elle n'en a jamais dépendu. Le deuxième attend une correction dans `V2-LLD-001` : le jeu d'événements SSE ne comporte aucun événement de commande, alors que `V2-ADR-014` exige que le résumé soit transmis dans le flux. Le troisième est tranché ici — le stockage du jeton dans le navigateur n'était arbitré par aucun document, la V1 héritant du défaut `localStorage` de sa bibliothèque d'authentification.
 
 ## 6. Ordre de production recommandé
 
