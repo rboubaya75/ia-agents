@@ -7,10 +7,18 @@ import {
 } from 'amazon-cognito-identity-js';
 import type { AuthResult, User } from '../types';
 import { extractUserId } from '../utils/jwtDecoder';
+import { tokenStorage } from './tokenStorage';
+import { getRuntimeConfig } from '../lib/runtimeConfig';
+import { SessionExpiredError } from '../lib/authErrors';
 
+// `Storage` scinde les jetons : accès en mémoire, rafraîchissement et identité en
+// `sessionStorage` (V2-LLD-010 §4.2). Le SDK n'hérite pas ce réglage du pool vers les
+// `CognitoUser` construits directement — il est donc répété à chaque construction, sans
+// quoi ces derniers retomberaient sur `localStorage`.
 const userPool = new CognitoUserPool({
   UserPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID || '',
   ClientId: import.meta.env.VITE_COGNITO_CLIENT_ID || '',
+  Storage: tokenStorage,
 });
 
 let currentCognitoUser: CognitoUser | null = null;
@@ -84,6 +92,7 @@ export const login = async (
     const cognitoUser = new CognitoUser({
       Username: cleanUsername,
       Pool: userPool,
+      Storage: tokenStorage,
     });
 
     cognitoUser.authenticateUser(authenticationDetails, {
@@ -185,6 +194,7 @@ export const confirmSignup = async (
     const cognitoUser = new CognitoUser({
       Username: username,
       Pool: userPool,
+      Storage: tokenStorage,
     });
 
     cognitoUser.confirmRegistration(code, true, (err) => {
@@ -207,6 +217,7 @@ export const resendConfirmationCode = async (
     const cognitoUser = new CognitoUser({
       Username: username,
       Pool: userPool,
+      Storage: tokenStorage,
     });
 
     cognitoUser.resendConfirmationCode((err) => {
@@ -300,6 +311,61 @@ export const getJwtToken = async (): Promise<string> => {
   });
 };
 
+const currentSession = (cognitoUser: CognitoUser): Promise<CognitoUserSession> =>
+  new Promise((resolve, reject) => {
+    cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
+      if (err || !session) {
+        reject(new SessionExpiredError());
+        return;
+      }
+      resolve(session);
+    });
+  });
+
+/**
+ * Jeton d'accès valide, renouvelé **par l'échéance et non par l'échec** (V2-LLD-010 §4.3).
+ *
+ * Attendre le 401 signifie qu'un appel sur deux échoue au voisinage de l'expiration, et
+ * surtout qu'un appel non rejouable — une confirmation de commande en est un — peut
+ * échouer. La marge est un paramètre d'exécution, pas une constante (§15.2).
+ *
+ * C'est le jeton d'**accès** qui est présenté à l'API, jamais le jeton d'identité
+ * (`V2-ADR-020`) ; ce dernier n'est décodé que pour l'affichage du profil.
+ */
+export const getAccessToken = async (
+  options: { forceRefresh?: boolean } = {},
+): Promise<string> => {
+  const cognitoUser = userPool.getCurrentUser();
+  if (!cognitoUser) {
+    throw new SessionExpiredError('Aucune session authentifiée.');
+  }
+
+  const session = await currentSession(cognitoUser);
+  currentCognitoUser = cognitoUser;
+
+  const secondsLeft = session.getAccessToken().getExpiration() - Math.floor(Date.now() / 1000);
+  if (!options.forceRefresh && secondsLeft > getRuntimeConfig().tokenRenewalMarginSeconds) {
+    return session.getAccessToken().getJwtToken();
+  }
+
+  const renewed = await new Promise<CognitoUserSession>((resolve, reject) => {
+    cognitoUser.refreshSession(
+      session.getRefreshToken(),
+      (err: Error | null, next: CognitoUserSession | null) => {
+        if (err || !next) {
+          // Jeton de rafraîchissement invalide ou révoqué : déconnexion immédiate, sans
+          // réessai (§4.3).
+          reject(new SessionExpiredError());
+          return;
+        }
+        resolve(next);
+      },
+    );
+  });
+
+  return renewed.getAccessToken().getJwtToken();
+};
+
 const authService = {
   login,
   completeNewPassword,
@@ -309,6 +375,7 @@ const authService = {
   logout,
   getCurrentUser,
   getJwtToken,
+  getAccessToken,
   extractUserId,
 };
 

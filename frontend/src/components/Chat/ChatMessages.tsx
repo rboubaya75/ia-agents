@@ -6,9 +6,17 @@ import TypingIndicator from './TypingIndicator';
 interface ChatMessagesProps {
   messages: MessageType[];
   isLoading?: boolean;
+  /** Texte en cours de diffusion, rendu tant que l'événement terminal n'est pas reçu. */
+  pendingContent?: string;
 }
 
-const ChatMessages: React.FC<ChatMessagesProps> = ({ messages, isLoading = false }) => {
+const PENDING_MESSAGE_ID = '__streaming__';
+
+const ChatMessages: React.FC<ChatMessagesProps> = ({
+  messages,
+  isLoading = false,
+  pendingContent = '',
+}) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -17,11 +25,13 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ messages, isLoading = false
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, pendingContent]);
+
+  const isEmpty = messages.length === 0 && pendingContent === '';
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4">
-      {messages.length === 0 ? (
+      {isEmpty ? (
         <div className="flex items-center justify-center h-full text-gray-500">
           <p>Start a conversation by sending a message below</p>
         </div>
@@ -30,7 +40,22 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({ messages, isLoading = false
           {messages.map((message) => (
             <Message key={message.id} message={message} />
           ))}
-          {isLoading && <TypingIndicator />}
+          {/*
+            `aria-live` est délibérément absent : une annonce par fragment rendrait la
+            diffusion inutilisable au lecteur d'écran. L'annonce unique de fin est portée
+            par StreamStatus (V2-LLD-010 §13.1).
+          */}
+          {pendingContent !== '' && (
+            <Message
+              message={{
+                id: PENDING_MESSAGE_ID,
+                content: pendingContent,
+                sender: 'system',
+                timestamp: new Date(),
+              }}
+            />
+          )}
+          {isLoading && pendingContent === '' && <TypingIndicator />}
           <div ref={messagesEndRef} />
         </>
       )}

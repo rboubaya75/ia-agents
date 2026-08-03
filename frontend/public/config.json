@@ -1,0 +1,5 @@
+{
+  "tokenRenewalMarginSeconds": 120,
+  "streamIdleTimeoutSeconds": 60,
+  "maxReattachments": 3
+}
