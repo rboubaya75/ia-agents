@@ -42,7 +42,13 @@ locals {
 
   # Les segments de chemin sont créés une seule fois et partagés : `api`, `api/v1` et la
   # suite sont communs aux deux routes. La clé est le chemin complet, la valeur son
-  # parent, ce qui laisse Terraform ordonner la création sans `depends_on`.
+  # parent.
+  #
+  # Un seul bloc for_each dont les instances se référencent mutuellement via
+  # aws_api_gateway_resource.this[each.value.parent].id forme un cycle dans le graphe
+  # de dépendances Terraform (le bloc entier est un nœud unique). Le découpage par
+  # profondeur rompt le cycle : chaque bloc de profondeur N ne référence que le bloc
+  # de profondeur N-1, qui est un type de ressource distinct.
   path_segments = {
     for path in distinct(flatten([
       for route in local.routes : [
@@ -52,8 +58,15 @@ locals {
       ])) : path => {
       part   = element(split("/", path), length(split("/", path)) - 1)
       parent = length(split("/", path)) == 1 ? "" : join("/", slice(split("/", path), 0, length(split("/", path)) - 1))
+      depth  = length(split("/", path))
     }
   }
+
+  path_depth_1 = { for k, v in local.path_segments : k => v if v.depth == 1 }
+  path_depth_2 = { for k, v in local.path_segments : k => v if v.depth == 2 }
+  path_depth_3 = { for k, v in local.path_segments : k => v if v.depth == 3 }
+  path_depth_4 = { for k, v in local.path_segments : k => v if v.depth == 4 }
+  path_depth_5 = { for k, v in local.path_segments : k => v if v.depth == 5 }
 }
 
 resource "aws_api_gateway_rest_api" "this" {
@@ -79,12 +92,49 @@ resource "aws_apigatewayv2_vpc_link" "this" {
   tags = var.common_tags
 }
 
-resource "aws_api_gateway_resource" "this" {
-  for_each = local.path_segments
-
+resource "aws_api_gateway_resource" "depth_1" {
+  for_each    = local.path_depth_1
   rest_api_id = aws_api_gateway_rest_api.this.id
-  parent_id   = each.value.parent == "" ? aws_api_gateway_rest_api.this.root_resource_id : aws_api_gateway_resource.this[each.value.parent].id
+  parent_id   = aws_api_gateway_rest_api.this.root_resource_id
   path_part   = each.value.part
+}
+
+resource "aws_api_gateway_resource" "depth_2" {
+  for_each    = local.path_depth_2
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.depth_1[each.value.parent].id
+  path_part   = each.value.part
+}
+
+resource "aws_api_gateway_resource" "depth_3" {
+  for_each    = local.path_depth_3
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.depth_2[each.value.parent].id
+  path_part   = each.value.part
+}
+
+resource "aws_api_gateway_resource" "depth_4" {
+  for_each    = local.path_depth_4
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.depth_3[each.value.parent].id
+  path_part   = each.value.part
+}
+
+resource "aws_api_gateway_resource" "depth_5" {
+  for_each    = local.path_depth_5
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.depth_4[each.value.parent].id
+  path_part   = each.value.part
+}
+
+locals {
+  all_resources = merge(
+    aws_api_gateway_resource.depth_1,
+    aws_api_gateway_resource.depth_2,
+    aws_api_gateway_resource.depth_3,
+    aws_api_gateway_resource.depth_4,
+    aws_api_gateway_resource.depth_5,
+  )
 }
 
 # §7.1 — l'authorizer rejette le non authentifié au bord. FastAPI revérifie la signature
@@ -105,7 +155,7 @@ resource "aws_api_gateway_method" "this" {
   for_each = local.routes
 
   rest_api_id   = aws_api_gateway_rest_api.this.id
-  resource_id   = aws_api_gateway_resource.this[join("/", each.value.path_parts)].id
+  resource_id   = local.all_resources[join("/", each.value.path_parts)].id
   http_method   = each.value.http_method
   authorization = "COGNITO_USER_POOLS"
   authorizer_id = aws_api_gateway_authorizer.cognito.id
@@ -117,7 +167,7 @@ resource "aws_api_gateway_integration" "this" {
   for_each = local.routes
 
   rest_api_id = aws_api_gateway_rest_api.this.id
-  resource_id = aws_api_gateway_resource.this[join("/", each.value.path_parts)].id
+  resource_id = local.all_resources[join("/", each.value.path_parts)].id
   http_method = aws_api_gateway_method.this[each.key].http_method
 
   type                    = "HTTP_PROXY"
@@ -209,7 +259,7 @@ resource "aws_api_gateway_deployment" "this" {
 
   triggers = {
     redeployment = sha1(jsonencode([
-      aws_api_gateway_resource.this,
+      local.all_resources,
       aws_api_gateway_method.this,
       aws_api_gateway_integration.this,
       aws_api_gateway_authorizer.cognito,
