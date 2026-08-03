@@ -3,7 +3,7 @@
 
 resource "aws_security_group" "vpc_link" {
   name        = "${var.name_prefix}-sg-vpc-link"
-  description = "ENIs of the API Gateway VPC Link fronting the internal ALB (V2-LLD-001 §6.1)."
+  description = "ENIs of the API Gateway VPC Link fronting the internal ALB (V2-LLD-001 sec. 6.1)."
   vpc_id      = aws_vpc.this.id
 
   tags = merge(var.common_tags, {
@@ -13,7 +13,7 @@ resource "aws_security_group" "vpc_link" {
 
 resource "aws_security_group" "alb_internal" {
   name        = "${var.name_prefix}-sg-alb-internal"
-  description = "Internal ALB in front of the fastapi tasks (V2-LLD-001 §6.1)."
+  description = "Internal ALB in front of the fastapi tasks (V2-LLD-001 sec. 6.1)."
   vpc_id      = aws_vpc.this.id
 
   tags = merge(var.common_tags, {
@@ -23,7 +23,7 @@ resource "aws_security_group" "alb_internal" {
 
 resource "aws_security_group" "fastapi" {
   name        = "${var.name_prefix}-sg-fastapi"
-  description = "ECS fastapi tasks (V2-LLD-001 §6.2)."
+  description = "ECS fastapi tasks (V2-LLD-001 sec. 6.2)."
   vpc_id      = aws_vpc.this.id
 
   tags = merge(var.common_tags, {
@@ -33,7 +33,7 @@ resource "aws_security_group" "fastapi" {
 
 resource "aws_security_group" "vpc_endpoints" {
   name        = "${var.name_prefix}-sg-vpc-endpoints"
-  description = "Interface VPC endpoints, HTTPS from the ECS tasks only (V2-LLD-001 §6.4)."
+  description = "Interface VPC endpoints, HTTPS from the ECS tasks only (V2-LLD-001 sec. 6.4)."
   vpc_id      = aws_vpc.this.id
 
   tags = merge(var.common_tags, {
@@ -112,7 +112,7 @@ resource "aws_vpc_security_group_egress_rule" "fastapi_agentcore_via_nat" {
   count = var.enable_agentcore_privatelink ? 0 : 1
 
   security_group_id = aws_security_group.fastapi.id
-  description       = "Conditional exception: AgentCore Runtime through the NAT Gateway while no PrivateLink endpoint exists (V2-LLD-001 §2.3, §6.2)."
+  description       = "Conditional exception: AgentCore Runtime through the NAT Gateway while no PrivateLink endpoint exists (V2-LLD-001 sec. 2.3, sec. 6.2)."
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443

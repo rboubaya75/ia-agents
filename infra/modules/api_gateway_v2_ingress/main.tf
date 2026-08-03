@@ -71,7 +71,7 @@ locals {
 
 resource "aws_api_gateway_rest_api" "this" {
   name        = local.api_name
-  description = "Ingress V2 vers le service FastAPI sur ECS (V2-LLD-001 §7)."
+  description = "Ingress V2 vers le service FastAPI sur ECS (V2-LLD-001 sec. 7)."
 
   endpoint_configuration {
     types = ["REGIONAL"]

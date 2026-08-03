@@ -6,7 +6,7 @@
 resource "aws_kms_key" "logs" {
   count = local.create_logs_cmk ? 1 : 0
 
-  description             = "CMK for the ${local.cluster_name} CloudWatch log groups (V2-LLD-001 §12.1)."
+  description             = "CMK for the ${local.cluster_name} CloudWatch log groups (V2-LLD-001 sec. 12.1)."
   enable_key_rotation     = true
   deletion_window_in_days = 30
   policy                  = data.aws_iam_policy_document.logs_cmk[0].json
