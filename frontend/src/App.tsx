@@ -10,6 +10,7 @@
 
 import { AuthProvider } from './contexts/AuthContext';
 import { ChatProvider } from './contexts/ChatContext';
+import { OperationProvider } from './contexts/OperationContext';
 import AppLayout from './components/Layout/AppLayout';
 import Login from './components/Auth/Login';
 import './App.css';
@@ -26,7 +27,9 @@ function App() {
   return (
     <AuthProvider>
       <ChatProvider>
-        <AppContent />
+        <OperationProvider>
+          <AppContent />
+        </OperationProvider>
       </ChatProvider>
     </AuthProvider>
   );

@@ -9,10 +9,16 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { loadRuntimeConfig } from './lib/runtimeConfig'
 
-// Mount the application to the root element
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// La configuration d'exécution est chargée avant le montage (V2-LLD-010 §15.1) : les
+// bornes client doivent être alignées sur les bornes serveur dès le premier appel, et non
+// figées dans le bundle. Un fichier absent n'empêche pas le démarrage — les défauts
+// s'appliquent et l'écart est journalisé.
+void loadRuntimeConfig().finally(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+})
