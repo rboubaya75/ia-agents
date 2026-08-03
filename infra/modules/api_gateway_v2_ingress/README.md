@@ -55,6 +55,7 @@ garde 4.
 | WAF au stage | §7.4, précondition 8 | Optionnel, `web_acl_arn` vide par défaut | La précondition n'est pas vérifiée. Vide, le WAF ne subsiste que sur CloudFront et le risque résiduel est acté — pas constaté. |
 | Repli VPC Link V1 + NLB | Précondition 4 de §16.5 | Non implémenté | Le module prend la voie nominale, VPC Link V2 direct vers l'ALB. Le repli ajoute un NLB, un saut réseau et un coût que §14.4 n'a pas provisionnés : il doit rester une décision, pas un glissement d'implémentation. Si l'apply échoue sur la précondition 4, c'est ce repli qu'il faut écrire. |
 | Route 53 et domaine personnalisé | §8 | Absents | Aucun domaine n'est possédé. L'entrée publique est le domaine CloudFront. |
+| Plafond d'intégration à 29 s | §7.3 : borne `deadlineEpochMs`, jusqu'à 15 min | 29 000 ms | Le plafond est un quota de compte, `Maximum integration timeout in milliseconds`, à 29 000 par défaut. Il est relevable sur une REST API Regional — le type retenu en §7.0 — mais au prix d'une réduction du quota de débit du compte, et sur demande dans Service Quotas. Tant qu'elle n'est pas obtenue, une réponse conversationnelle dépassant 29 s est coupée par la passerelle. Porté par `integration_timeout_quota_milliseconds` ; une valeur demandée au-delà échoue au plan, pas au `PutIntegration`. |
 
 Ce que dégrade exactement le listener en clair : le tronçon VPC Link → ALB circule en
 HTTP **dans les sous-réseaux privés du VPC**. TLS reste terminé à CloudFront puis à API

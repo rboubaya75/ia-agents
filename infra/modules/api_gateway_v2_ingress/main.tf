@@ -200,6 +200,13 @@ resource "aws_api_gateway_integration" "this" {
   timeout_milliseconds = var.integration_timeout_milliseconds
 
   request_parameters = each.value.integration_params
+
+  lifecycle {
+    precondition {
+      condition     = var.integration_timeout_milliseconds <= var.integration_timeout_quota_milliseconds
+      error_message = "Le plafond d'integration demande depasse le quota du compte. Relever « Maximum integration timeout in milliseconds » dans Service Quotas pour API Gateway, puis porter integration_timeout_quota_milliseconds a la meme valeur."
+    }
+  }
 }
 
 # §7.4, précondition 9 de §16.5 — mécanisme de chemin unique.

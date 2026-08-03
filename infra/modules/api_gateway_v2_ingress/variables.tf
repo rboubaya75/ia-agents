@@ -83,11 +83,30 @@ variable "conversation_response_transfer_mode" {
 variable "integration_timeout_milliseconds" {
   type        = number
   description = "Plafond d'une invocation d'integration. Borne `deadlineEpochMs` de V2-LLD-003 §5.2.2 (V2-LLD-001 §7.3)."
-  default     = 300000
+  default     = 29000
 
   validation {
-    condition     = var.integration_timeout_milliseconds > 0 && var.integration_timeout_milliseconds <= 900000
-    error_message = "Le plafond d'integration doit tenir dans les 15 minutes de V2-LLD-001 §7.3."
+    condition     = var.integration_timeout_milliseconds >= 50 && var.integration_timeout_milliseconds <= 900000
+    error_message = "Le plafond d'integration doit valoir au moins 50 ms et tenir dans les 15 minutes de V2-LLD-001 §7.3."
+  }
+}
+
+# Le plafond d'integration n'est pas une constante d'API Gateway mais un quota de
+# compte : « Maximum integration timeout in milliseconds » vaut 29 000 par defaut et
+# n'est relevable que pour les REST API Regional et privees — le type retenu en §7.0 —
+# au prix d'une reduction du quota de debit du compte.
+#
+# Le declarer en variable rend l'ecart opposable au plan. Sans lui, un plafond
+# superieur au quota ne se decouvre qu'au PutIntegration, c'est-a-dire au milieu d'un
+# apply deja partiellement joue.
+variable "integration_timeout_quota_milliseconds" {
+  type        = number
+  description = "Quota « Maximum integration timeout in milliseconds » du compte. 29000 est le defaut AWS ; relever cette valeur une fois l'augmentation obtenue."
+  default     = 29000
+
+  validation {
+    condition     = var.integration_timeout_quota_milliseconds >= 50
+    error_message = "Le quota d'integration d'API Gateway ne descend pas sous 50 ms."
   }
 }
 

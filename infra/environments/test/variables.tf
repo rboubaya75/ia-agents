@@ -300,10 +300,21 @@ variable "alb_plaintext_listener_enabled" {
   default     = false
 }
 
+# Ecart assume a V2-LLD-001 §7.3 : le quota « Maximum integration timeout in
+# milliseconds » du compte vaut 29 000 par defaut, et une reponse conversationnelle
+# plus longue est coupee par la passerelle. Le relever suppose une demande dans
+# Service Quotas, possible sur une REST API Regional mais au prix du quota de debit
+# du compte. Tant qu'elle n'est pas obtenue, 29 000 est la seule valeur applicable.
 variable "apigw_integration_timeout_milliseconds" {
   type        = number
-  description = "Plafond d'une invocation d'integration API Gateway. Borne deadlineEpochMs de V2-LLD-003 §5.2.2 (V2-LLD-001 §7.3)."
-  default     = 300000
+  description = "Plafond d'une invocation d'integration API Gateway. Borne deadlineEpochMs de V2-LLD-003 §5.2.2 (V2-LLD-001 §7.3). Ne peut depasser apigw_integration_timeout_quota_milliseconds."
+  default     = 29000
+}
+
+variable "apigw_integration_timeout_quota_milliseconds" {
+  type        = number
+  description = "Quota « Maximum integration timeout in milliseconds » du compte. 29000 est le defaut AWS ; relever apres obtention de l'augmentation."
+  default     = 29000
 }
 
 variable "apigw_web_acl_arn" {

@@ -38,6 +38,10 @@ module "api_gateway_v2_ingress" {
   conversation_response_transfer_mode = var.apigw_response_transfer_mode
   integration_timeout_milliseconds    = var.apigw_integration_timeout_milliseconds
 
+  # Le quota du compte est passe au module pour que le depassement echoue au plan et
+  # non au PutIntegration, en plein apply.
+  integration_timeout_quota_milliseconds = var.apigw_integration_timeout_quota_milliseconds
+
   origin_verify_secret = one(random_password.origin_verify[*].result)
 
   log_retention_days = var.log_retention_days

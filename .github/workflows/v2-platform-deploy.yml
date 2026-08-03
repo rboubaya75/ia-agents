@@ -187,10 +187,17 @@ jobs:
             echo "Aucune ressource AgentCore dans l'etat ; defauts du stack utilises."
           fi
 
+          # La phase registre ne provisionne qu'un depot ECR. Sans restriction de
+          # portee, elle planifie tout le stack avec enable_ecs_platform=false : tant
+          # que le socle n'avait jamais ete applique cela ne produisait rien, mais des
+          # qu'il existe le meme plan demande sa destruction complete — ce que le garde
+          # de plan a bloque, correctement. La portee est donc dite explicitement
+          # plutot que deduite d'un booleen qui ne decrit plus l'etat reel.
           set +e
           terraform plan \
             -detailed-exitcode \
             -lock-timeout=60s \
+            -target=module.fastapi_container_repository \
             -var="enable_ecs_platform=false" \
             -out=tfplan-v2-registry \
             "${agentcore_args[@]}"
