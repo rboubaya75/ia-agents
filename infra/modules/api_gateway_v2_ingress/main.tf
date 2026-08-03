@@ -78,6 +78,17 @@ resource "aws_api_gateway_rest_api" "this" {
   }
 
   tags = var.common_tags
+
+  # Le découpage s'arrête à `depth_5`, ce que les deux routes de §7.0 saturent
+  # exactement. Un segment plus profond ne serait créé par aucun bloc et n'échouerait
+  # qu'au moment du lookup dans `local.all_resources` — une clé absente, loin de sa
+  # cause. La précondition ramène l'échec ici, avec le geste à faire.
+  lifecycle {
+    precondition {
+      condition     = length([for segment in local.path_segments : segment if segment.depth > 5]) == 0
+      error_message = "Un segment de chemin dépasse la profondeur 5 couverte par aws_api_gateway_resource.depth_1 à depth_5. Ajouter un bloc depth_6 et l'inclure dans local.all_resources."
+    }
+  }
 }
 
 # §7 — VPC Link V2 : cible directe l'ALB, sans NLB intermédiaire. C'est la précondition
