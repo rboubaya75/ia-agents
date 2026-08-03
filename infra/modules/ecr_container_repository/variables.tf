@@ -28,8 +28,14 @@ variable "force_delete" {
 
 variable "keep_last_images" {
   type        = number
-  description = "Number of tagged images to retain."
+  description = "Number of tagged images to retain. Ignored when expire_tagged_images is false."
   default     = 20
+}
+
+variable "expire_tagged_images" {
+  type        = bool
+  description = "Expire tagged images beyond keep_last_images. Set to false on a repository whose images are pinned by digest: expiry by count deletes rollback targets and can break a plan that resolves a tag to its digest. True keeps the historical behaviour."
+  default     = true
 }
 
 variable "tags" {

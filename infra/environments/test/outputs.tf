@@ -173,3 +173,67 @@ output "gateway_first_ready" {
   description = "Deprecated compatibility alias. Use secure_facade_ready."
   value       = false
 }
+
+# ---------------------------------------------------------------------------
+# V2-LLD-001 — socle plateforme ECS/Fargate V2.
+# Toutes les sorties valent null tant que enable_ecs_platform est faux.
+# ---------------------------------------------------------------------------
+
+output "ecs_platform_vpc_id" {
+  description = "Identifiant du VPC plateforme V2."
+  value       = try(module.vpc_ecs_platform[0].vpc_id, null)
+}
+
+output "ecs_platform_private_subnet_ids" {
+  description = "Subnets prives portant les taches Fargate et l'ALB interne."
+  value       = try(module.vpc_ecs_platform[0].private_subnet_ids, null)
+}
+
+output "ecs_platform_cluster_arn" {
+  description = "ARN du cluster ECS V2."
+  value       = try(module.vpc_ecs_platform[0].cluster_arn, null)
+}
+
+output "ecs_platform_alb_dns_name" {
+  description = "Nom DNS de l'ALB interne, joignable par le VPC Link uniquement."
+  value       = try(module.vpc_ecs_platform[0].alb_dns_name, null)
+}
+
+output "ecs_platform_target_group_arn" {
+  description = "ARN du target group du service fastapi, cible du VPC Link."
+  value       = try(module.vpc_ecs_platform[0].target_group_arn, null)
+}
+
+output "ecs_platform_security_group_ids" {
+  description = "Security groups du socle V2, par role."
+  value       = try(module.vpc_ecs_platform[0].security_group_ids, null)
+}
+
+output "ecs_platform_task_role_arn" {
+  description = "ARN de ecs-task-role-fastapi."
+  value       = try(module.vpc_ecs_platform[0].task_role_arn, null)
+}
+
+output "ecs_platform_logs_kms_key_arn" {
+  description = "CMK protegeant les groupes de journaux ECS."
+  value       = try(module.vpc_ecs_platform[0].logs_kms_key_arn, null)
+}
+
+# ---------------------------------------------------------------------------
+# V2-LLD-001 §4.1 — dépôt ECR du service fastapi (lot 3).
+# ---------------------------------------------------------------------------
+
+output "fastapi_ecr_repository_name" {
+  description = "Nom du depot ECR du service fastapi."
+  value       = module.fastapi_container_repository.repository_name
+}
+
+output "fastapi_ecr_repository_url" {
+  description = "URL du depot ECR du service fastapi, a utiliser dans les commandes docker push."
+  value       = module.fastapi_container_repository.repository_url
+}
+
+output "fastapi_ecr_repository_arn" {
+  description = "ARN du depot ECR du service fastapi."
+  value       = module.fastapi_container_repository.repository_arn
+}
