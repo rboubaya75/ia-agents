@@ -859,13 +859,25 @@ jobs:
 
   frontend-publish:
     name: Publish V2 Frontend
-    needs: [deployment-request-gate, quality-gate, platform-verify]
+    needs: [deployment-request-gate, quality-gate, platform-plan, platform-apply, platform-verify]
     runs-on: ubuntu-latest
+    # Le mode est lu explicitement, jamais deduit du resultat de l'amont. Une phase
+    # plateforme en echec laisse platform-verify a skipped, indistinguable du skipped
+    # legitime de frontend-only si l'on ne teste que le resultat : le frontend serait
+    # alors publie contre un ingress inexistant, exactement le symptome de service
+    # injoignable que le reste du workflow s'emploie a rendre impossible.
+    #
+    # En full, la plateforme doit avoir ete planifiee sans erreur ; apply et verify
+    # tolerent skipped parce qu'un plan sans changement les ignore legitimement, mais
+    # jamais failure ni cancelled.
     if: |
       !cancelled() &&
       needs.quality-gate.result == 'success' &&
-      (needs.platform-verify.result == 'success' || needs.platform-verify.result == 'skipped') &&
-      (inputs.deploy_mode == 'frontend-only' || inputs.deploy_mode == 'full')
+      (inputs.deploy_mode == 'frontend-only' ||
+       (inputs.deploy_mode == 'full' &&
+        needs.platform-plan.result == 'success' &&
+        (needs.platform-apply.result == 'success' || needs.platform-apply.result == 'skipped') &&
+        (needs.platform-verify.result == 'success' || needs.platform-verify.result == 'skipped')))
     environment:
       name: test
     permissions:
