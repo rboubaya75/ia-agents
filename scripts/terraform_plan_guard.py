@@ -27,23 +27,62 @@ CRITICAL_RESOURCE_TYPES = frozenset(
         "aws_bedrockagentcore_resource_policy",
         "aws_cloudfront_distribution",
         "aws_cloudfront_origin_access_control",
+        "aws_cloudwatch_log_group",
         "aws_cognito_user_pool",
         "aws_cognito_user_pool_client",
         "aws_dynamodb_table",
         "aws_ecr_repository",
+        "aws_ecs_cluster",
+        "aws_ecs_service",
         "aws_iam_openid_connect_provider",
         "aws_iam_policy",
         "aws_iam_role",
         "aws_iam_role_policy",
         "aws_iam_role_policy_attachment",
+        "aws_kms_alias",
         "aws_kms_key",
         "aws_lambda_function",
         "aws_lambda_permission",
+        "aws_lb",
+        "aws_nat_gateway",
         "aws_s3_bucket",
         "aws_s3_bucket_policy",
+        "aws_subnet",
+        "aws_vpc",
+        "aws_vpc_endpoint",
         "aws_wafv2_web_acl",
     }
 )
+
+# aws_ecs_task_definition is deliberately absent: Terraform reports a new revision as a
+# replacement, so listing it here would block every image update.
+
+# ---------------------------------------------------------------------------
+# Platform guard rules — V2-LLD-001 §16.6
+#
+# Three are boolean, two are numeric bounds. The numeric ones are checked on the
+# plan, therefore on the values actually applied, which is what distinguishes them
+# from a Terraform variable `validation` block: a tfvars overriding one side of the
+# §7.3 invariant without the other is exactly the case a per-variable check misses.
+# ---------------------------------------------------------------------------
+
+GUARD_RULES_REFERENCE = "V2-LLD-001 §16.6"
+
+CMK_RESOURCE_TYPE = "aws_kms_key"
+REST_API_RESOURCE_TYPE = "aws_api_gateway_rest_api"
+
+# Rule 4 checks presence only. The plan can establish that a resource policy or a
+# private origin exists; it cannot establish that either is effective. Correctness is
+# demonstrated by the direct-call proof of §15, and its content belongs to V2-LLD-005.
+SINGLE_PATH_MECHANISM_TYPES = frozenset(
+    {
+        "aws_api_gateway_rest_api_policy",
+    }
+)
+
+ALB_IDLE_TIMEOUT_CEILING_SECONDS = 300
+SSE_KEEPALIVE_MULTIPLIER = 4
+JWKS_STALE_TOLERANCE_CEILING_SECONDS = 86400
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,6 +149,151 @@ def is_critical_resource_type(resource_type: str) -> bool:
     return resource_type in CRITICAL_RESOURCE_TYPES or resource_type.startswith(CRITICAL_RESOURCE_TYPE_PREFIXES)
 
 
+def plan_variables(plan: dict[str, Any]) -> dict[str, Any]:
+    raw = plan.get("variables") or {}
+    if not isinstance(raw, dict):
+        raise ValueError("Terraform plan JSON variables must be an object.")
+    return {str(name): entry["value"] for name, entry in raw.items() if isinstance(entry, dict) and "value" in entry}
+
+
+def managed_changes(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    resource_changes = plan.get("resource_changes", [])
+    if not isinstance(resource_changes, list):
+        raise ValueError("Terraform plan JSON resource_changes must be a list.")
+    return [item for item in resource_changes if isinstance(item, dict) and item.get("mode", "managed") == "managed"]
+
+
+def as_number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def change_action(item: dict[str, Any]) -> str:
+    change = item.get("change") or {}
+    actions = change.get("actions") or []
+    if not isinstance(actions, list) or not all(isinstance(action, str) for action in actions):
+        return "other"
+    return classify_actions(actions)
+
+
+def rule(number: str, title: str, status: str, detail: str) -> dict[str, str]:
+    return {"number": number, "title": title, "status": status, "detail": detail}
+
+
+def _rule_ingestion_service_stays_v3(variables: dict[str, Any]) -> dict[str, str]:
+    title = "`enable_ingestion_service` is never true in a V2 environment"
+    if "enable_ingestion_service" not in variables:
+        return rule("1", title, "skipped", "variable not declared in this stack")
+    value = variables["enable_ingestion_service"]
+    if value is True:
+        return rule("1", title, "fail", "the applicative ingestion pipeline is V3 (V2-ADR-019); V2 ingests through Knowledge Bases")
+    return rule("1", title, "pass", f"value `{value}`")
+
+
+def _rule_log_cmk_preserved(changes: list[dict[str, Any]]) -> dict[str, str]:
+    # Scope is every CMK of the plan, not only the log one: a key the guard cannot
+    # positively identify as *not* being the log CMK must be treated as if it were.
+    title = "the log group CMK is neither deleted nor disabled by the plan"
+    keys = [item for item in changes if item.get("type") == CMK_RESOURCE_TYPE]
+    if not keys:
+        return rule("2", title, "skipped", f"no `{CMK_RESOURCE_TYPE}` in this plan")
+
+    offences: list[str] = []
+    for item in keys:
+        address = str(item.get("address", "unknown"))
+        action = change_action(item)
+        if action in {"delete", "replace"}:
+            offences.append(f"`{address}` {action}")
+            continue
+        after = (item.get("change") or {}).get("after")
+        if isinstance(after, dict) and after.get("is_enabled") is False:
+            offences.append(f"`{address}` disabled")
+
+    if offences:
+        return rule(
+            "2",
+            title,
+            "fail",
+            f"{', '.join(offences)} — losing the key makes the erasure journal unreadable, therefore the replay impossible",
+        )
+    return rule("2", title, "pass", f"{len(keys)} CMK inspected")
+
+
+def _rule_streaming_timeout_invariant(variables: dict[str, Any]) -> dict[str, str]:
+    title = "`sse_keepalive_seconds` x 4 <= `alb_idle_timeout_seconds` < 300"
+    keepalive = as_number(variables.get("sse_keepalive_seconds"))
+    idle = as_number(variables.get("alb_idle_timeout_seconds"))
+    if keepalive is None or idle is None:
+        return rule("3", title, "skipped", "at least one of the two variables is absent from this stack")
+
+    problems: list[str] = []
+    if keepalive * SSE_KEEPALIVE_MULTIPLIER > idle:
+        problems.append(f"keep-alive too sparse ({keepalive:g} x {SSE_KEEPALIVE_MULTIPLIER} > {idle:g}): the stream drops")
+    if idle >= ALB_IDLE_TIMEOUT_CEILING_SECONDS:
+        problems.append(f"idle ALB {idle:g} >= {ALB_IDLE_TIMEOUT_CEILING_SECONDS}: the cut moves to API Gateway, outside our observability")
+
+    if problems:
+        return rule("3", title, "fail", "; ".join(problems))
+    return rule("3", title, "pass", f"keep-alive {keepalive:g} s, idle ALB {idle:g} s")
+
+
+def _rule_single_path_mechanism(changes: list[dict[str, Any]]) -> dict[str, str]:
+    title = "a CloudFront to API Gateway single path mechanism is present in the plan"
+    rest_apis = [
+        item
+        for item in changes
+        if item.get("type") == REST_API_RESOURCE_TYPE and change_action(item) != "delete"
+    ]
+    if not rest_apis:
+        return rule("4", title, "skipped", f"no `{REST_API_RESOURCE_TYPE}` retained by this plan")
+
+    mechanisms = [item for item in changes if item.get("type") in SINGLE_PATH_MECHANISM_TYPES]
+    if not mechanisms:
+        return rule(
+            "4",
+            title,
+            "fail",
+            "a directly reachable endpoint makes the WAF advisory (V2-ADR-016, V2-LLD-001 §7.4)",
+        )
+    return rule("4", title, "pass", f"{len(mechanisms)} mechanism(s) present, effectiveness proven out of plan")
+
+
+def _rule_jwks_stale_tolerance(variables: dict[str, Any]) -> dict[str, str]:
+    title = f"`jwks_stale_tolerance_seconds` <= {JWKS_STALE_TOLERANCE_CEILING_SECONDS}"
+    tolerance = as_number(variables.get("jwks_stale_tolerance_seconds"))
+    if tolerance is None:
+        return rule("5", title, "skipped", "variable not declared in this stack")
+    if tolerance > JWKS_STALE_TOLERANCE_CEILING_SECONDS:
+        return rule(
+            "5",
+            title,
+            "fail",
+            f"{tolerance:g} s — V2-ADR-020 bounds the tolerance in hours, never days: beyond it a durably "
+            "unreachable JWKS would keep tokens accepted on non-revocable keys",
+        )
+    return rule("5", title, "pass", f"{tolerance:g} s")
+
+
+def evaluate_guard_rules(plan: dict[str, Any]) -> list[dict[str, str]]:
+    variables = plan_variables(plan)
+    changes = managed_changes(plan)
+    return [
+        _rule_ingestion_service_stays_v3(variables),
+        _rule_log_cmk_preserved(changes),
+        _rule_streaming_timeout_invariant(variables),
+        _rule_single_path_mechanism(changes),
+        _rule_jwks_stale_tolerance(variables),
+    ]
+
+
 def analyze_plan(plan_path: Path, summary_path: Path, policy: str) -> int:
     plan = load_json(plan_path)
     resource_changes = plan.get("resource_changes", [])
@@ -165,22 +349,43 @@ def analyze_plan(plan_path: Path, summary_path: Path, policy: str) -> int:
     else:
         lines.append("No delete or replacement action detected.")
 
+    guard_rules = evaluate_guard_rules(plan)
+    failed_rules = [item for item in guard_rules if item["status"] == "fail"]
+
+    lines.extend(["", f"## Platform guard rules ({GUARD_RULES_REFERENCE})", ""])
+    lines.extend(["| # | Rule | Status | Detail |", "|---|---|---|---|"])
+    for item in guard_rules:
+        lines.append(f"| {item['number']} | {item['title']} | {item['status']} | {item['detail']} |")
+
     lines.extend(["", "## Decision", ""])
-    if policy == "enforce-critical" and blocked_changes:
-        lines.append("**BLOCKED** — critical resource deletion or replacement detected.")
+    if policy == "enforce-critical" and (blocked_changes or failed_rules):
+        reasons = []
+        if blocked_changes:
+            reasons.append("critical resource deletion or replacement detected")
+        if failed_rules:
+            reasons.append(f"{len(failed_rules)} platform guard rule(s) violated")
+        lines.append(f"**BLOCKED** — {'; '.join(reasons)}.")
+    elif failed_rules:
+        lines.append(f"**REVIEW REQUIRED** — {len(failed_rules)} platform guard rule(s) violated, reported only.")
     elif destructive_changes:
         lines.append("**REVIEW REQUIRED** — destructive changes are present.")
     else:
-        lines.append("**PASS** — no destructive changes detected.")
+        lines.append("**PASS** — no destructive changes detected, every platform guard rule satisfied or not applicable.")
 
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    if policy == "enforce-critical" and blocked_changes:
+    if policy == "enforce-critical" and (blocked_changes or failed_rules):
         for item in blocked_changes:
             print(
                 f"ERROR: blocked Terraform {item['action']} on critical resource "
                 f"{item['address']} ({item['type']}).",
+                file=sys.stderr,
+            )
+        for item in failed_rules:
+            print(
+                f"ERROR: guard rule {item['number']} violated ({GUARD_RULES_REFERENCE}): "
+                f"{item['title']} — {item['detail']}",
                 file=sys.stderr,
             )
         return 1

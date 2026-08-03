@@ -2,7 +2,9 @@ name: Test Terraform Stack
 
 on:
   push:
-    branches: ["migration/secure-agentcore-v1"]
+    branches:
+      - "migration/secure-agentcore-v1"
+      - "migration/secure-agentcore-v2"
     paths:
       - "infra/environments/test/**"
       - "infra/modules/**"
@@ -11,7 +13,9 @@ on:
       - ".github/workflows/test-terraform-stack.yml"
       - ".gitleaksignore"
   pull_request:
-    branches: ["migration/secure-agentcore-v1"]
+    branches:
+      - "migration/secure-agentcore-v1"
+      - "migration/secure-agentcore-v2"
     paths:
       - "infra/environments/test/**"
       - "infra/modules/**"
@@ -126,6 +130,16 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      # Le garde de plan est declencheur de ce workflow : une erreur de syntaxe y
+      # passerait autrement inapercue jusqu'a l'etape d'analyse, apres le plan.
+      - name: Compile plan guard
+        run: python -m py_compile scripts/terraform_plan_guard.py
+
       - name: Resolve stack path
         id: stack
         run: echo "path=${{ inputs.stack_path || env.DEFAULT_STACK_PATH }}" >> "$GITHUB_OUTPUT"
@@ -133,6 +147,11 @@ jobs:
       - name: Terraform fmt
         working-directory: ${{ steps.stack.outputs.path }}
         run: terraform fmt -check -recursive
+
+      # Le pas ci-dessus part du repertoire de stack et n'atteint donc jamais
+      # infra/modules. Les modules partages sont verifies explicitement.
+      - name: Terraform fmt (modules partages)
+        run: terraform fmt -check -recursive infra/modules
 
       - name: Terraform init without backend
         working-directory: ${{ steps.stack.outputs.path }}
@@ -146,9 +165,13 @@ jobs:
     name: Terraform Plan and Safety Review
     runs-on: ubuntu-latest
     needs: terraform-validate
+    # Le plan reel exige des credentials AWS et lit l'etat distant. Il reste donc
+    # limite a la branche V1, ou l'infrastructure est deployee. Sur V2, la gate
+    # V2-G3 demande une verification hors ligne — fmt et validate suffisent, et
+    # aucun deploiement n'est autorise sans decision explicite.
     if: |
-      github.event_name == 'push' ||
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref_name == 'migration/secure-agentcore-v1') ||
+      (github.event_name == 'pull_request' && github.base_ref == 'migration/secure-agentcore-v1') ||
       (github.event_name == 'workflow_dispatch' && (inputs.action == 'plan' || inputs.action == 'apply'))
     permissions:
       contents: read
