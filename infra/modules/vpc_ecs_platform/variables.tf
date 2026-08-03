@@ -245,6 +245,20 @@ variable "commands_table_arns" {
   type        = list(string)
   description = "Command store table and its by-operation index. Deliberately narrower rights than the other tables: GetItem, Query and UpdateItem only (V2-LLD-001 §5.1)."
   default     = []
+
+  # Withholding PutItem and DeleteItem on the command store is a control, not a
+  # preference. It only holds while the store stays out of dynamodb_table_arns, whose
+  # statement does grant them: listing the same table in both silently restores what
+  # §5.1 withholds. Index ARNs are folded back to their table so that naming the table
+  # in one list and its index in the other does not slip through.
+  validation {
+    condition = length(setintersection(
+      toset([for arn in var.commands_table_arns : split("/index/", arn)[0]]),
+      toset([for arn in var.dynamodb_table_arns : split("/index/", arn)[0]]),
+    )) == 0
+
+    error_message = "Une table figure a la fois dans commands_table_arns et dans dynamodb_table_arns. Le statement DynamoDBAccess accorde PutItem et DeleteItem, ce que CommandStoreConfirmationOnly retire deliberement (V2-LLD-001 §5.1) : le magasin de commandes doit etre absent de dynamodb_table_arns."
+  }
 }
 
 variable "documents_bucket_arn" {
