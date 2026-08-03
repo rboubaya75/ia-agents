@@ -4,6 +4,16 @@
 # donc aucune ressource réseau ni de calcul n'est planifiée tant que l'image FastAPI
 # n'existe pas (V2-LLD-001 §3). Le chemin V1 n'est pas touché.
 
+# §4.1 — le tag est resolu en digest au moment du plan. La task definition ne porte
+# donc jamais un tag, seulement un digest immuable : deux applications successives du
+# meme tag ne peuvent pas designer deux images differentes.
+data "aws_ecr_image" "fastapi" {
+  count = var.enable_ecs_platform ? 1 : 0
+
+  repository_name = module.fastapi_container_repository.repository_name
+  image_tag       = var.fastapi_image_tag
+}
+
 module "vpc_ecs_platform" {
   source = "../../modules/vpc_ecs_platform"
   count  = var.enable_ecs_platform ? 1 : 0
@@ -22,8 +32,8 @@ module "vpc_ecs_platform" {
   enable_ingestion_service     = var.enable_ingestion_service
   enable_agentcore_privatelink = var.enable_agentcore_privatelink
 
-  # §4.1 — image construite depuis le dépôt ECR du lot 3
-  fastapi_image      = "${module.fastapi_container_repository.repository_url}:${var.fastapi_image_tag}"
+  # §4.1 — image pinnée par digest, jamais par tag
+  fastapi_image      = "${module.fastapi_container_repository.repository_url}@${one(data.aws_ecr_image.fastapi[*].image_digest)}"
   fastapi_secrets    = var.fastapi_secrets
   log_retention_days = var.log_retention_days
 

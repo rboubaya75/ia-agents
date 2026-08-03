@@ -145,8 +145,18 @@ variable "nat_gateway_count" {
 
 variable "fastapi_image_tag" {
   type        = string
-  description = "Tag de l'image fastapi a deployer depuis ECR (V2-LLD-001 §4.1). En CI, utiliser le SHA Git pour garantir l'immutabilite."
-  default     = "latest"
+  description = "Tag de l'image fastapi, resolu en digest avant d'etre passe a la task definition (V2-LLD-001 §4.1). Le depot ECR est IMMUTABLE : un tag donne ne peut etre pousse qu'une fois. Utiliser le SHA Git du commit."
+  default     = ""
+
+  validation {
+    condition     = !var.enable_ecs_platform || var.fastapi_image_tag != ""
+    error_message = "fastapi_image_tag doit etre renseigne (SHA Git du commit) des lors que enable_ecs_platform vaut true."
+  }
+
+  validation {
+    condition     = var.fastapi_image_tag != "latest"
+    error_message = "latest est un tag mobile : il contredit l'immutabilite du depot ECR et le pinning par digest de V2-LLD-001 §4.1. Utiliser le SHA Git du commit."
+  }
 }
 
 variable "fastapi_secrets" {
