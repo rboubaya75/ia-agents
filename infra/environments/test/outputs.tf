@@ -218,3 +218,22 @@ output "ecs_platform_logs_kms_key_arn" {
   description = "CMK protegeant les groupes de journaux ECS."
   value       = try(module.vpc_ecs_platform[0].logs_kms_key_arn, null)
 }
+
+# ---------------------------------------------------------------------------
+# V2-LLD-001 §4.1 — dépôt ECR du service fastapi (lot 3).
+# ---------------------------------------------------------------------------
+
+output "fastapi_ecr_repository_name" {
+  description = "Nom du depot ECR du service fastapi."
+  value       = module.fastapi_container_repository.repository_name
+}
+
+output "fastapi_ecr_repository_url" {
+  description = "URL du depot ECR du service fastapi, a utiliser dans les commandes docker push."
+  value       = module.fastapi_container_repository.repository_url
+}
+
+output "fastapi_ecr_repository_arn" {
+  description = "ARN du depot ECR du service fastapi."
+  value       = module.fastapi_container_repository.repository_arn
+}

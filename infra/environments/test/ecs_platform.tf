@@ -22,8 +22,8 @@ module "vpc_ecs_platform" {
   enable_ingestion_service     = var.enable_ingestion_service
   enable_agentcore_privatelink = var.enable_agentcore_privatelink
 
-  # §4.1 — service fastapi
-  fastapi_image      = var.fastapi_image
+  # §4.1 — image construite depuis le dépôt ECR du lot 3
+  fastapi_image      = "${module.fastapi_container_repository.repository_url}:${var.fastapi_image_tag}"
   fastapi_secrets    = var.fastapi_secrets
   log_retention_days = var.log_retention_days
 

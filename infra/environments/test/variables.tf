@@ -143,10 +143,10 @@ variable "nat_gateway_count" {
   default     = 1
 }
 
-variable "fastapi_image" {
+variable "fastapi_image_tag" {
   type        = string
-  description = "Image du conteneur fastapi, pinnee par digest (V2-LLD-001 §4.1)."
-  default     = ""
+  description = "Tag de l'image fastapi a deployer depuis ECR (V2-LLD-001 §4.1). En CI, utiliser le SHA Git pour garantir l'immutabilite."
+  default     = "latest"
 }
 
 variable "fastapi_secrets" {

@@ -1,0 +1,15 @@
+.git
+.github
+architecture/
+docs/
+infra/
+scripts/
+tests/
+frontend/
+lambda/
+*.md
+*.yaml
+*.yml
+*.sh
+*.tfvars
+.dockerignore
