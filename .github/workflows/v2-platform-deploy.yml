@@ -257,7 +257,13 @@ jobs:
     name: Apply Registry Phase
     needs: [registry-plan]
     runs-on: ubuntu-latest
-    if: needs.registry-plan.outputs.plan_exit_code == '2'
+    # Meme forme que platform-apply : la condition ne porte que sur le plan de sa
+    # propre phase, et la fonction d'etat la rend opposable quelle que soit l'histoire
+    # des sauts en amont.
+    if: |
+      !cancelled() &&
+      needs.registry-plan.result == 'success' &&
+      needs.registry-plan.outputs.plan_exit_code == '2'
     environment:
       name: test
     permissions:
@@ -691,7 +697,16 @@ jobs:
     name: Apply Platform Phase
     needs: [platform-plan]
     runs-on: ubuntu-latest
-    if: needs.platform-plan.outputs.plan_exit_code == '2'
+    # Un saut se propage a toute la chaine en aval, et pas seulement au voisin
+    # immediat : registry-apply saute des que le depot ECR existe deja, et ce saut
+    # continue de courir jusqu'ici meme si image-build-push et platform-plan l'ont
+    # neutralise pour eux-memes. Une condition sans fonction d'etat ne s'evalue alors
+    # jamais — la phase plateforme restait a skipped alors que le plan annoncait des
+    # changements, et le front se publiait contre un ingress inexistant.
+    if: |
+      !cancelled() &&
+      needs.platform-plan.result == 'success' &&
+      needs.platform-plan.outputs.plan_exit_code == '2'
     environment:
       name: test
     permissions:
@@ -753,6 +768,13 @@ jobs:
     name: Verify Service Convergence
     needs: [deployment-request-gate, platform-apply]
     runs-on: ubuntu-latest
+    # Sans condition explicite, la verification heritait du saut de registry-apply et
+    # ne s'executait jamais : un apply reussi n'aurait produit aucune preuve de
+    # convergence. Un apply saute faute de changement laisse la verification sautee,
+    # ce que frontend-publish tolere deja.
+    if: |
+      !cancelled() &&
+      needs.platform-apply.result == 'success'
     permissions:
       contents: read
       id-token: write
