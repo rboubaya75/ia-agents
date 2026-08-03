@@ -1,0 +1,817 @@
+name: V2 Platform Deploy
+
+# Deploiement du chemin V2 : socle ECS/Fargate + service FastAPI (V2-LLD-001).
+#
+# Ce workflow existe separement de test-application-deploy.yml parce que les deux
+# deploient des architectures differentes sur le meme stack Terraform. Le chemin V1
+# publie une image AgentCore Runtime derriere une facade Lambda ; le chemin V2 publie
+# une image FastAPI sur ECS Fargate derriere un ALB interne. Les melanger dans un
+# workflow unique demanderait de conditionner chaque etape sur l'architecture.
+#
+# L'ordre des phases est impose par ecs_platform.tf : la task definition epingle
+# l'image par digest, resolu au moment du plan par un data source aws_ecr_image. Le
+# plan de la plateforme echoue donc tant que l'image n'est pas dans le registre, et
+# le depot doit exister avant le push. D'ou trois phases, dans cet ordre :
+#
+#   registry-only   terraform apply avec enable_ecs_platform=false  -> depot ECR
+#   image-only      docker build + push                             -> image
+#   platform-only   terraform apply avec enable_ecs_platform=true   -> VPC, ECS, ALB
+#   full            les trois, dans l'ordre
+#
+# Le stack infra/environments/test porte V1 et V2. Tout plan y couvre les deux : les
+# variables du plan de controle AgentCore V1 sont relues depuis l'etat et rejouees,
+# faute de quoi le plan V2 proposerait de detruire le Runtime V1.
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: "Phase de deploiement V2"
+        required: true
+        type: choice
+        options:
+          - registry-only
+          - image-only
+          - platform-only
+          - full
+        default: full
+      image_tag:
+        description: "Tag de l'image fastapi. Vide = sha-<12 premiers caracteres du commit>. Le depot ECR est IMMUTABLE."
+        required: false
+        type: string
+        default: ""
+      confirm_deploy:
+        description: "Requis pour executer la phase selectionnee"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-platform-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  STACK_PATH: infra/environments/test
+  TF_VERSION: "1.9.0"
+  AWS_REGION: eu-west-3
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  IMAGE_PLATFORM: linux/amd64
+
+jobs:
+  deployment-request-gate:
+    name: Deployment Request Gate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/migration/secure-agentcore-v2'
+    outputs:
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+    steps:
+      - name: Confirm deployment
+        env:
+          CONFIRM_DEPLOY: ${{ inputs.confirm_deploy }}
+        run: |
+          if [ "$CONFIRM_DEPLOY" != "true" ]; then
+            echo "Le deploiement V2 exige confirm_deploy=true."
+            exit 1
+          fi
+
+      # Le tag est resolu ici et nulle part ailleurs : les phases image et plateforme
+      # doivent designer la meme image, et platform-only s'execute sans que la phase
+      # image ait tourne dans le meme run.
+      - name: Resolve and validate image tag
+        id: resolve
+        env:
+          REQUESTED_TAG: ${{ inputs.image_tag }}
+        run: |
+          image_tag="$REQUESTED_TAG"
+          if [ -z "$image_tag" ]; then
+            image_tag="sha-${GITHUB_SHA::12}"
+          fi
+
+          if ! printf '%s' "$image_tag" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "Tag invalide: ${image_tag}"
+            exit 1
+          fi
+
+          # latest est refuse par une validation de variables.tf. Le refuser ici evite
+          # de decouvrir l'erreur apres un build et un push devenus inutiles.
+          if [ "$image_tag" = "latest" ]; then
+            echo "latest est un tag mobile : il contredit l'epinglage par digest de V2-LLD-001 §4.1."
+            exit 1
+          fi
+
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+          echo "Tag retenu: ${image_tag}"
+
+  quality-gate:
+    name: V2 Quality Gate
+    needs: deployment-request-gate
+    uses: ./.github/workflows/v2-application-quality.yml
+
+  registry-plan:
+    name: Plan Registry Phase
+    needs: [deployment-request-gate, quality-gate]
+    runs-on: ubuntu-latest
+    if: inputs.deploy_mode == 'registry-only' || inputs.deploy_mode == 'full'
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      plan_exit_code: ${{ steps.plan.outputs.exitcode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-registry-plan
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init and validate
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform init
+          terraform fmt -check -recursive
+          terraform validate
+
+      - name: Terraform fmt on shared modules
+        run: terraform fmt -check -recursive infra/modules
+
+      # enable_ecs_platform reste faux : le data source aws_ecr_image n'est pas lu, et
+      # seul le depot ECR — declare sans count dans ecr.tf — apparait au plan.
+      - name: Terraform plan registry phase
+        id: plan
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          # shellcheck disable=SC2206
+          agentcore_args=()
+          state_list="$(terraform state list 2>/dev/null || true)"
+
+          if echo "$state_list" | grep -Eq '^aws_bedrockagentcore_'; then
+            if ! echo "$state_list" | grep -Fq 'aws_bedrockagentcore_agent_runtime.agent[0]'; then
+              echo "Des ressources AgentCore V1 existent dans l'etat sans la ressource Runtime."
+              echo "Le plan V2 pourrait detruire ou orpheliner le plan de controle V1."
+              exit 1
+            fi
+
+            runtime_state="$(terraform state show -no-color 'aws_bedrockagentcore_agent_runtime.agent[0]')"
+            image_uri="$(printf '%s\n' "$runtime_state" | awk -F' = ' '/container_uri/ {gsub(/"/, "", $2); print $2; exit}')"
+            image_tag="${image_uri##*:}"
+
+            if [ -z "$image_uri" ] || [ -z "$image_tag" ] || [ "$image_tag" = "$image_uri" ]; then
+              echo "Tag de l'image AgentCore V1 introuvable dans l'etat Terraform."
+              exit 1
+            fi
+
+            agentcore_args+=("-var=enable_agentcore_control_plane=true")
+            agentcore_args+=("-var=agentcore_image_tag=${image_tag}")
+            echo "Plan de controle V1 preserve avec le tag: ${image_tag}"
+          else
+            echo "Aucune ressource AgentCore dans l'etat ; defauts du stack utilises."
+          fi
+
+          set +e
+          terraform plan \
+            -detailed-exitcode \
+            -lock-timeout=60s \
+            -var="enable_ecs_platform=false" \
+            -out=tfplan-v2-registry \
+            "${agentcore_args[@]}"
+          exitcode=$?
+          set -e
+
+          echo "exitcode=$exitcode" >> "$GITHUB_OUTPUT"
+          if [ "$exitcode" -ne 0 ] && [ "$exitcode" -ne 2 ]; then
+            echo "Le plan de la phase registre a echoue avec le code ${exitcode}."
+            exit 1
+          fi
+          test -s tfplan-v2-registry
+
+      - name: Render plan evidence
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform show -no-color tfplan-v2-registry > tfplan-v2-registry.txt
+          terraform show -json tfplan-v2-registry > tfplan-v2-registry.json
+
+      - name: Analyze plan safety
+        id: plan_guard
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py analyze \
+            --plan-json tfplan-v2-registry.json \
+            --summary-output tfplan-v2-registry-summary.md \
+            --policy enforce-critical
+        continue-on-error: true
+
+      - name: Record immutable plan metadata
+        if: always() && steps.plan.outputs.exitcode != '1'
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py record \
+            --plan tfplan-v2-registry \
+            --metadata-output tfplan-v2-registry-metadata.json \
+            --commit-sha "${GITHUB_SHA}" \
+            --stack-path "${STACK_PATH}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --terraform-version "${TF_VERSION}"
+          cat tfplan-v2-registry-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reviewed plan artifact
+        if: always() && steps.plan.outputs.exitcode != '1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tfplan-v2-registry-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ env.STACK_PATH }}/tfplan-v2-registry
+            ${{ env.STACK_PATH }}/tfplan-v2-registry.txt
+            ${{ env.STACK_PATH }}/tfplan-v2-registry.json
+            ${{ env.STACK_PATH }}/tfplan-v2-registry-summary.md
+            ${{ env.STACK_PATH }}/tfplan-v2-registry-metadata.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Fail on unsafe plan
+        if: steps.plan_guard.outcome == 'failure'
+        run: |
+          echo "Le plan de la phase registre contient une suppression ou un remplacement bloque."
+          exit 1
+
+  registry-apply:
+    name: Apply Registry Phase
+    needs: [registry-plan]
+    runs-on: ubuntu-latest
+    if: needs.registry-plan.outputs.plan_exit_code == '2'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-registry-apply
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download reviewed plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: tfplan-v2-registry-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.STACK_PATH }}
+
+      - name: Verify immutable plan artifact
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py verify \
+            --plan tfplan-v2-registry \
+            --metadata tfplan-v2-registry-metadata.json \
+            --expected-commit-sha "${GITHUB_SHA}" \
+            --expected-stack-path "${STACK_PATH}" \
+            --expected-run-id "${GITHUB_RUN_ID}" \
+            --expected-terraform-version "${TF_VERSION}"
+          cat tfplan-v2-registry-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform init
+        working-directory: ${{ env.STACK_PATH }}
+        run: terraform init
+
+      - name: Terraform apply reviewed plan
+        working-directory: ${{ env.STACK_PATH }}
+        run: terraform apply -auto-approve -lock-timeout=120s tfplan-v2-registry
+
+      - name: Upload errored tfstate
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v2-registry-errored-tfstate-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.STACK_PATH }}/errored.tfstate
+          retention-days: 7
+          if-no-files-found: ignore
+
+  image-build-push:
+    name: Build and Push FastAPI Image
+    needs: [deployment-request-gate, quality-gate, registry-apply]
+    runs-on: ubuntu-latest
+    if: |
+      !cancelled() &&
+      needs.quality-gate.result == 'success' &&
+      (needs.registry-apply.result == 'success' || needs.registry-apply.result == 'skipped') &&
+      (inputs.deploy_mode == 'image-only' || inputs.deploy_mode == 'full')
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image_uri: ${{ steps.push.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-image-build
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Read registry outputs
+        id: registry
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform init
+          if ! terraform output -json > outputs.json 2>outputs.stderr; then
+            cat outputs.stderr >&2
+            echo "Sorties Terraform illisibles."
+            exit 1
+          fi
+
+          repository_name="$(jq -r '.fastapi_ecr_repository_name.value // ""' outputs.json)"
+          repository_url="$(jq -r '.fastapi_ecr_repository_url.value // ""' outputs.json)"
+
+          if [ -z "$repository_name" ] || [ -z "$repository_url" ]; then
+            echo "Le depot ECR fastapi n'existe pas encore."
+            echo "Executer d'abord ce workflow avec deploy_mode=registry-only."
+            exit 1
+          fi
+
+          {
+            echo "repository_name=${repository_name}"
+            echo "repository_url=${repository_url}"
+            echo "registry=${repository_url%%/*}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Le depot est IMMUTABLE : pousser deux fois le meme tag echoue. Rejouer le
+      # workflow sur un commit deja publie doit donc reussir sans rien pousser, sinon
+      # aucune phase plateforme ne pourrait etre relancee apres un echec.
+      - name: Check whether the tag already exists
+        id: existing
+        env:
+          REPOSITORY_NAME: ${{ steps.registry.outputs.repository_name }}
+          IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
+        run: |
+          if aws ecr describe-images \
+              --repository-name "$REPOSITORY_NAME" \
+              --image-ids "imageTag=$IMAGE_TAG" \
+              --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Le tag ${IMAGE_TAG} est deja publie ; build et push ignores."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to ECR
+        if: steps.existing.outputs.present == 'false'
+        env:
+          REGISTRY: ${{ steps.registry.outputs.registry }}
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Create Docker buildx builder
+        if: steps.existing.outputs.present == 'false'
+        run: |
+          docker buildx create --name fastapi-v2-builder --use || docker buildx use fastapi-v2-builder
+          docker buildx inspect --bootstrap
+
+      # linux/amd64 : la task definition ne declare pas de runtime_platform, donc ECS
+      # Fargate prend le defaut LINUX/X86_64. Le chemin V1 construit en arm64 pour
+      # AgentCore Runtime — les deux ne partagent pas cette contrainte.
+      - name: Build and push image
+        id: push
+        env:
+          REPOSITORY_URL: ${{ steps.registry.outputs.repository_url }}
+          IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
+        run: |
+          if [ "${{ steps.existing.outputs.present }}" = "false" ]; then
+            docker buildx build \
+              --platform "${IMAGE_PLATFORM}" \
+              --file Dockerfile \
+              --tag "${REPOSITORY_URL}:${IMAGE_TAG}" \
+              --provenance=false \
+              --push \
+              .
+          fi
+          echo "image_uri=${REPOSITORY_URL}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Report published digest
+        env:
+          REPOSITORY_NAME: ${{ steps.registry.outputs.repository_name }}
+          IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
+        run: |
+          digest="$(aws ecr describe-images \
+            --repository-name "$REPOSITORY_NAME" \
+            --image-ids "imageTag=$IMAGE_TAG" \
+            --region "${AWS_REGION}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          {
+            echo "### Image FastAPI V2"
+            echo ""
+            echo "- Tag : \`${IMAGE_TAG}\`"
+            echo "- Digest : \`${digest}\`"
+            echo "- Plateforme : \`${IMAGE_PLATFORM}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  platform-plan:
+    name: Plan Platform Phase
+    needs: [deployment-request-gate, quality-gate, image-build-push]
+    runs-on: ubuntu-latest
+    if: |
+      !cancelled() &&
+      needs.quality-gate.result == 'success' &&
+      (needs.image-build-push.result == 'success' || needs.image-build-push.result == 'skipped') &&
+      (inputs.deploy_mode == 'platform-only' || inputs.deploy_mode == 'full')
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      plan_exit_code: ${{ steps.plan.outputs.exitcode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-platform-plan
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init and validate
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform init
+          terraform validate
+
+      # Preconditions du plan plateforme. Chacune produirait autrement une erreur au
+      # milieu du plan ou, pire, un service demarre mais injoignable.
+      - name: Platform preflight
+        id: preflight
+        env:
+          IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform output -json > outputs.json
+
+          repository_name="$(jq -r '.fastapi_ecr_repository_name.value // ""' outputs.json)"
+          if [ -z "$repository_name" ]; then
+            echo "Le depot ECR fastapi est absent de l'etat. Executer deploy_mode=registry-only."
+            exit 1
+          fi
+
+          # ecs_platform.tf resout le tag en digest par un data source : sans image, le
+          # plan echoue sur une erreur de data source, loin de sa cause reelle.
+          if ! aws ecr describe-images \
+              --repository-name "$repository_name" \
+              --image-ids "imageTag=${IMAGE_TAG}" \
+              --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "Aucune image ${IMAGE_TAG} dans ${repository_name}."
+            echo "Executer d'abord ce workflow avec deploy_mode=image-only sur ce commit."
+            exit 1
+          fi
+
+          # §7.1 — parametres d'identite, jamais derives du jeton recu. Le pool Cognito
+          # V1 est reutilise par le MVP V2 : c'est le meme utilisateur qui se connecte.
+          user_pool_id="$(jq -r '.cognito_user_pool_id.value // ""' outputs.json)"
+          client_id="$(jq -r '.cognito_web_client_id.value // ""' outputs.json)"
+          if [ -z "$user_pool_id" ] || [ -z "$client_id" ]; then
+            echo "Sorties Cognito absentes : le service FastAPI ne pourrait valider aucun jeton."
+            exit 1
+          fi
+
+          {
+            echo "cognito_issuer=https://cognito-idp.${AWS_REGION}.amazonaws.com/${user_pool_id}"
+            echo "cognito_app_client_id=${client_id}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Terraform plan platform phase
+        id: plan
+        env:
+          IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
+          COGNITO_ISSUER: ${{ steps.preflight.outputs.cognito_issuer }}
+          COGNITO_APP_CLIENT_ID: ${{ steps.preflight.outputs.cognito_app_client_id }}
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          agentcore_args=()
+          state_list="$(terraform state list 2>/dev/null || true)"
+
+          if echo "$state_list" | grep -Eq '^aws_bedrockagentcore_'; then
+            if ! echo "$state_list" | grep -Fq 'aws_bedrockagentcore_agent_runtime.agent[0]'; then
+              echo "Des ressources AgentCore V1 existent dans l'etat sans la ressource Runtime."
+              echo "Le plan V2 pourrait detruire ou orpheliner le plan de controle V1."
+              exit 1
+            fi
+
+            runtime_state="$(terraform state show -no-color 'aws_bedrockagentcore_agent_runtime.agent[0]')"
+            image_uri="$(printf '%s\n' "$runtime_state" | awk -F' = ' '/container_uri/ {gsub(/"/, "", $2); print $2; exit}')"
+            v1_tag="${image_uri##*:}"
+
+            if [ -z "$image_uri" ] || [ -z "$v1_tag" ] || [ "$v1_tag" = "$image_uri" ]; then
+              echo "Tag de l'image AgentCore V1 introuvable dans l'etat Terraform."
+              exit 1
+            fi
+
+            agentcore_args+=("-var=enable_agentcore_control_plane=true")
+            agentcore_args+=("-var=agentcore_image_tag=${v1_tag}")
+            echo "Plan de controle V1 preserve avec le tag: ${v1_tag}"
+          fi
+
+          set +e
+          terraform plan \
+            -detailed-exitcode \
+            -lock-timeout=60s \
+            -var="enable_ecs_platform=true" \
+            -var="fastapi_image_tag=${IMAGE_TAG}" \
+            -var="cognito_issuer=${COGNITO_ISSUER}" \
+            -var="cognito_app_client_id=${COGNITO_APP_CLIENT_ID}" \
+            -out=tfplan-v2-platform \
+            "${agentcore_args[@]}"
+          exitcode=$?
+          set -e
+
+          echo "exitcode=$exitcode" >> "$GITHUB_OUTPUT"
+          if [ "$exitcode" -ne 0 ] && [ "$exitcode" -ne 2 ]; then
+            echo "Le plan de la phase plateforme a echoue avec le code ${exitcode}."
+            exit 1
+          fi
+          test -s tfplan-v2-platform
+
+      - name: Render plan evidence
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform show -no-color tfplan-v2-platform > tfplan-v2-platform.txt
+          terraform show -json tfplan-v2-platform > tfplan-v2-platform.json
+
+      # alb.tf ne cree le listener HTTPS que si un certificat ACM est fourni. Sans lui
+      # les taches demarrent, s'enregistrent dans le target group, et rien ne peut les
+      # atteindre. Le constat est tire du plan et non des tfvars : c'est le plan qui
+      # decide, et lui seul integre les valeurs venues de toutes les sources.
+      - name: Report ALB listener coverage
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          listeners="$(jq '[.planned_values | .. | objects
+            | select(.type? == "aws_lb_listener")] | length' tfplan-v2-platform.json)"
+
+          if [ "$listeners" = "0" ]; then
+            {
+              echo "> **ALB sans listener.** \`alb_certificate_arn\` n'est pas renseigne :"
+              echo "> le listener HTTPS de V2-LLD-001 §7 n'est pas planifie. Le service"
+              echo "> demarrera, mais aucun chemin ne mene aux taches. Le VPC Link et la"
+              echo "> route API Gateway restent eux aussi a provisionner (§16.5,"
+              echo "> precondition 4)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "AVERTISSEMENT : aucun listener ALB n'est planifie."
+          else
+            echo "Listener HTTPS planifie."
+          fi
+
+      # Le garde porte les cinq regles du socle V2 (V2-LLD-001 §16.6) en plus du
+      # controle des ressources critiques : ingestion jamais activee, CMK des logs
+      # preservee, invariant keep-alive / idle timeout, chemin unique CloudFront,
+      # borne de tolerance JWKS.
+      - name: Analyze plan safety
+        id: plan_guard
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py analyze \
+            --plan-json tfplan-v2-platform.json \
+            --summary-output tfplan-v2-platform-summary.md \
+            --policy enforce-critical
+        continue-on-error: true
+
+      - name: Record immutable plan metadata
+        if: always() && steps.plan.outputs.exitcode != '1'
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py record \
+            --plan tfplan-v2-platform \
+            --metadata-output tfplan-v2-platform-metadata.json \
+            --commit-sha "${GITHUB_SHA}" \
+            --stack-path "${STACK_PATH}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --terraform-version "${TF_VERSION}"
+          cat tfplan-v2-platform-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reviewed plan artifact
+        if: always() && steps.plan.outputs.exitcode != '1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: tfplan-v2-platform-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ env.STACK_PATH }}/tfplan-v2-platform
+            ${{ env.STACK_PATH }}/tfplan-v2-platform.txt
+            ${{ env.STACK_PATH }}/tfplan-v2-platform.json
+            ${{ env.STACK_PATH }}/tfplan-v2-platform-summary.md
+            ${{ env.STACK_PATH }}/tfplan-v2-platform-metadata.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Fail on unsafe plan
+        if: steps.plan_guard.outcome == 'failure'
+        run: |
+          echo "Le plan de la phase plateforme viole une regle de garde du socle V2."
+          exit 1
+
+  platform-apply:
+    name: Apply Platform Phase
+    needs: [platform-plan]
+    runs-on: ubuntu-latest
+    if: needs.platform-plan.outputs.plan_exit_code == '2'
+    environment:
+      name: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-platform-apply
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download reviewed plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: tfplan-v2-platform-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.STACK_PATH }}
+
+      - name: Verify immutable plan artifact
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          python3 ../../../scripts/terraform_plan_guard.py verify \
+            --plan tfplan-v2-platform \
+            --metadata tfplan-v2-platform-metadata.json \
+            --expected-commit-sha "${GITHUB_SHA}" \
+            --expected-stack-path "${STACK_PATH}" \
+            --expected-run-id "${GITHUB_RUN_ID}" \
+            --expected-terraform-version "${TF_VERSION}"
+          cat tfplan-v2-platform-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform init
+        working-directory: ${{ env.STACK_PATH }}
+        run: terraform init
+
+      - name: Terraform apply reviewed plan
+        working-directory: ${{ env.STACK_PATH }}
+        run: terraform apply -auto-approve -lock-timeout=120s tfplan-v2-platform
+
+      - name: Upload errored tfstate
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: v2-platform-errored-tfstate-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.STACK_PATH }}/errored.tfstate
+          retention-days: 7
+          if-no-files-found: ignore
+
+  platform-verify:
+    name: Verify Service Convergence
+    needs: [deployment-request-gate, platform-apply]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: v2-platform-verify
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Read platform outputs
+        id: platform
+        working-directory: ${{ env.STACK_PATH }}
+        run: |
+          terraform init
+          terraform output -json > outputs.json
+
+          cluster_arn="$(jq -r '.ecs_platform_cluster_arn.value // ""' outputs.json)"
+          target_group_arn="$(jq -r '.ecs_platform_target_group_arn.value // ""' outputs.json)"
+          alb_dns_name="$(jq -r '.ecs_platform_alb_dns_name.value // ""' outputs.json)"
+
+          if [ -z "$cluster_arn" ]; then
+            echo "Le socle ECS n'est pas provisionne : enable_ecs_platform est reste faux."
+            exit 1
+          fi
+
+          {
+            echo "cluster_name=${cluster_arn##*/}"
+            echo "target_group_arn=${target_group_arn}"
+            echo "alb_dns_name=${alb_dns_name}"
+          } >> "$GITHUB_OUTPUT"
+
+      # L'ALB est interne : aucun runner GitHub ne peut l'atteindre. La convergence du
+      # service et la sante des cibles sont donc la preuve disponible ici — le premier
+      # appel HTTP de bout en bout attend le VPC Link.
+      - name: Wait for the service to stabilize
+        env:
+          CLUSTER_NAME: ${{ steps.platform.outputs.cluster_name }}
+        run: |
+          if ! aws ecs wait services-stable \
+              --cluster "$CLUSTER_NAME" \
+              --services fastapi \
+              --region "${AWS_REGION}"; then
+            echo "Le service fastapi n'a pas converge."
+            aws ecs describe-services \
+              --cluster "$CLUSTER_NAME" \
+              --services fastapi \
+              --region "${AWS_REGION}" \
+              --query 'services[0].events[0:15].[createdAt,message]' \
+              --output table
+            exit 1
+          fi
+
+      - name: Report service and target health
+        env:
+          CLUSTER_NAME: ${{ steps.platform.outputs.cluster_name }}
+          TARGET_GROUP_ARN: ${{ steps.platform.outputs.target_group_arn }}
+          ALB_DNS_NAME: ${{ steps.platform.outputs.alb_dns_name }}
+          IMAGE_TAG: ${{ needs.deployment-request-gate.outputs.image_tag }}
+        run: |
+          running="$(aws ecs describe-services \
+            --cluster "$CLUSTER_NAME" --services fastapi --region "${AWS_REGION}" \
+            --query 'services[0].runningCount' --output text)"
+          desired="$(aws ecs describe-services \
+            --cluster "$CLUSTER_NAME" --services fastapi --region "${AWS_REGION}" \
+            --query 'services[0].desiredCount' --output text)"
+
+          healthy=0
+          if [ -n "$TARGET_GROUP_ARN" ]; then
+            healthy="$(aws elbv2 describe-target-health \
+              --target-group-arn "$TARGET_GROUP_ARN" --region "${AWS_REGION}" \
+              --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+              --output text)"
+          fi
+
+          {
+            echo "### Socle V2 deploye"
+            echo ""
+            echo "| Element | Valeur |"
+            echo "| --- | --- |"
+            echo "| Cluster | \`${CLUSTER_NAME}\` |"
+            echo "| Image | \`${IMAGE_TAG}\` |"
+            echo "| Taches | ${running} / ${desired} |"
+            echo "| Cibles saines | ${healthy} |"
+            echo "| ALB interne | \`${ALB_DNS_NAME}\` |"
+            echo ""
+            echo "L'ALB est interne. Le chemin navigateur reste a provisionner :"
+            echo "VPC Link puis route API Gateway vers le target group ci-dessus"
+            echo "(V2-LLD-001 §8, precondition 4 de §16.5)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$running" = "0" ]; then
+            echo "Aucune tache en cours d'execution."
+            exit 1
+          fi
