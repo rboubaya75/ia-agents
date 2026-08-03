@@ -16,6 +16,7 @@ RUN apt-get update \
     && adduser --system --uid 1000 --no-create-home appuser
 COPY --from=builder /install /usr/local
 COPY app/ ./app/
+COPY agents/ ./agents/
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", \

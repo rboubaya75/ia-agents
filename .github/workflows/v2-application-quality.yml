@@ -38,7 +38,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.13"
-  NODE_VERSION: "20"
+  NODE_VERSION: "22"
 
 jobs:
   fastapi-contracts:
@@ -172,9 +172,14 @@ jobs:
       # l'image, pas du depot : agents/ que le Dockerfile ne copiait pas, et les
       # prompts que la regle *.md du .dockerignore excluait du contexte de build.
       # Aucun test hors conteneur ne peut les voir.
+      #
+      # --interactive est indispensable : sans lui, docker run n'attache pas stdin au
+      # conteneur, `python -` lit EOF, n'execute aucune assertion et sort en 0. Le
+      # controle passait alors quel que soit le contenu de l'image — c'est ce silence
+      # qui a laisse le retrait de `COPY agents/` franchir la porte de qualite.
       - name: Verify image payload
         run: |
-          docker run --rm fastapi-v2:ci python - <<'PY'
+          docker run --rm --interactive fastapi-v2:ci python - <<'PY'
           import pathlib
 
           import agents.domain.orchestrator  # noqa: F401
