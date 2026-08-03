@@ -48,6 +48,21 @@ output "alb_dns_name" {
   value       = aws_lb.internal.dns_name
 }
 
+output "alb_listener_arn" {
+  description = "ARN du listener actif de l'ALB interne, HTTPS ou repli en clair. Vide tant qu'aucun des deux n'est cree."
+  value       = one(concat(aws_lb_listener.https[*].arn, aws_lb_listener.http[*].arn))
+}
+
+output "alb_listener_port" {
+  description = "Port du listener actif : 443 en nominal, 80 sur le repli en clair."
+  value       = var.alb_plaintext_listener_enabled ? 80 : 443
+}
+
+output "alb_listener_scheme" {
+  description = "Schema d'URI a utiliser par l'integration API Gateway vers l'ALB."
+  value       = var.alb_plaintext_listener_enabled ? "http" : "https"
+}
+
 output "target_group_arn" {
   description = "Target group ARN of the fastapi service."
   value       = aws_lb_target_group.fastapi.arn

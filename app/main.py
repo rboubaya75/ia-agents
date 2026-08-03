@@ -5,7 +5,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app import auth
-from app.routes import conversations, operations
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +25,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
-app.include_router(conversations.router)
-app.include_router(operations.router)
 
 
 @app.get("/health")

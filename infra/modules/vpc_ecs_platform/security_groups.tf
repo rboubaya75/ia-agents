@@ -43,12 +43,38 @@ resource "aws_security_group" "vpc_endpoints" {
 
 # §6.1 — sg-alb-internal
 resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc_link" {
+  count = var.alb_plaintext_listener_enabled ? 0 : 1
+
   security_group_id            = aws_security_group.alb_internal.id
   description                  = "HTTPS from API Gateway through the VPC Link."
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
   referenced_security_group_id = aws_security_group.vpc_link.id
+}
+
+# Le port suit le listener retenu. Ouvrir les deux en permanence laisserait 443 béant
+# sur un ALB qui n'y écoute pas, et 80 ouvert sur celui qui termine TLS.
+resource "aws_vpc_security_group_ingress_rule" "alb_from_vpc_link_plaintext" {
+  count = var.alb_plaintext_listener_enabled ? 1 : 0
+
+  security_group_id            = aws_security_group.alb_internal.id
+  description                  = "HTTP from API Gateway through the VPC Link (plaintext fallback)."
+  ip_protocol                  = "tcp"
+  from_port                    = 80
+  to_port                      = 80
+  referenced_security_group_id = aws_security_group.vpc_link.id
+}
+
+# Le VPC Link doit pouvoir sortir vers l'ALB : sans règle d'egress, les ENIs du lien
+# n'atteignent rien et l'intégration expire au lieu d'échouer franchement.
+resource "aws_vpc_security_group_egress_rule" "vpc_link_to_alb" {
+  security_group_id            = aws_security_group.vpc_link.id
+  description                  = "Reach the internal ALB listener."
+  ip_protocol                  = "tcp"
+  from_port                    = var.alb_plaintext_listener_enabled ? 80 : 443
+  to_port                      = var.alb_plaintext_listener_enabled ? 80 : 443
+  referenced_security_group_id = aws_security_group.alb_internal.id
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_fastapi" {

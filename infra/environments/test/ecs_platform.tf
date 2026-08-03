@@ -41,6 +41,9 @@ module "vpc_ecs_platform" {
   alb_idle_timeout_seconds = var.alb_idle_timeout_seconds
   sse_keepalive_seconds    = var.sse_keepalive_seconds
   alb_certificate_arn      = var.alb_certificate_arn
+  # Ecart assume, voir la variable : sans certificat, le repli en clair est le seul
+  # moyen d'avoir un listener, donc un chemin vers les taches.
+  alb_plaintext_listener_enabled = var.alb_plaintext_listener_enabled
 
   # §7.1 — paramètres d'identité, jamais dérivés du token reçu
   cognito_issuer                    = var.cognito_issuer

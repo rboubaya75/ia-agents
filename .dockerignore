@@ -8,9 +8,6 @@ tests/
 frontend/
 lambda/
 *.md
-# Versioned system prompts are runtime assets, not documentation: the blanket *.md
-# exclusion above would keep them out of the image and break PromptRegistry.
-!agents/prompts/*.md
 *.yaml
 *.yml
 *.sh

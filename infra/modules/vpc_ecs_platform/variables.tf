@@ -156,6 +156,31 @@ variable "alb_certificate_arn" {
   default     = ""
 }
 
+# Écart assumé à §7, réservé aux environnements de test.
+#
+# §7 veut un listener HTTPS 443 avec certificat ACM. ACM n'émet pas de certificat pour
+# le nom généré de l'ALB (`internal-*.eu-west-3.elb.amazonaws.com`) : il faudrait un
+# domaine possédé et validé, ou une CA privée. Tant qu'aucun des deux n'existe, la
+# seule alternative à « pas de listener du tout » est un listener en clair.
+#
+# Ce que cela dégrade exactement : le tronçon VPC Link → ALB circule en HTTP dans les
+# sous-réseaux privés du VPC, au lieu d'être chiffré de bout en bout. TLS reste terminé
+# à CloudFront puis à API Gateway ; aucun trafic en clair ne sort du VPC. Le risque
+# résiduel est l'observation intra-VPC, que §6 borne déjà par les Security Groups.
+#
+# Le drapeau est explicite et vaut faux par défaut, précisément pour que la dégradation
+# soit décidée et non constatée.
+variable "alb_plaintext_listener_enabled" {
+  type        = bool
+  description = "Crée un listener HTTP 80 sur l'ALB interne lorsque aucun certificat ACM n'est disponible. Écart assumé à V2-LLD-001 §7, réservé au test."
+  default     = false
+
+  validation {
+    condition     = !(var.alb_plaintext_listener_enabled && var.alb_certificate_arn != "")
+    error_message = "alb_plaintext_listener_enabled et alb_certificate_arn s'excluent : fournir un certificat, ou assumer le listener en clair, jamais les deux."
+  }
+}
+
 variable "alb_deregistration_delay_seconds" {
   type        = number
   description = "Target group deregistration delay (V2-LLD-001 §7)."
