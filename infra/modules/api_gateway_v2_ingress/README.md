@@ -53,14 +53,12 @@ parce qu'il repose sur un HTTP API, où la journalisation d'accès ne passe pas 
 réglage.
 
 Le module le provisionne — sans lui, son propre stage échoue. Mais
-`aws_api_gateway_account` est un **singleton compte + région** : deux instances de ce
-module dans la même région s'écraseraient. D'où `manage_account_cloudwatch_role`, vrai
-par défaut, à passer à faux lorsque le compte porte déjà ce réglage.
-
-`reset_on_delete` vaut faux, dit explicitement : détruire ce module ne retire pas à la
-région un réglage dont d'autres REST API peuvent dépendre. Le rôle disparaît en revanche
-— le compte garde alors un ARN qui ne résout plus, ce qui se voit, plutôt qu'une
-journalisation éteinte ailleurs sans bruit.
+`aws_api_gateway_account` est un **singleton compte + région**, et le fournisseur 6.x
+remet `/cloudwatchRoleArn` à null à la destruction, sans réglage pour s'y soustraire.
+Deux instances de ce module dans la même région s'écraseraient donc, et retirer celle-ci
+priverait de journaux toute autre REST API de la région. D'où
+`manage_account_cloudwatch_role`, vrai par défaut, à passer à faux dès qu'une autre
+autorité porte ce réglage.
 
 ---
 

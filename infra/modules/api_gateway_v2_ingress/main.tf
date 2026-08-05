@@ -282,9 +282,12 @@ resource "aws_cloudwatch_log_group" "access" {
 # rencontre parce qu'il est bati sur un HTTP API, ou la journalisation d'acces ne passe
 # pas par ce reglage.
 #
-# La ressource est un singleton compte + region : deux instances de ce module dans la
-# meme region s'ecraseraient mutuellement. C'est pourquoi elle est desactivable plutot
-# que systematique, et pourquoi le motif est ecrit ici et non deduit du plan.
+# La ressource est un singleton compte + region, et le fournisseur 6.x remet
+# /cloudwatchRoleArn a null a la destruction, sans reglage pour s'y soustraire. Deux
+# instances de ce module dans la meme region s'ecraseraient donc, et retirer celle-ci
+# priverait de journaux toute autre REST API de la region. C'est pourquoi elle est
+# desactivable plutot que systematique, et pourquoi le motif est ecrit ici : il ne se
+# lit pas sur le plan, qui ne montre qu'une ressource de plus.
 data "aws_partition" "current" {}
 
 data "aws_iam_policy_document" "account_cloudwatch_assume" {
@@ -325,12 +328,6 @@ resource "aws_api_gateway_account" "this" {
   count = var.manage_account_cloudwatch_role ? 1 : 0
 
   cloudwatch_role_arn = aws_iam_role.account_cloudwatch[0].arn
-
-  # Dit explicitement plutot que laisse au defaut du fournisseur : detruire ce module ne
-  # doit pas retirer a la region un reglage dont d'autres REST API peuvent dependre. Le
-  # role, lui, disparait — la trace laissee est un ARN qui ne resout plus, visible, et
-  # non une journalisation silencieusement eteinte ailleurs.
-  reset_on_delete = false
 
   # L'attachement n'est reference par aucun attribut : sans cette arete, Terraform peut
   # designer le role au compte avant que la politique n'y soit attachee, et API Gateway
