@@ -44,3 +44,8 @@ output "access_log_group_name" {
   description = "Groupe de journaux d'acces du stage."
   value       = aws_cloudwatch_log_group.access.name
 }
+
+output "account_cloudwatch_role_arn" {
+  description = "Role de journalisation designe au compte pour la region. Vide lorsque manage_account_cloudwatch_role est faux : le reglage est alors porte hors de ce module."
+  value       = one(aws_iam_role.account_cloudwatch[*].arn)
+}

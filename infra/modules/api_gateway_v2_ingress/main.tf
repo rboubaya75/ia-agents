@@ -275,6 +275,69 @@ resource "aws_cloudwatch_log_group" "access" {
   tags = var.common_tags
 }
 
+# Un REST API n'ecrit aucun journal — ni d'acces, ni d'execution — tant que le compte
+# ne designe pas, pour la region, un role que CloudWatch Logs accepte. Ce n'est pas un
+# reglage du stage : `UpdateStage` refuse `accessLogSettings` par « CloudWatch Logs role
+# ARN must be set in account settings to enable logging ». Le chemin V1 ne l'a jamais
+# rencontre parce qu'il est bati sur un HTTP API, ou la journalisation d'acces ne passe
+# pas par ce reglage.
+#
+# La ressource est un singleton compte + region : deux instances de ce module dans la
+# meme region s'ecraseraient mutuellement. C'est pourquoi elle est desactivable plutot
+# que systematique, et pourquoi le motif est ecrit ici et non deduit du plan.
+data "aws_partition" "current" {}
+
+data "aws_iam_policy_document" "account_cloudwatch_assume" {
+  count = var.manage_account_cloudwatch_role ? 1 : 0
+
+  statement {
+    sid     = "ApiGatewayAssumeRole"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["apigateway.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "account_cloudwatch" {
+  count = var.manage_account_cloudwatch_role ? 1 : 0
+
+  name               = "${var.name_prefix}-apigw-cloudwatch"
+  description        = "Role assume par API Gateway pour ecrire les journaux du compte (V2-LLD-001 sec. 12.1)."
+  assume_role_policy = data.aws_iam_policy_document.account_cloudwatch_assume[0].json
+
+  tags = var.common_tags
+}
+
+# La politique geree est celle qu'AWS designe pour cet usage. Une politique ecrite a la
+# main devrait enumerer les actions Describe/Get/Put des journaux et serait un doublon
+# silencieusement decale des que le service en ajoute une.
+resource "aws_iam_role_policy_attachment" "account_cloudwatch" {
+  count = var.manage_account_cloudwatch_role ? 1 : 0
+
+  role       = aws_iam_role.account_cloudwatch[0].name
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+resource "aws_api_gateway_account" "this" {
+  count = var.manage_account_cloudwatch_role ? 1 : 0
+
+  cloudwatch_role_arn = aws_iam_role.account_cloudwatch[0].arn
+
+  # Dit explicitement plutot que laisse au defaut du fournisseur : detruire ce module ne
+  # doit pas retirer a la region un reglage dont d'autres REST API peuvent dependre. Le
+  # role, lui, disparait — la trace laissee est un ARN qui ne resout plus, visible, et
+  # non une journalisation silencieusement eteinte ailleurs.
+  reset_on_delete = false
+
+  # L'attachement n'est reference par aucun attribut : sans cette arete, Terraform peut
+  # designer le role au compte avant que la politique n'y soit attachee, et API Gateway
+  # rejette alors un role qui ne peut rien ecrire.
+  depends_on = [aws_iam_role_policy_attachment.account_cloudwatch]
+}
+
 # Le redéploiement suit le contenu de l'API. Sans ce déclencheur, une modification de
 # route ou d'intégration resterait dans la définition sans jamais atteindre le stage —
 # le plan serait vert et le comportement inchangé.
@@ -318,6 +381,10 @@ resource "aws_api_gateway_stage" "this" {
   }
 
   tags = var.common_tags
+
+  # Le reglage du compte n'est lie au stage par aucun attribut, alors qu'il le
+  # conditionne entierement : `access_log_settings` echoue sans lui.
+  depends_on = [aws_api_gateway_account.this]
 }
 
 resource "aws_api_gateway_method_settings" "this" {

@@ -149,8 +149,18 @@ variable "log_retention_days" {
 
 variable "logs_kms_key_arn" {
   type        = string
-  description = "CMK chiffrant les journaux d'acces (V2-LLD-001 §12.1)."
+  description = "CMK chiffrant les journaux d'acces (V2-LLD-001 §12.1). La cle doit autoriser logs.<region>.amazonaws.com sur le contexte /aws/apigateway/* : celle du socle ne couvre que /ecs/ et le journal d'effacement."
   default     = ""
+}
+
+# Le role de journalisation d'API Gateway est un singleton compte + region, pas une
+# propriete du stage. Le module le provisionne parce que sans lui son propre stage
+# echoue ; la variable existe pour le cas ou le compte le porte deja — seconde instance
+# du module dans la region, ou role gere par une autre equipe.
+variable "manage_account_cloudwatch_role" {
+  type        = bool
+  description = "Cree le role de journalisation d'API Gateway et le designe au compte. Faux suppose qu'un role valide est deja regle pour la region, sans quoi le stage echoue a l'apply."
+  default     = true
 }
 
 variable "throttling_rate_limit" {

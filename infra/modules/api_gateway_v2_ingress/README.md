@@ -45,6 +45,23 @@ La politique établit la *présence* du mécanisme ; son efficacité se démontr
 direct de §15, pas par lecture du plan — c'est exactement ce que constate la règle de
 garde 4.
 
+**Le rôle de journalisation est réglé au compte, pas au stage.** Un REST API n'écrit
+aucun journal tant que le compte ne désigne pas, pour la région, un rôle que CloudWatch
+Logs accepte : `UpdateStage` refuse `accessLogSettings` par *CloudWatch Logs role ARN
+must be set in account settings to enable logging*. Le chemin V1 ne l'a jamais rencontré
+parce qu'il repose sur un HTTP API, où la journalisation d'accès ne passe pas par ce
+réglage.
+
+Le module le provisionne — sans lui, son propre stage échoue. Mais
+`aws_api_gateway_account` est un **singleton compte + région** : deux instances de ce
+module dans la même région s'écraseraient. D'où `manage_account_cloudwatch_role`, vrai
+par défaut, à passer à faux lorsque le compte porte déjà ce réglage.
+
+`reset_on_delete` vaut faux, dit explicitement : détruire ce module ne retire pas à la
+région un réglage dont d'autres REST API peuvent dépendre. Le rôle disparaît en revanche
+— le compte garde alors un ARN qui ne résout plus, ce qui se voit, plutôt qu'une
+journalisation éteinte ailleurs sans bruit.
+
 ---
 
 ## Écarts assumés
@@ -73,6 +90,7 @@ intra-VPC, que les Security Groups de §6 bornent déjà.
 | `cognito_user_pool_arn` | Pool adossant l'authorizer (§7.1) |
 | `conversation_response_transfer_mode` | `STREAM` par défaut ; `BUFFERED` est le repli de la précondition 3 |
 | `origin_verify_secret` | Valeur partagée avec CloudFront, 32 caractères minimum |
+| `manage_account_cloudwatch_role` | Vrai par défaut. Faux suppose que la région porte déjà un rôle de journalisation valide |
 | `web_acl_arn` | Web ACL du stage ; vide = WAF sur CloudFront seul |
 
 ## Sorties principales
