@@ -619,6 +619,23 @@ Deux propriétés en découlent, et ce sont elles qui motivent le choix :
   serait refusée faute de signature valide. L'échec d'un contrôle réseau reste un problème de
   disponibilité et ne devient pas une usurpation.
 
+**Le type de jeton accepté au bord se déclare, il ne se devine pas.** Un authorizer
+`COGNITO_USER_POOLS` de REST API a deux modes, et c'est la présence de `authorizationScopes` sur la
+méthode qui les départage : sans scope déclaré, la passerelle traite l'en-tête comme un **jeton
+d'identité** et refuse tout jeton d'accès ; avec au moins un scope, elle le traite comme un **jeton
+d'accès** et compare les scopes revendiqués à ceux déclarés. Le front présentant un jeton d'accès
+(`V2-LLD-010 §4.2`), les méthodes déclarent `aws.cognito.signin.user.admin`.
+
+Ce scope n'est pas un droit métier : il figure sur tout jeton d'accès émis par le pool. Il ne peut
+pas en être autrement tant que l'authentification passe par SRP — les scopes d'un *resource server*
+ne s'obtiennent que par le flux OAuth2 code d'autorisation. Ce que le contrôle établit reste donc
+« jeton d'accès valide de ce pool », ce qui est exactement sa finalité ici : protéger la
+disponibilité du chemin privé. L'identité de confiance, elle, est établie par FastAPI (§7.1.3).
+
+Un HTTP API n'a pas ce comportement — son authorizer `JWT` valide nativement un jeton d'accès
+Cognito en comparant `client_id` à l'`audience`. C'est la raison pour laquelle le chemin V1
+fonctionnait sans rien déclarer, et le piège exact de la migration vers un REST API décidée en §7.0.
+
 #### 7.1.2 Frontière du token
 
 `V2-ADR-006` interdit qu'un token Cognito atteigne Runtime, MCP ou les tools. Il n'a jamais interdit

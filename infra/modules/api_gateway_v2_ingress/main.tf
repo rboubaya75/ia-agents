@@ -171,6 +171,12 @@ resource "aws_api_gateway_method" "this" {
   authorization = "COGNITO_USER_POOLS"
   authorizer_id = aws_api_gateway_authorizer.cognito.id
 
+  # Ce que declare cette ligne n'est pas un droit metier, c'est le *type de jeton* que
+  # la passerelle accepte. Sans elle, un authorizer COGNITO_USER_POOLS traite l'en-tete
+  # comme un jeton d'identite et refuse tout jeton d'acces — 401, sans jamais appeler
+  # l'integration. Le front presentant un jeton d'acces, la route etait fermee.
+  authorization_scopes = var.authorization_scopes
+
   request_parameters = each.value.request_params
 }
 

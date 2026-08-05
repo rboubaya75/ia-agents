@@ -61,6 +61,26 @@ variable "cognito_user_pool_arn" {
   description = "ARN du pool Cognito adossant l'authorizer de la passerelle (V2-LLD-001 §7.1)."
 }
 
+# Declarer au moins un scope est ce qui fait basculer l'authorizer COGNITO_USER_POOLS
+# sur le chemin « jeton d'acces ». Liste vide = chemin « jeton d'identite », et tout
+# jeton d'acces est alors refuse au bord.
+#
+# `aws.cognito.signin.user.admin` est le seul scope qu'un flux SRP obtienne : les scopes
+# d'un resource server passent par le flux OAuth2 code d'autorisation, que le front
+# n'emploie pas. Il atteste donc « jeton d'acces valide de ce pool », pas un droit
+# metier — ce qui est exactement la finalite de §7.1.1 pour ce controle, l'identite de
+# confiance restant etablie par FastAPI.
+variable "authorization_scopes" {
+  type        = list(string)
+  description = "Scopes OAuth exiges sur les methodes. Non vide = la passerelle attend un jeton d'acces ; vide = elle attend un jeton d'identite."
+  default     = ["aws.cognito.signin.user.admin"]
+
+  validation {
+    condition     = length(var.authorization_scopes) > 0
+    error_message = "Une liste vide ferait attendre un jeton d'identite a la passerelle, alors que le front presente un jeton d'acces. Le changer suppose de changer aussi le jeton emis par le front."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # Streaming — V2-LLD-001 §7.0, §7.3
 # ---------------------------------------------------------------------------
