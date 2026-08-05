@@ -421,20 +421,32 @@ contrat. Sa **réalisation** — bibliothèque, options, paramètres — est en 
 | Signature | vérifiée par FastAPI contre le JWKS Cognito, jamais déléguée à une affirmation amont | signature invalide, `kid` inconnu après une actualisation |
 | `alg` | liste blanche **`RS256` uniquement**, en liste positive et non par exclusion de `none` | tout algorithme hors liste |
 | `iss` | **comparé** à une valeur de configuration | différent, absent |
-| `aud` | **comparé** à une valeur de configuration | différent, absent |
-| `exp` / `nbf` | tolérance d'horloge bornée et déclarée | expiré, pas encore valide |
-| `token_use` | doit valoir **`access`** (écart 2) | absent ou différent |
-| `sub` | présent, non vide | absent |
+| Client applicatif | **comparé** à une valeur de configuration, sur le claim que désigne `token_use` : `aud` pour `id`, `client_id` pour `access` | différent, absent |
+| `exp` / `nbf` | tolérance d'horloge bornée et déclarée ; `nbf` vérifié s'il est présent, jamais exigé | expiré, pas encore valide |
+| `token_use` | doit valoir **`access`** ou **`id`** (écart 2) | absent, ou hors de ces deux valeurs |
+| `sub` | présent, non vide | absent, vide |
 
 **Pourquoi la liste blanche est positive.** Interdire `none` laisse passer `HS256`, qui permet à un
 attaquant de signer un jeton avec la clé publique du JWKS — publique par construction. Une liste
 positive `["RS256"]` est la seule formulation qui ne dépende pas de l'exhaustivité d'une liste noire.
 
-**Pourquoi `iss` et `aud` sont comparés et non constatés.** Un jeton correctement signé par un autre
-pool Cognito, ou destiné à un autre client applicatif, est un jeton **valide** : sa signature vérifie,
-ses dates sont bonnes, son `sub` est présent. Seule la comparaison à une valeur de configuration
-établit qu'il est le nôtre. C'est la différence entre « ce jeton est authentique » et « ce jeton
-m'est destiné ».
+**Pourquoi `iss` et le client applicatif sont comparés et non constatés.** Un jeton correctement
+signé par un autre pool Cognito, ou destiné à un autre client applicatif, est un jeton **valide** :
+sa signature vérifie, ses dates sont bonnes, son `sub` est présent. Seule la comparaison à une
+valeur de configuration établit qu'il est le nôtre. C'est la différence entre « ce jeton est
+authentique » et « ce jeton m'est destiné ».
+
+**Pourquoi le claim n'est pas toujours `aud`.** Cognito ne nomme pas de la même façon le client
+applicatif sur ses deux jetons : le jeton d'identité porte `aud`, le jeton d'accès porte
+`client_id`. La valeur désignée est identique. Une table exigeant `aud` **et** `token_use = access`
+serait donc insatisfiable — c'est l'état dans lequel ce LLD et `V2-LLD-001 §7.1.3` se sont trouvés,
+et le service refusait en conséquence tout jeton présenté par le front.
+
+Le service accepte les deux types et choisit le claim d'après `token_use`. La table est **fermée** :
+un `token_use` absent ou hors des deux valeurs refuse, faute de quoi « accepter les deux types »
+deviendrait « ne comparer aucune audience » dès que le claim manque. L'écart 2 reste entier sur ce
+qu'il décidait — le jeton d'accès suffit, aucun claim personnalisé n'est requis, `tenantId` est
+résolu par le registre — il ne force simplement plus le refus de l'autre type.
 
 **Ce qui n'est pas exigé.** Aucun claim personnalisé. Aucun en-tête d'identité, quel qu'en soit le
 nom (§1.7 écart 1). Le chemin de résolution ne consulte aucune valeur transmise en dehors de

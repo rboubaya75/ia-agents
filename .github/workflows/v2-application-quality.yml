@@ -99,6 +99,15 @@ jobs:
           print("Contrat de routes verifie:", sorted(expected))
           PY
 
+      # Le harnais du job runtime neutralise `bearer_claims` par le point d'extension de
+      # FastAPI : aucune de ses requetes ne traverse verify_token. Sans cette etape, la
+      # validation du jeton n'est verifiee nulle part — c'est ainsi qu'un service
+      # refusant tout jeton d'acces Cognito a pu etre construit, teste vert et deploye.
+      - name: Verify token validation contract
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tests/unit/test_v2_token_validation_contract.py -v
+
       - name: Audit Python dependencies
         run: python -m pip_audit --strict --requirement app/requirements.txt
 

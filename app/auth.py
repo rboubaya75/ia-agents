@@ -12,6 +12,25 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Cognito emet deux jetons pour le meme utilisateur, et ils ne nomment pas de la meme
+# facon le claim qui designe le client applicatif : le jeton d'identite porte `aud`, le
+# jeton d'acces porte `client_id`. La valeur est la meme — l'identifiant du client. Le
+# service accepte les deux et choisit le claim d'apres `token_use`, ce qui laisse au
+# client le choix du jeton qu'il presente sans jamais relacher la comparaison.
+#
+# Une audience verifiee « quand le claim est la » ne serait pas un controle : un
+# `token_use` inattendu doit refuser, pas passer sans comparaison. C'est pourquoi la
+# table est fermee et l'absence de correspondance vaut refus.
+AUDIENCE_CLAIM_BY_TOKEN_USE = {
+    "id": "aud",
+    "access": "client_id",
+}
+
+# Tolerance d'horloge, bornee et declaree (V2-LLD-005 §3.5). Cognito n'emet pas de
+# `nbf` : il est verifie lorsqu'il est present, jamais exige, sans quoi tout jeton
+# Cognito serait refuse.
+CLOCK_LEEWAY_SECONDS = 60
+
 _lock = asyncio.Lock()
 _cache: dict[str, Any] | None = None
 _cached_at: float = 0.0
@@ -120,16 +139,59 @@ async def verify_token(token: str) -> dict[str, Any]:
         raise HTTPException(401, "Unknown signing key")
 
     try:
-        # §7.1.3 — iss and aud are compared to the configured parameters, never to a
-        # value read out of the token itself.
-        return jwt.decode(
+        # §7.1.3 — iss is compared to the configured parameter, never to a value read
+        # out of the token itself.
+        #
+        # L'audience ne peut pas etre deleguee a PyJWT : son parametre `audience` ne sait
+        # lire que `aud`, absent du jeton d'acces. Et le laisser a None ne revient pas a
+        # « ne rien exiger » — PyJWT refuse alors tout jeton *portant* un `aud`, donc tous
+        # les jetons d'identite. La verification est donc desactivee ici et reprise juste
+        # apres, sur le claim que designe `token_use`.
+        claims: dict[str, Any] = jwt.decode(
             token,
             key,
             algorithms=["RS256"],
-            audience=settings.cognito_app_client_id,
             issuer=settings.cognito_issuer,
-            options={"require": ["exp", "iat", "iss", "aud"]},
+            leeway=CLOCK_LEEWAY_SECONDS,
+            options={
+                "verify_aud": False,
+                "require": ["exp", "iat", "iss", "sub", "token_use"],
+            },
         )
     except InvalidTokenError as exc:
         logger.info("token rejected: %s", exc)
         raise HTTPException(401, "Invalid token") from exc
+
+    _verify_audience(claims)
+    _verify_subject(claims)
+    return claims
+
+
+def _verify_audience(claims: dict[str, Any]) -> None:
+    """Compare le client applicatif designe par le jeton a la valeur configuree.
+
+    Un jeton correctement signe par notre pool mais emis pour un autre client est un
+    jeton authentique : seule cette comparaison etablit qu'il nous est destine.
+    """
+    token_use = claims.get("token_use")
+    claim_name = AUDIENCE_CLAIM_BY_TOKEN_USE.get(token_use)
+    if claim_name is None:
+        logger.info("token rejected, unexpected token_use %r", token_use)
+        raise HTTPException(401, "Invalid token")
+
+    value = claims.get(claim_name)
+    # `aud` vaut une chaine sur un jeton Cognito, mais la RFC 7519 autorise une liste.
+    # Normaliser evite de comparer une chaine a une liste, ce qui echouerait en silence.
+    audiences = value if isinstance(value, list) else [value]
+    if settings.cognito_app_client_id not in audiences:
+        logger.info("token rejected, %s does not designate the configured client", claim_name)
+        raise HTTPException(401, "Invalid token")
+
+
+def _verify_subject(claims: dict[str, Any]) -> None:
+    # `require` etablit la presence, pas la substance : un `sub` vide passerait et
+    # deviendrait un actorId vide jusque dans le registre d'autorisation.
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject.strip():
+        logger.info("token rejected, sub absent or empty")
+        raise HTTPException(401, "Invalid token")

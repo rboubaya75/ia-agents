@@ -651,14 +651,24 @@ FastAPI vérifie le token à chaque requête, sur les clés publiques du JWKS Co
 | Signature | vérifiée contre la clé du JWKS dont le `kid` correspond | signature invalide, `kid` inconnu après actualisation |
 | `alg` | liste blanche **`RS256` uniquement** | `none`, `HS256` ou tout algorithme hors liste |
 | `iss` | comparé à la valeur de configuration `cognito_issuer` | différent, absent |
-| `aud` | comparé à la valeur de configuration `cognito_app_client_id` | différent, absent |
-| `exp` / `nbf` | horodatage courant, tolérance d'horloge 60 s | expiré, pas encore valide |
-| `token_use` | doit valoir `access` | absent ou différent |
-| `sub` | présent et non vide | absent |
+| Client applicatif | `aud` si `token_use = id`, `client_id` si `token_use = access` ; comparé à `cognito_app_client_id` | différent, absent |
+| `exp` / `nbf` | horodatage courant, tolérance d'horloge 60 s ; `nbf` vérifié s'il est présent, jamais exigé — Cognito n'en émet pas | expiré, pas encore valide |
+| `token_use` | doit valoir `access` **ou** `id` | absent ou hors de ces deux valeurs |
+| `sub` | présent et non vide | absent, vide |
 
-`iss` et `aud` sont **comparés à des valeurs de configuration**, jamais seulement constatés présents :
-un token correctement signé par un autre pool ou destiné à un autre client applicatif est un token
-valide qui n'est pas le nôtre.
+`iss` et le client applicatif sont **comparés à des valeurs de configuration**, jamais seulement
+constatés présents : un token correctement signé par un autre pool ou destiné à un autre client
+applicatif est un token valide qui n'est pas le nôtre.
+
+**Pourquoi le claim du client applicatif dépend du type de token.** Cognito ne le nomme pas de la
+même façon sur les deux : le token d'identité porte `aud`, le token d'accès porte `client_id`. La
+valeur désignée est la même. Le service accepte les deux types et choisit le claim d'après
+`token_use` — ce qui laisse au client le choix du token qu'il présente sans jamais relâcher la
+comparaison.
+
+La table est **fermée** : un `token_use` absent ou hors des deux valeurs refuse, plutôt que de
+laisser passer un token dont aucune audience n'aurait été comparée. C'est la différence entre
+« accepter les deux types » et « ne rien vérifier quand le claim manque ».
 
 **Ce que FastAPI ne lit pas.** Le chemin de résolution d'identité **ne lit aucun en-tête d'identité**,
 quel que soit son nom — ni `X-Amzn-Oidc-*`, ni `X-Claims-*`, ni aucun équivalent. Il n'y a plus de
@@ -673,10 +683,23 @@ claim `custom:tenantId` n'est requis ni lu. Un `tenantId` présent dans le corps
 sans effet.
 
 **Bibliothèque.** `PyJWT` avec `cryptography`, via un client JWKS avec cache (§7.1.4). La
-configuration est explicite et vérifiée en revue : `algorithms=["RS256"]`, `audience` et `issuer`
-passés à la vérification. `options={"verify_signature": False}` est interdit en toute circonstance,
-y compris en test — un test qui a besoin de désactiver la signature teste autre chose que le chemin
-de production.
+configuration est explicite et vérifiée en revue : `algorithms=["RS256"]`, `issuer` et `leeway`
+passés à la vérification, `require` portant `exp`, `iat`, `iss`, `sub` et `token_use`.
+
+La comparaison du client applicatif est faite **hors de `PyJWT`**, immédiatement après le décodage.
+Le paramètre `audience` de la bibliothèque ne sait lire que `aud` : il refuserait tout token
+d'accès. Et le laisser à `None` ne revient pas à « ne rien exiger » — `PyJWT` refuse alors tout
+token *portant* un `aud`, donc tous les tokens d'identité. `verify_aud` est donc désactivé et la
+comparaison reprise sur le claim que désigne `token_use`, sans qu'aucun chemin ne permette de s'en
+dispenser.
+
+`options={"verify_signature": False}` est interdit en toute circonstance, y compris en test — un
+test qui a besoin de désactiver la signature teste autre chose que le chemin de production.
+
+**Preuve.** `tests/unit/test_v2_token_validation_contract.py` est la forme exécutable de cette
+table : il signe des tokens avec une paire RSA jetable et exerce chaque ligne, en acceptation comme
+en refus. Il est lancé par la porte de qualité V2, dont le harnais neutralise `bearer_claims` et ne
+traverse donc jamais ce chemin.
 
 #### 7.1.4 Cache JWKS et comportement en panne
 
@@ -1121,7 +1144,7 @@ indépendamment du trafic, portant le plancher mensuel à ~210 USD pour un profi
 | Keep-alive émis pendant un silence applicatif (§7.3) | flux avec tool lent simulé (> 90 s de silence) | `: ping` observés à ~15 s d'intervalle ; **flux non rompu** |
 | L'idle timeout ALB est bien la contrainte la plus serrée | flux sans keep-alive (keep-alive désactivé), mesure du délai de rupture | rupture à ~240 s, **journalisée côté ALB** — pas une déconnexion silencieuse côté client |
 | **Aucun en-tête de claims forgé n'a d'effet** (§7.1.3) | requête portant `X-Amzn-Oidc-Data`, `X-Claims-Sub` et `X-Claims-Tenant` forgés, avec un token valide d'un autre tenant | identité résolue = celle du **token vérifié** ; démontré par l'**absence de toute lecture d'en-tête d'identité** dans le chemin de résolution (revue de code + instrumentation), pas par un filtre qui les écarterait |
-| **FastAPI valide réellement le token** (§7.1.3) | token de signature valide mais `aud` incorrect, puis `iss` incorrect, puis expiré — **authorizer de la passerelle désactivé** en environnement de test | les trois refusés par FastAPI. Sans le volet « authorizer désactivé », la preuve n'établit pas que FastAPI valide, seulement que la passerelle valide |
+| **FastAPI valide réellement le token** (§7.1.3) | token de signature valide mais client applicatif incorrect — `aud` sur un token d'identité, `client_id` sur un token d'accès — puis `iss` incorrect, puis expiré — **authorizer de la passerelle désactivé** en environnement de test | les trois refusés par FastAPI. Sans le volet « authorizer désactivé », la preuve n'établit pas que FastAPI valide, seulement que la passerelle valide |
 | **L'ancrage ne dépend pas du chemin unique** (§7.1.1, §7.4) | requête forgée injectée **directement sur l'ALB interne**, hors du chemin API Gateway | aucune identité produite, requête refusée — l'échec du chemin unique reste un problème de disponibilité, pas une usurpation |
 | Le contrat d'identité est invariant au type d'API (§7.0) | même requête sur une route servie par HTTP API et sur une route servie par REST API | comportement de résolution d'identité identique, mesuré des deux côtés |
 | Le JWKS indisponible **au-delà** de la borne de tolérance refuse (§7.1.4) | JWKS rendu injoignable, horloge avancée au-delà de `jwks_stale_tolerance_seconds` | refus, alerté comme **incident de sécurité**, en série de métrique distincte du refus de quota (`V2-ADR-016`) et du refus d'autorisation |
@@ -1222,7 +1245,7 @@ variable "alb_idle_timeout_seconds" { type = number; default = 240 }  # §7.3 �
 variable "sse_keepalive_seconds"    { type = number; default = 15 }   # §7.3 — × 4 <= idle ALB
 variable "apigw_response_transfer_mode" { type = string; default = "STREAM" }  # §7.0 (V2-ADR-011)
 variable "cognito_issuer"           { type = string }  # §7.1.3 — comparé à iss, jamais déduit
-variable "cognito_app_client_id"    { type = string }  # §7.1.3 — comparé à aud, jamais déduit
+variable "cognito_app_client_id"    { type = string }  # §7.1.3 — comparé à aud/client_id, jamais déduit
 variable "jwks_cache_ttl_seconds"        { type = number; default = 3600 }   # §7.1.4
 variable "jwks_stale_tolerance_seconds"  { type = number; default = 21600 }  # §7.1.4 — heures, jamais jours
 variable "jwks_refresh_min_interval_seconds" { type = number; default = 60 } # §7.1.4 — anti-amplification
