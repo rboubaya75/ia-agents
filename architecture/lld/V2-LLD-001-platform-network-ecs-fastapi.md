@@ -856,9 +856,24 @@ terminaison API Gateway serait un chemin non décrit qui contourne l'intégralit
 rendrait fausse toute preuve qui exercerait ces contrôles par le chemin nominal.
 
 **Règle retenue.** L'API Gateway n'accepte que le trafic provenant de la distribution CloudFront du
-système. Le mécanisme précis — secret partagé injecté par CloudFront et vérifié par une resource
-policy, ou origine privée — relève de `V2-LLD-005` ; ce LLD porte l'exigence, sa vérifiabilité au
+système. Le mécanisme précis relève de `V2-LLD-005` ; ce LLD porte l'exigence, sa vérifiabilité au
 plan (§16.6, règle 4) et le fait qu'elle s'applique à **un seul** point d'entrée du fait de §7.0.
+
+> **Deux mécanismes candidats sont infirmés — constat d'implémentation.** Une *resource policy* API
+> Gateway ne peut porter cette exigence, sous aucune de ses deux formes. Elle ne sait pas lire le
+> secret partagé injecté par CloudFront : `aws:RequestHeader` ne figure pas parmi les clés de
+> condition globales, et une condition bâtie dessus se fermerait sur l'absence de la clé. Elle ne
+> sait pas davantage filtrer sur l'origine du relais : `aws:SourceIp` y est évalué sur l'adresse du
+> **client final**, pas sur celle du bord CloudFront — un `Deny` sur la liste de préfixes
+> `com.amazonaws.global.cloudfront.origin-facing` refuse donc *tout* le trafic, y compris celui qui
+> arrive par la distribution. Constaté au journal d'accès du stage, qui enregistre l'adresse du
+> navigateur pour des requêtes relayées par CloudFront.
+>
+> Il reste le WAF, seul point du chemin capable d'opposer un en-tête arbitraire, et l'origine
+> privée. La précondition 9 est donc **subordonnée à la précondition 8** et non indépendante d'elle,
+> ce que §16.5 énonçait dans un seul sens. Tant que le WAF n'est pas attaché, la précondition 9 est
+> **non tenue** : elle se déclare telle, elle ne se répute pas satisfaite par une politique
+> inopérante.
 
 **Attachement du WAF.** Un web ACL AWS WAF s'associe au **stage d'un REST API** ; il ne s'associe
 pas à un HTTP API. L'unification de §7.0 fait donc du stage REST API un point d'attachement unique,

@@ -91,6 +91,18 @@ resource "aws_cloudfront_response_headers_policy" "frontend_security" {
   }
 }
 
+# Routage des liens profonds du SPA. Il tient la place de la bascule
+# `custom_error_response` 403/404 → 200, qui ne se règle que par distribution et
+# masquait donc aussi les erreurs de `/api/*`. Une fonction s'associe en revanche à un
+# comportement précis, ce qui rend la réécriture opposable au seul contenu statique.
+resource "aws_cloudfront_function" "spa_router" {
+  name    = "${var.name_prefix}-spa-router"
+  runtime = "cloudfront-js-2.0"
+  comment = "Deep-link routing for the ${var.name_prefix} SPA"
+  publish = true
+  code    = file("${path.module}/spa_router.js")
+}
+
 resource "aws_cloudfront_distribution" "frontend" {
   enabled             = true
   comment             = "${var.name_prefix} frontend distribution"
@@ -172,6 +184,13 @@ resource "aws_cloudfront_distribution" "frontend" {
     compress                   = true
     response_headers_policy_id = aws_cloudfront_response_headers_policy.frontend_security.id
 
+    # L'association ne porte que sur ce comportement : le comportement `/api/*` n'a
+    # aucune fonction attachée et n'est donc jamais réécrit.
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_router.arn
+    }
+
     forwarded_values {
       query_string = false
 
@@ -181,18 +200,13 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  custom_error_response {
-    error_code         = 403
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
-
-  custom_error_response {
-    error_code         = 404
-    response_code      = 200
-    response_page_path = "/index.html"
-  }
-
+  # Aucun `custom_error_response` ici, délibérément. Ce bloc se règle au niveau de la
+  # distribution, jamais par comportement : la bascule 403/404 → 200 + `index.html` qui
+  # servait les liens profonds du SPA s'appliquait aussi à `/api/*`. Un refus de la
+  # passerelle y ressortait en 200 porteur de HTML — `curl` affichait 200 et le front,
+  # attendant du SSE, ne trouvait aucune trame et concluait à un flux tronqué. Le
+  # routage SPA est désormais porté par `aws_cloudfront_function.spa_router`, associé au
+  # seul comportement par défaut ; les erreurs d'API traversent intactes.
   restrictions {
     geo_restriction {
       restriction_type = "none"

@@ -215,28 +215,33 @@ resource "aws_api_gateway_integration" "this" {
   }
 }
 
-# §7.4, précondition 9 de §16.5 — mécanisme de chemin unique.
+# §7.4, précondition 9 de §16.5 — mécanisme de chemin unique : **non tenu**.
 #
-# Le filtre porte sur l'adresse source et non sur l'en-tête secret injecté par
-# CloudFront. Une politique de ressource API Gateway ne sait pas lire un en-tête
-# arbitraire : `aws:RequestHeader` n'existe pas parmi les clés de condition globales, et
-# une condition bâtie dessus ne serait pas « permissive à tort » — la clé étant absente,
-# un `StringNotEquals` vaudrait vrai à chaque requête et le `Deny` fermerait la
-# passerelle à tout le monde. Le seul mécanisme déclaratif disponible ici est la liste
-# de préfixes gérée `com.amazonaws.global.cloudfront.origin-facing`, qu'AWS maintient et
-# qui énumère les adresses par lesquelles CloudFront joint une origine.
+# Le filtre par adresse source a été retiré parce qu'il ne peut pas fonctionner. Une
+# politique de ressource API Gateway évalue `aws:SourceIp` sur l'adresse du **client
+# final**, pas sur celle du bord CloudFront qui relaie la requête. Le journal d'accès du
+# stage le montre directement : il enregistre l'adresse du navigateur pour des requêtes
+# arrivées par la distribution. Un `Deny` conditionné à `NotIpAddress aws:SourceIp` sur
+# la liste `com.amazonaws.global.cloudfront.origin-facing` ne laisse donc passer
+# personne — il fermait la passerelle à tout le trafic légitime, navigateur compris.
 #
-# L'en-tête secret est conservé côté CloudFront comme second facteur : il n'est opposable
-# qu'à travers une règle WAF, donc seulement une fois la précondition 8 levée. Tant que
-# `web_acl_arn` est vide, c'est l'adresse source qui porte seule le contrôle.
+# La rédaction précédente tenait cette liste pour le seul recours déclaratif possible,
+# après avoir écarté `aws:RequestHeader`. L'écart sur l'en-tête est exact : cette clé ne
+# figure pas parmi les clés de condition globales, et une condition bâtie dessus se
+# fermerait sur son absence. Le raisonnement était juste sur l'en-tête et faux sur
+# l'adresse : aucune des deux voies n'est ouverte à une politique de ressource.
 #
-# La politique établit la présence du mécanisme ; son efficacité se démontre par l'appel
-# direct de §15, pas par lecture du plan.
-data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
-  name = "com.amazonaws.global.cloudfront.origin-facing"
-}
-
-data "aws_iam_policy_document" "single_path" {
+# Il ne reste donc ici qu'un `Allow`. Le contrôle d'accès n'en dépendait pas : un appel
+# direct de la passerelle doit toujours présenter un jeton d'accès valide du pool
+# (authorizer Cognito, §7.1.1) puis franchir la revérification JWKS de FastAPI (§7.1.2).
+# Ce qui est perdu, c'est la restriction du *chemin*, pas celle de l'*identité*.
+#
+# Le mécanisme conforme est une règle WAF portant sur l'en-tête secret injecté par
+# CloudFront : le WAF est le seul point du chemin capable de lire un en-tête arbitraire.
+# Il reste subordonné à la précondition 8 ; `web_acl_arn` est déjà câblé pour le recevoir.
+# Jusque-là, la précondition 9 se déclare non tenue plutôt que réputée satisfaite par une
+# politique inopérante.
+data "aws_iam_policy_document" "invoke" {
   statement {
     sid       = "AllowInvokeThroughAnyCaller"
     effect    = "Allow"
@@ -248,29 +253,18 @@ data "aws_iam_policy_document" "single_path" {
       identifiers = ["*"]
     }
   }
-
-  statement {
-    sid       = "DenyWhenNotThroughCloudFront"
-    effect    = "Deny"
-    actions   = ["execute-api:Invoke"]
-    resources = ["${aws_api_gateway_rest_api.this.execution_arn}/*"]
-
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
-    }
-
-    condition {
-      test     = "NotIpAddress"
-      variable = "aws:SourceIp"
-      values   = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.entries[*].cidr
-    }
-  }
 }
 
-resource "aws_api_gateway_rest_api_policy" "single_path" {
+# L'ancien nom désignait un mécanisme qui n'existe plus. Le `moved` évite une
+# destruction/recréation de la politique au passage.
+moved {
+  from = aws_api_gateway_rest_api_policy.single_path
+  to   = aws_api_gateway_rest_api_policy.invoke
+}
+
+resource "aws_api_gateway_rest_api_policy" "invoke" {
   rest_api_id = aws_api_gateway_rest_api.this.id
-  policy      = data.aws_iam_policy_document.single_path.json
+  policy      = data.aws_iam_policy_document.invoke.json
 }
 
 resource "aws_cloudwatch_log_group" "access" {
@@ -353,7 +347,7 @@ resource "aws_api_gateway_deployment" "this" {
       aws_api_gateway_method.this,
       aws_api_gateway_integration.this,
       aws_api_gateway_authorizer.cognito,
-      aws_api_gateway_rest_api_policy.single_path.policy,
+      aws_api_gateway_rest_api_policy.invoke.policy,
     ]))
   }
 

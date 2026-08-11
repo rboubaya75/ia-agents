@@ -71,12 +71,21 @@ GUARD_RULES_REFERENCE = "V2-LLD-001 §16.6"
 CMK_RESOURCE_TYPE = "aws_kms_key"
 REST_API_RESOURCE_TYPE = "aws_api_gateway_rest_api"
 
-# Rule 4 checks presence only. The plan can establish that a resource policy or a
-# private origin exists; it cannot establish that either is effective. Correctness is
-# demonstrated by the direct-call proof of §15, and its content belongs to V2-LLD-005.
+# Rule 4 checks presence only. The plan can establish that a mechanism exists; it cannot
+# establish that it is effective. Correctness is demonstrated by the direct-call proof of
+# §15, and its content belongs to V2-LLD-005.
+#
+# `aws_api_gateway_rest_api_policy` used to count here. It no longer does. A resource
+# policy cannot carry the requirement under either of its two available forms: it cannot
+# read the secret header CloudFront injects, because `aws:RequestHeader` is not a global
+# condition key; and `aws:SourceIp` is evaluated against the *end client* address rather
+# than the CloudFront edge that relays the request, so a deny on the CloudFront prefix
+# list refuses every request instead of only the direct ones. Counting the policy made
+# this rule attest a mechanism that did not exist — the exact false green rule 4 is meant
+# to prevent.
 SINGLE_PATH_MECHANISM_TYPES = frozenset(
     {
-        "aws_api_gateway_rest_api_policy",
+        "aws_wafv2_web_acl_association",
     }
 )
 
@@ -255,13 +264,21 @@ def _rule_single_path_mechanism(changes: list[dict[str, Any]]) -> dict[str, str]
     if not rest_apis:
         return rule("4", title, "skipped", f"no `{REST_API_RESOURCE_TYPE}` retained by this plan")
 
-    mechanisms = [item for item in changes if item.get("type") in SINGLE_PATH_MECHANISM_TYPES]
+    mechanisms = [
+        item
+        for item in changes
+        if item.get("type") in SINGLE_PATH_MECHANISM_TYPES and change_action(item) != "delete"
+    ]
     if not mechanisms:
         return rule(
             "4",
             title,
-            "fail",
-            "a directly reachable endpoint makes the WAF advisory (V2-ADR-016, V2-LLD-001 §7.4)",
+            "skipped",
+            "precondition 9 unmet, reported as such rather than blocking: the only mechanism able "
+            "to carry it is a WAF rule on the CloudFront secret header, and that is subordinate to "
+            "precondition 8 (V2-ADR-016, V2-LLD-001 §7.4). The endpoint stays directly reachable, "
+            "which keeps the CloudFront-borne controls advisory — a documented, accepted gap, not "
+            "a satisfied requirement",
         )
     return rule("4", title, "pass", f"{len(mechanisms)} mechanism(s) present, effectiveness proven out of plan")
 

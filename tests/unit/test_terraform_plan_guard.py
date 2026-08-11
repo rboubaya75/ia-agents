@@ -170,6 +170,52 @@ class TerraformPlanGuardTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertIn("**REVIEW REQUIRED**", summary.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def single_path_rule(*changes: dict) -> dict:
+        rules = guard.evaluate_guard_rules(plan_json(*changes))
+        return next(item for item in rules if item["number"] == "4")
+
+    def test_single_path_rule_does_not_count_a_resource_policy(self) -> None:
+        # A resource policy cannot carry the single-path requirement under either form:
+        # `aws:RequestHeader` is not a global condition key, and `aws:SourceIp` is
+        # evaluated against the end client rather than the CloudFront edge. Counting it
+        # would attest a mechanism that does not exist.
+        found = self.single_path_rule(
+            resource("aws_api_gateway_rest_api.this", "aws_api_gateway_rest_api", ["update"]),
+            resource(
+                "aws_api_gateway_rest_api_policy.invoke",
+                "aws_api_gateway_rest_api_policy",
+                ["update"],
+            ),
+        )
+
+        self.assertEqual(found["status"], "skipped")
+        self.assertIn("precondition 9 unmet", found["detail"])
+
+    def test_single_path_rule_passes_on_a_waf_association(self) -> None:
+        found = self.single_path_rule(
+            resource("aws_api_gateway_rest_api.this", "aws_api_gateway_rest_api", ["update"]),
+            resource(
+                "aws_wafv2_web_acl_association.this[0]",
+                "aws_wafv2_web_acl_association",
+                ["create"],
+            ),
+        )
+
+        self.assertEqual(found["status"], "pass")
+
+    def test_single_path_rule_does_not_count_a_removed_waf_association(self) -> None:
+        found = self.single_path_rule(
+            resource("aws_api_gateway_rest_api.this", "aws_api_gateway_rest_api", ["update"]),
+            resource(
+                "aws_wafv2_web_acl_association.this[0]",
+                "aws_wafv2_web_acl_association",
+                ["delete"],
+            ),
+        )
+
+        self.assertEqual(found["status"], "skipped")
+
     def test_metadata_round_trip_and_tamper_detection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

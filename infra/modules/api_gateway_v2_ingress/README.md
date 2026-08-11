@@ -13,9 +13,11 @@ appartiennent à `vpc_ecs_platform` ; le comportement CloudFront `/api/*` appart
 
 **Un seul REST API Regional pour toutes les routes** (§7.0). Le motif n'est pas
 l'identité — `V2-ADR-020` rend le contrat d'identité invariant au type d'API — mais
-l'attachement du WAF et le point d'application unique de l'exigence de chemin unique
-(§7.4). Un HTTP API n'accepte ni web ACL au stage ni politique de ressource : la
-précondition 9 de §16.5 y resterait sans mécanisme vérifiable au plan.
+l'attachement du WAF (§7.4). Un HTTP API n'accepte pas de web ACL au stage ; or le WAF
+est le seul point du chemin capable d'opposer l'en-tête secret injecté par CloudFront,
+donc le seul support possible de la précondition 9 de §16.5. Le REST API accepte en
+outre une politique de ressource, mais celle-ci s'est révélée hors d'état de porter
+l'exigence — voir plus bas.
 
 **`responseTransferMode` réglé par méthode** (§7.0). `STREAM` sur la route
 conversationnelle, `BUFFERED` sur l'annulation. Les deux routes sont déclarées
@@ -38,23 +40,33 @@ pool », pas un droit métier. C'est indépassable tant que l'authentification p
 d'autorisation. La finalité du contrôle au bord reste la disponibilité (§7.1.1) ;
 l'identité de confiance est établie par FastAPI.
 
-**Chemin unique par adresse source** (§7.4, précondition 9 de §16.5). La politique de
-ressource refuse toute requête dont l'adresse source n'appartient pas à la liste de
-préfixes gérée `com.amazonaws.global.cloudfront.origin-facing`.
+**Chemin unique : précondition 9 de §16.5 non tenue** (§7.4). Le module n'applique
+aucune restriction de chemin. La politique de ressource se réduit à un `Allow`.
 
-Le filtre ne porte **pas** sur l'en-tête secret : une politique de ressource API Gateway
-ne sait pas lire un en-tête arbitraire — `aws:RequestHeader` n'existe pas parmi les clés
-de condition globales. Une condition bâtie dessus ne serait pas trop permissive, elle
-serait fermée : la clé étant absente, `StringNotEquals` vaudrait vrai à chaque requête et
-le `Deny` couperait tout le monde.
+Une version antérieure refusait toute requête dont l'adresse source n'appartenait pas à
+la liste de préfixes `com.amazonaws.global.cloudfront.origin-facing`. **Ce mécanisme ne
+fonctionne pas et a été retiré.** Une politique de ressource API Gateway évalue
+`aws:SourceIp` sur l'adresse du *client final*, pas sur celle du bord CloudFront qui
+relaie la requête : le journal d'accès du stage enregistre l'adresse du navigateur pour
+des requêtes arrivées par la distribution. Le `Deny` ne laissait donc passer personne —
+il fermait la passerelle à tout le trafic légitime, et le symptôme observé était une
+erreur opaque côté front, non un refus lisible.
 
-L'en-tête secret reste injecté par CloudFront comme second facteur, opposable seulement
-par une règle WAF — donc une fois la précondition 8 levée. Tant que `web_acl_arn` est
-vide, l'adresse source porte seule le contrôle.
+L'écart voisin sur l'en-tête reste exact : `aws:RequestHeader` ne figure pas parmi les
+clés de condition globales, et une condition bâtie dessus se fermerait sur son absence.
+La conclusion tirée de cet écart était fausse — l'adresse source n'est pas le repli
+disponible. Aucune des deux voies n'est ouverte à une politique de ressource.
 
-La politique établit la *présence* du mécanisme ; son efficacité se démontre par l'appel
-direct de §15, pas par lecture du plan — c'est exactement ce que constate la règle de
-garde 4.
+Le retrait ne dégrade pas le contrôle d'accès, qui n'en dépendait pas : un appel direct
+de la passerelle doit toujours présenter un jeton d'accès valide du pool (authorizer
+Cognito) puis franchir la revérification JWKS de FastAPI. Ce qui est perdu est la
+restriction du *chemin*, pas celle de l'*identité*.
+
+Le mécanisme conforme est une règle WAF portant sur l'en-tête secret injecté par
+CloudFront : le WAF est le seul point du chemin capable de lire un en-tête arbitraire.
+Il reste subordonné à la précondition 8 ; `web_acl_arn` est déjà câblé pour le recevoir.
+Jusque-là la précondition 9 se déclare non tenue — ce que l'appel direct de §15
+constatera, conformément à la règle de garde 4.
 
 **Le rôle de journalisation est réglé au compte, pas au stage.** Un REST API n'écrit
 aucun journal tant que le compte ne désigne pas, pour la région, un rôle que CloudWatch
