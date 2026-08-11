@@ -241,7 +241,14 @@ resource "aws_api_gateway_integration" "this" {
 # Il reste subordonné à la précondition 8 ; `web_acl_arn` est déjà câblé pour le recevoir.
 # Jusque-là, la précondition 9 se déclare non tenue plutôt que réputée satisfaite par une
 # politique inopérante.
-data "aws_iam_policy_document" "invoke" {
+# L'adresse `single_path` est conservée alors qu'elle ne décrit plus rien d'actif. Un
+# renommage imposerait soit un bloc `moved`, soit une destruction/recréation. Or le
+# déploiement planifie par phases avec `-target` (`v2-platform-deploy.yml`), et un `moved`
+# oblige Terraform à inclure l'ancienne *et* la nouvelle adresse dans **tout** plan : un
+# plan ciblé qui ne couvre pas les deux échoue par « Moved resource instances excluded by
+# targeting ». Le nom est donc gardé pour la continuité de l'état, et c'est ce commentaire
+# qui porte la vérité sur son contenu.
+data "aws_iam_policy_document" "single_path" {
   statement {
     sid       = "AllowInvokeThroughAnyCaller"
     effect    = "Allow"
@@ -255,16 +262,9 @@ data "aws_iam_policy_document" "invoke" {
   }
 }
 
-# L'ancien nom désignait un mécanisme qui n'existe plus. Le `moved` évite une
-# destruction/recréation de la politique au passage.
-moved {
-  from = aws_api_gateway_rest_api_policy.single_path
-  to   = aws_api_gateway_rest_api_policy.invoke
-}
-
-resource "aws_api_gateway_rest_api_policy" "invoke" {
+resource "aws_api_gateway_rest_api_policy" "single_path" {
   rest_api_id = aws_api_gateway_rest_api.this.id
-  policy      = data.aws_iam_policy_document.invoke.json
+  policy      = data.aws_iam_policy_document.single_path.json
 }
 
 resource "aws_cloudwatch_log_group" "access" {
@@ -338,6 +338,15 @@ resource "aws_api_gateway_account" "this" {
 # Le redéploiement suit le contenu de l'API. Sans ce déclencheur, une modification de
 # route ou d'intégration resterait dans la définition sans jamais atteindre le stage —
 # le plan serait vert et le comportement inchangé.
+#
+# La politique entre dans l'empreinte par le **document** et non par l'attribut `policy`
+# de la ressource : une modification de resource policy n'atteint le stage qu'après
+# redéploiement, il faut donc bien la suivre, mais AWS renvoie le JSON sous une forme
+# normalisée qui ne coïncide pas avec celle envoyée. Lire `aws_api_gateway_rest_api_policy
+# .single_path.policy` donnait une empreinte au plan puis une autre après l'apply, d'où
+# « Provider produced inconsistent final plan » dès que le contenu de la politique change
+# — invisible tant qu'elle ne changeait jamais. Le `json` du document, lui, est calculé
+# localement et reste identique de part et d'autre.
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = aws_api_gateway_rest_api.this.id
 
@@ -347,9 +356,15 @@ resource "aws_api_gateway_deployment" "this" {
       aws_api_gateway_method.this,
       aws_api_gateway_integration.this,
       aws_api_gateway_authorizer.cognito,
-      aws_api_gateway_rest_api_policy.invoke.policy,
+      data.aws_iam_policy_document.single_path.json,
     ]))
   }
+
+  # L'empreinte ne référence plus la ressource de politique, seulement son document : la
+  # dépendance qui en découlait doit donc être déclarée. Sans elle, Terraform peut créer
+  # le déploiement avant d'écrire la politique, et la nouvelle politique n'atteindrait le
+  # stage qu'au redéploiement suivant.
+  depends_on = [aws_api_gateway_rest_api_policy.single_path]
 
   lifecycle {
     create_before_destroy = true

@@ -183,7 +183,7 @@ class TerraformPlanGuardTests(unittest.TestCase):
         found = self.single_path_rule(
             resource("aws_api_gateway_rest_api.this", "aws_api_gateway_rest_api", ["update"]),
             resource(
-                "aws_api_gateway_rest_api_policy.invoke",
+                "aws_api_gateway_rest_api_policy.single_path",
                 "aws_api_gateway_rest_api_policy",
                 ["update"],
             ),
