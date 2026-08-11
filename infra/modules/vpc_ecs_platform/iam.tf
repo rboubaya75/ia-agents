@@ -108,7 +108,7 @@ data "aws_iam_policy_document" "fastapi" {
     content {
       sid       = "AgentCoreRuntime"
       effect    = "Allow"
-      actions   = ["bedrock-agentcore:InvokeAgent"]
+      actions   = ["bedrock-agentcore:InvokeAgentRuntime"]
       resources = [statement.value]
     }
   }

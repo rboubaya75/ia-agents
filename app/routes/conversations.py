@@ -36,13 +36,24 @@ from agents.models import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
 
-_orchestrator = Orchestrator(StubAdapter())
+def _build_orchestrator() -> Orchestrator:
+    if settings.agentcore_runtime_arn:
+        from agents.adapter.agentcore_runtime_adapter import AgentCoreRuntimeAdapter
+        return Orchestrator(AgentCoreRuntimeAdapter(
+            runtime_arn=settings.agentcore_runtime_arn,
+            endpoint_name=settings.agent_runtime_endpoint_name,
+        ))
+    return Orchestrator(StubAdapter())
+
+
+_orchestrator = _build_orchestrator()
 
 
 class MessageRequest(BaseModel):
     # Bounded so a single request cannot pin an unbounded amount of memory, and so an
     # oversized prompt is refused at the edge rather than by the model provider.
-    message: str = Field(min_length=1, max_length=8000)
+    # Upper bound matches V1 MAX_PROMPT_CHARS — larger values are rejected by Runtime.
+    message: str = Field(min_length=1, max_length=4000)
 
 
 def _resolve_tenant(actor_id: str) -> str:

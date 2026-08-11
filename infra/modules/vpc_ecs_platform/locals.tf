@@ -48,5 +48,8 @@ locals {
     JWKS_CACHE_TTL_SECONDS            = tostring(var.jwks_cache_ttl_seconds)
     JWKS_STALE_TOLERANCE_SECONDS      = tostring(var.jwks_stale_tolerance_seconds)
     JWKS_REFRESH_MIN_INTERVAL_SECONDS = tostring(var.jwks_refresh_min_interval_seconds)
+    # ARN is not a secret (V2-LLD-003 §12.1). Empty leaves the adapter in stub mode.
+    AGENTCORE_RUNTIME_ARN        = var.agentcore_runtime_arn
+    AGENT_RUNTIME_ENDPOINT_NAME  = var.agent_runtime_endpoint_name
   }
 }

@@ -13,8 +13,11 @@ class Settings(BaseSettings):
     # Agent runtime (V2-LLD-003 §12.1)
     # Empty string = stub mode (no AgentCore Runtime call)
     agentcore_runtime_arn: str = ""
+    agent_runtime_endpoint_name: str = "default"
     bedrock_invocation_id: str = ""
     agent_prompt_version: str = "v1"
+    # Must match V1 validate_request MAX_PROMPT_CHARS — larger values are rejected opaquely.
+    agent_max_prompt_chars: int = 4000
 
     # Agent budgets (V2-LLD-003 §5.2) — defaults are configurable via SSM/Secrets
     agent_max_turns: int = 10

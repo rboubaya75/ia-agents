@@ -248,6 +248,12 @@ variable "agentcore_runtime_arn" {
   default     = ""
 }
 
+variable "agent_runtime_endpoint_name" {
+  type        = string
+  description = "AgentCore Runtime endpoint qualifier forwarded to fastapi. Matches AGENT_RUNTIME_ENDPOINT_NAME in the Lambda facade."
+  default     = "default"
+}
+
 variable "knowledge_base_arn" {
   type        = string
   description = "Knowledge Base ARN targeted by bedrock-agent-runtime:Retrieve. Empty removes the statement (V2-LLD-001 §5.1)."

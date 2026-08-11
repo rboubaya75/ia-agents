@@ -108,6 +108,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python tests/unit/test_v2_token_validation_contract.py -v
 
+      - name: Verify AgentCore runtime adapter contract
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tests/unit/test_agentcore_runtime_adapter.py -v
+
       - name: Audit Python dependencies
         run: python -m pip_audit --strict --requirement app/requirements.txt
 
@@ -193,6 +198,7 @@ jobs:
 
           import agents.domain.orchestrator  # noqa: F401
           import agents.adapter.stub_adapter  # noqa: F401
+          import agents.adapter.agentcore_runtime_adapter  # noqa: F401
 
           prompt = pathlib.Path("/app/agents/prompts/system_v1.md")
           if not prompt.is_file():
