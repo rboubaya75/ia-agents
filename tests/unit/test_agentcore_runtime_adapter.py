@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import time
 import unittest
+from dataclasses import replace
 from unittest.mock import Mock
 
 import agents.adapter.agentcore_runtime_adapter as adapter_module
@@ -164,24 +165,43 @@ class AgentCoreRuntimeAdapterTests(unittest.TestCase):
     # Contract: deadline clamped to now + 115 s
     # ------------------------------------------------------------------
 
-    def test_deadline_clamped_when_request_deadline_far(self) -> None:
+    def _sent_deadline_for(self, offset_ms: int) -> tuple[int, int]:
+        """Invoke with a deadline offset_ms in the future; return (now_ms, sent)."""
         self.mock_client.invoke_agent_runtime.return_value = ok_response()
-        # Request deadline 10 minutes from now — must be clamped to 115 s.
-        now_ms = int(time.time() * 1000)
         req = make_request()
-        # Override deadline to a far future value via a fresh request.
-        from dataclasses import replace
+        now_ms = int(time.time() * 1000)
         req = replace(
             req,
             operation_context=replace(
-                req.operation_context, deadline_epoch_ms=now_ms + 600_000
+                req.operation_context, deadline_epoch_ms=now_ms + offset_ms
             ),
         )
         self._events(request=req)
         payload = json.loads(
             self.mock_client.invoke_agent_runtime.call_args.kwargs["payload"]
         )
-        self.assertLessEqual(payload["deadlineEpochMs"], now_ms + 115_000 + 500)
+        return now_ms, payload["deadlineEpochMs"]
+
+    def test_deadline_clamped_when_request_deadline_far(self) -> None:
+        # 10 minutes out. V1 rejects anything beyond now + 120 s, so the adapter must
+        # cut it down rather than let Runtime refuse the call.
+        now_ms, sent = self._sent_deadline_for(600_000)
+        self.assertLessEqual(sent, now_ms + 115_000 + 500)
+        # Lower bound too: a clamp that collapsed to "now" would pass an upper-bound-only
+        # assertion while leaving Runtime no time to answer.
+        self.assertGreaterEqual(sent, now_ms + 115_000 - 500)
+
+    def test_deadline_not_clamped_when_request_deadline_near(self) -> None:
+        # 30 s is inside the V1 window: the caller's own budget must survive untouched.
+        now_ms, sent = self._sent_deadline_for(30_000)
+        self.assertGreaterEqual(sent, now_ms + 30_000 - 500)
+        self.assertLessEqual(sent, now_ms + 30_000 + 500)
+
+    def test_deadline_never_exceeds_v1_ceiling(self) -> None:
+        for offset in (0, 60_000, 119_000, 120_000, 3_600_000):
+            with self.subTest(offset=offset):
+                now_ms, sent = self._sent_deadline_for(offset)
+                self.assertLessEqual(sent, now_ms + 120_000)
 
     # ------------------------------------------------------------------
     # Contract: success path emits meta → delta → done, degraded=False
@@ -229,6 +249,45 @@ class AgentCoreRuntimeAdapterTests(unittest.TestCase):
         events = self._events()
         self.assertIsInstance(events[-1], StreamError)
         self.assertEqual(events[-1].error.code, AgentErrorCode.INTERNAL_ERROR)
+
+    # ------------------------------------------------------------------
+    # Contract: invoke() honours the Protocol, not just invoke_stream()
+    # ------------------------------------------------------------------
+
+    def test_invoke_returns_result_on_success(self) -> None:
+        self.mock_client.invoke_agent_runtime.return_value = ok_response(b'"model answer"')
+        result = self.adapter.invoke(make_request())
+        self.assertEqual(result.answer, "model answer")
+        self.assertFalse(result.degraded)
+        self.assertIsNone(result.error)
+
+    def test_invoke_returns_error_result_instead_of_raising(self) -> None:
+        self.mock_client.invoke_agent_runtime.side_effect = RuntimeError("boom")
+        result = self.adapter.invoke(make_request())
+        self.assertIsNotNone(result.error)
+        self.assertEqual(result.error.code, AgentErrorCode.INTERNAL_ERROR)
+        self.assertTrue(result.degraded)
+
+    # ------------------------------------------------------------------
+    # Contract: the socket never outlives the deadline handed to Runtime
+    # ------------------------------------------------------------------
+
+    def test_read_timeout_capped_at_deadline_window(self) -> None:
+        greedy = AgentCoreRuntimeAdapter(
+            runtime_arn=RUNTIME_ARN, read_timeout_seconds=9999
+        )
+        self.assertLessEqual(greedy._read_timeout, 115)
+
+    def test_read_timeout_honours_lower_operator_value(self) -> None:
+        tight = AgentCoreRuntimeAdapter(runtime_arn=RUNTIME_ARN, read_timeout_seconds=30)
+        self.assertEqual(tight._read_timeout, 30)
+
+    def test_timeouts_stay_positive(self) -> None:
+        degenerate = AgentCoreRuntimeAdapter(
+            runtime_arn=RUNTIME_ARN, connect_timeout_seconds=0, read_timeout_seconds=0
+        )
+        self.assertGreaterEqual(degenerate._connect_timeout, 1)
+        self.assertGreaterEqual(degenerate._read_timeout, 1)
 
 
 if __name__ == "__main__":

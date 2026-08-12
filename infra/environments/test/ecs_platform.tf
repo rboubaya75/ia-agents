@@ -56,6 +56,7 @@ module "vpc_ecs_platform" {
   logs_kms_key_arn               = var.logs_kms_key_arn
   erasure_audit_log_group_name   = var.erasure_audit_log_group_name
   agentcore_runtime_arn          = var.fastapi_agentcore_runtime_arn
+  agent_runtime_endpoint_name    = var.agent_runtime_endpoint_name
   knowledge_base_arn             = var.knowledge_base_arn
   knowledge_base_data_source_arn = var.knowledge_base_data_source_arn
   dynamodb_table_arns            = var.fastapi_dynamodb_table_arns

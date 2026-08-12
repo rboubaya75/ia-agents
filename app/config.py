@@ -16,8 +16,12 @@ class Settings(BaseSettings):
     agent_runtime_endpoint_name: str = "default"
     bedrock_invocation_id: str = ""
     agent_prompt_version: str = "v1"
-    # Must match V1 validate_request MAX_PROMPT_CHARS — larger values are rejected opaquely.
-    agent_max_prompt_chars: int = 4000
+
+    # Transport bounds for the AgentCore Runtime call. The read timeout also bounds how
+    # long a disconnected client keeps a worker thread busy: cancellation does not reach
+    # an in-flight call. The adapter caps it at the deadline it hands to Runtime.
+    agent_runtime_connect_timeout_seconds: int = 5
+    agent_runtime_read_timeout_seconds: int = 115
 
     # Agent budgets (V2-LLD-003 §5.2) — defaults are configurable via SSM/Secrets
     agent_max_turns: int = 10

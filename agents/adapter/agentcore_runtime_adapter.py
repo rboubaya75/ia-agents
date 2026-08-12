@@ -21,9 +21,16 @@ from agents.models import (
 logger = logging.getLogger(__name__)
 
 _INTERNAL_SESSION_PREFIX = "sid-v1-"
-# V1 validate_request rejects deadlineEpochMs > now + 120_000 ms.
-# Send at most now + 115_000 to absorb clock drift.
-_DEADLINE_MAX_MS = 115_000
+
+# V1 validate_request rejects deadlineEpochMs beyond now + 120_000 ms. The margin
+# absorbs clock drift between the FastAPI task and Runtime, which do not share a clock.
+_V1_MAX_DEADLINE_MS = 120_000
+_CLOCK_DRIFT_MARGIN_MS = 5_000
+_DEADLINE_MAX_MS = _V1_MAX_DEADLINE_MS - _CLOCK_DRIFT_MARGIN_MS
+
+# The socket must never outlive the deadline handed to Runtime: past that point Runtime
+# is supposed to have stopped, and waiting longer only pins the calling thread.
+_MAX_READ_TIMEOUT_SECONDS = _DEADLINE_MAX_MS // 1000
 
 
 def _safe_hash(value: str) -> str:
@@ -106,11 +113,25 @@ class AgentCoreRuntimeAdapter:
     input_tokens/output_tokens are 0: V1 does not surface usage metadata.
     The boto3 client is constructed lazily so CI can import this module without
     AWS credentials or a configured region.
+
+    read_timeout_seconds bounds how long one call pins its worker thread. Cancellation
+    does not reach an in-flight invoke_agent_runtime call (AgentRequest carries no
+    cancellation token), so a client that disconnects leaves the thread busy until this
+    timeout expires — lowering it bounds that exposure, raising it allows longer agent
+    runs. It is capped at the deadline handed to Runtime, never above it.
     """
 
-    def __init__(self, runtime_arn: str, endpoint_name: str = "default") -> None:
+    def __init__(
+        self,
+        runtime_arn: str,
+        endpoint_name: str = "default",
+        connect_timeout_seconds: int = 5,
+        read_timeout_seconds: int = _MAX_READ_TIMEOUT_SECONDS,
+    ) -> None:
         self._runtime_arn = runtime_arn
         self._endpoint_name = endpoint_name
+        self._connect_timeout = max(1, connect_timeout_seconds)
+        self._read_timeout = max(1, min(read_timeout_seconds, _MAX_READ_TIMEOUT_SECONDS))
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -121,15 +142,48 @@ class AgentCoreRuntimeAdapter:
             self._client = boto3.client(
                 "bedrock-agentcore",
                 config=Config(
-                    connect_timeout=10,
-                    read_timeout=120,
+                    connect_timeout=self._connect_timeout,
+                    read_timeout=self._read_timeout,
+                    # No SDK retry: the deadline is the only bound, and a silent retry
+                    # would spend a budget the caller already accounted for.
                     retries={"mode": "standard", "total_max_attempts": 1},
                 ),
             )
         return self._client
 
+    def _error_result(self, request: AgentRequest, error: AgentError) -> AgentResult:
+        return AgentResult(
+            answer="",
+            turn_count=0,
+            input_tokens=0,
+            output_tokens=0,
+            tool_calls_count=0,
+            budget_exhausted=False,
+            # No answer was produced by the model, so the run cannot be called nominal.
+            degraded=True,
+            served_invocation_id=request.config.invocation_id or "agentcore-v1",
+            error=error,
+        )
+
     def invoke(self, request: AgentRequest) -> AgentResult:
-        raise NotImplementedError("Use invoke_stream")
+        """Blocking invocation, built on invoke_stream so both paths share one contract.
+
+        The Protocol declares invoke() alongside invoke_stream(); an adapter that only
+        honours one of them fails in production on a caller CI never exercises.
+        """
+        for event in self.invoke_stream(request):
+            if isinstance(event, StreamDone):
+                return event.result
+            if isinstance(event, StreamError):
+                return self._error_result(request, event.error)
+
+        # invoke_stream always emits one terminal event; this closes the type hole
+        # rather than letting a silent None escape as an AgentResult.
+        logger.error("adapter stream ended without a terminal event")
+        return self._error_result(request, AgentError(
+            code=AgentErrorCode.INTERNAL_ERROR,
+            message="Agent ended without a terminal event",
+        ))
 
     def invoke_stream(self, request: AgentRequest) -> Iterator[AgentStreamEvent]:
         op_id = request.operation_context.operation_id

@@ -42,6 +42,8 @@ def _build_orchestrator() -> Orchestrator:
         return Orchestrator(AgentCoreRuntimeAdapter(
             runtime_arn=settings.agentcore_runtime_arn,
             endpoint_name=settings.agent_runtime_endpoint_name,
+            connect_timeout_seconds=settings.agent_runtime_connect_timeout_seconds,
+            read_timeout_seconds=settings.agent_runtime_read_timeout_seconds,
         ))
     return Orchestrator(StubAdapter())
 
